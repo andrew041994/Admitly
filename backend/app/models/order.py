@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Enum, ForeignKey, Numeric, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+from app.models.enums import OrderStatus
+from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.event import Event
+    from app.models.order_item import OrderItem
+    from app.models.user import User
+
+
+class Order(TimestampMixin, Base):
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    status: Mapped[OrderStatus] = mapped_column(
+        Enum(OrderStatus, name="order_status"), nullable=False, default=OrderStatus.PENDING
+    )
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="GYD")
+    payment_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payment_intent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    user: Mapped["User"] = relationship()
+    event: Mapped["Event"] = relationship()
+    items: Mapped[list["OrderItem"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )

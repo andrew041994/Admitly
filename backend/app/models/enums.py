@@ -24,3 +24,10 @@ class EventStaffRole(str, Enum):
     OWNER = "owner"
     MANAGER = "manager"
     SCANNER = "scanner"
+
+
+class OrderStatus(str, Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"

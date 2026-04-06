@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from datetime import datetime
 from decimal import Decimal
 
@@ -15,6 +17,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.order_item import OrderItem
+    from app.models.ticket_hold import TicketHold
 
 
 class TicketTier(TimestampMixin, Base):
@@ -40,3 +46,5 @@ class TicketTier(TimestampMixin, Base):
     access_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     event = relationship("Event", back_populates="ticket_tiers")
+    holds: Mapped[list["TicketHold"]] = relationship(back_populates="ticket_tier")
+    order_items: Mapped[list["OrderItem"]] = relationship()
