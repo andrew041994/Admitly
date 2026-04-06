@@ -77,5 +77,5 @@ class Event(TimestampMixin, Base):
     staff: Mapped[list["EventStaff"]] = relationship(back_populates="event")
     ticket_tiers: Mapped[list["TicketTier"]] = relationship(back_populates="event")
 
-    orders: Mapped[list["Order"]] = relationship()
-    ticket_holds: Mapped[list["TicketHold"]] = relationship()
+    orders: Mapped[list["Order"]] = relationship(back_populates="event")
+    ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="event")
