@@ -31,5 +31,5 @@ class OrderItem(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    order: Mapped["Order"] = relationship(back_populates="items")
+    order: Mapped["Order"] = relationship(back_populates="order_items")
     ticket_tier: Mapped["TicketTier"] = relationship(back_populates="order_items")

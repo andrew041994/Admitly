@@ -10,6 +10,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.event import Event
+    from app.models.order import Order
     from app.models.ticket_tier import TicketTier
     from app.models.user import User
 
@@ -24,6 +25,7 @@ class TicketHold(Base):
     )
     ticket_tier_id: Mapped[int] = mapped_column(ForeignKey("ticket_tiers.id"), nullable=False)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), nullable=True, index=True)
     session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -34,3 +36,4 @@ class TicketHold(Base):
     event: Mapped["Event"] = relationship(back_populates="ticket_holds")
     ticket_tier: Mapped["TicketTier"] = relationship(back_populates="holds")
     user: Mapped["User | None"] = relationship(back_populates="ticket_holds")
+    order: Mapped["Order | None"] = relationship(back_populates="ticket_holds")

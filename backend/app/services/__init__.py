@@ -1,3 +1,15 @@
+from app.services.orders import (
+    EmptyHoldSelectionError,
+    HoldAlreadyAttachedError,
+    HoldEventMismatchError,
+    HoldExpiredError,
+    HoldNotFoundError,
+    HoldOwnershipError,
+    OrderFlowError,
+    create_pending_order_from_holds,
+    get_order_for_user,
+    validate_order_still_payable,
+)
 from app.services.ticket_holds import (
     HoldCreationResult,
     InsufficientAvailabilityError,
@@ -18,4 +30,14 @@ __all__ = [
     "create_ticket_hold",
     "get_guyana_now",
     "get_ticket_type_availability",
+    "OrderFlowError",
+    "EmptyHoldSelectionError",
+    "HoldNotFoundError",
+    "HoldOwnershipError",
+    "HoldExpiredError",
+    "HoldAlreadyAttachedError",
+    "HoldEventMismatchError",
+    "create_pending_order_from_holds",
+    "get_order_for_user",
+    "validate_order_still_payable",
 ]
