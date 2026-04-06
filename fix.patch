@@ -1,0 +1,18 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/backend/requirements.txt b/backend/requirements.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..8b7fabf4c39fe99afcf7eaa58b44be6f9f5b58c8
+--- /dev/null
++++ b/backend/requirements.txt
+@@ -0,0 +1,8 @@
++fastapi==0.115.12
++uvicorn[standard]==0.34.0
++sqlalchemy==2.0.40
++alembic==1.15.2
++psycopg2-binary==2.9.10
++pydantic==2.11.3
++pydantic-settings==2.8.1
++python-dotenv==1.1.0
+ 
+EOF
+)

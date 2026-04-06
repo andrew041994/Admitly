@@ -26,12 +26,6 @@ event_staff_role = sa.Enum("owner", "manager", "scanner", name="event_staff_role
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    event_status.create(bind, checkfirst=True)
-    event_visibility.create(bind, checkfirst=True)
-    event_approval_status.create(bind, checkfirst=True)
-    event_staff_role.create(bind, checkfirst=True)
-
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), nullable=False),
