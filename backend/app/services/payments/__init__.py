@@ -19,8 +19,10 @@ from app.services.payments.mmg import (
     MMGVerificationResult,
     create_agent_payment_reference,
     create_checkout_for_order,
+    initiate_refund_with_provider,
     parse_checkout_callback,
     verify_agent_payment_reference,
+    verify_refund_status,
 )
 from app.services.ticket_holds import get_guyana_now
 
@@ -220,6 +222,26 @@ def handle_mmg_callback(db: Session, *, payload: dict) -> OrderPaymentSnapshot:
     )
 
 
+def mark_refund_recorded(db: Session, *, order: Order) -> str:
+    outcome = initiate_refund_with_provider(order_id=order.id, payment_reference=order.payment_reference)
+    if outcome.status == "failed":
+        order.refund_status = "failed"
+    elif outcome.status == "pending":
+        order.refund_status = "pending"
+    else:
+        order.refund_status = "refunded"
+    db.flush()
+    return order.refund_status
+
+
+def refresh_refund_status(db: Session, *, order: Order) -> str:
+    outcome = verify_refund_status(provider_reference=order.payment_reference)
+    if outcome.status in {"refunded", "pending", "failed"}:
+        order.refund_status = outcome.status
+        db.flush()
+    return order.refund_status
+
+
 __all__ = [
     "MMGProviderError",
     "OrderNotPayableError",
@@ -232,4 +254,6 @@ __all__ = [
     "submit_mmg_agent_payment",
     "mark_agent_payment_verified",
     "handle_mmg_callback",
+    "mark_refund_recorded",
+    "refresh_refund_status",
 ]

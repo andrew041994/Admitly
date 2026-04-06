@@ -10,7 +10,13 @@ from app.schemas.mmg import (
     SubmitMMGAgentPaymentRequest,
     SubmitMMGAgentPaymentResponse,
 )
-from app.schemas.order import CreatePendingOrderFromHoldsRequest, OrderItemResponse, OrderResponse
+from app.schemas.order import (
+    CreatePendingOrderFromHoldsRequest,
+    OrderCancelRequest,
+    OrderItemResponse,
+    OrderRefundRequest,
+    OrderResponse,
+)
 from app.services.orders import (
     EmptyHoldSelectionError,
     HoldAlreadyAttachedError,
@@ -18,9 +24,15 @@ from app.services.orders import (
     HoldExpiredError,
     HoldNotFoundError,
     HoldOwnershipError,
+    OrderAuthorizationError,
+    OrderCancellationError,
+    OrderNotFoundError,
     OrderNotPayableError,
+    OrderRefundError,
+    cancel_pending_order,
     create_pending_order_from_holds,
     get_order_for_user,
+    refund_completed_order,
 )
 from app.services.payments import (
     MMGProviderError,
@@ -41,6 +53,35 @@ def _require_mmg_enabled() -> None:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="MMG payments are currently disabled.",
         )
+
+
+def _to_order_response(order) -> OrderResponse:
+    return OrderResponse(
+        id=order.id,
+        user_id=order.user_id,
+        event_id=order.event_id,
+        status=order.status.value,
+        total_amount=float(order.total_amount),
+        currency=order.currency,
+        refund_status=order.refund_status,
+        cancelled_at=order.cancelled_at,
+        cancelled_by_user_id=order.cancelled_by_user_id,
+        cancel_reason=order.cancel_reason,
+        refunded_at=order.refunded_at,
+        refunded_by_user_id=order.refunded_by_user_id,
+        refund_reason=order.refund_reason,
+        created_at=order.created_at,
+        updated_at=order.updated_at,
+        items=[
+            OrderItemResponse(
+                id=item.id,
+                ticket_tier_id=item.ticket_tier_id,
+                quantity=item.quantity,
+                unit_price=float(item.unit_price),
+            )
+            for item in order.order_items
+        ],
+    )
 
 
 @router.post("/from-holds", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
@@ -64,25 +105,7 @@ def create_order_from_holds(
     except HoldEventMismatchError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    return OrderResponse(
-        id=order.id,
-        user_id=order.user_id,
-        event_id=order.event_id,
-        status=order.status.value,
-        total_amount=float(order.total_amount),
-        currency=order.currency,
-        created_at=order.created_at,
-        updated_at=order.updated_at,
-        items=[
-            OrderItemResponse(
-                id=item.id,
-                ticket_tier_id=item.ticket_tier_id,
-                quantity=item.quantity,
-                unit_price=float(item.unit_price),
-            )
-            for item in order.order_items
-        ],
-    )
+    return _to_order_response(order)
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
@@ -95,25 +118,55 @@ def get_order(
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found.")
 
-    return OrderResponse(
-        id=order.id,
-        user_id=order.user_id,
-        event_id=order.event_id,
-        status=order.status.value,
-        total_amount=float(order.total_amount),
-        currency=order.currency,
-        created_at=order.created_at,
-        updated_at=order.updated_at,
-        items=[
-            OrderItemResponse(
-                id=item.id,
-                ticket_tier_id=item.ticket_tier_id,
-                quantity=item.quantity,
-                unit_price=float(item.unit_price),
-            )
-            for item in order.order_items
-        ],
-    )
+    return _to_order_response(order)
+
+
+@router.post("/{order_id}/cancel", response_model=OrderResponse)
+def cancel_order(
+    order_id: int,
+    payload: OrderCancelRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> OrderResponse:
+    try:
+        order = cancel_pending_order(
+            db,
+            order_id=order_id,
+            actor_user_id=user_id,
+            reason=payload.reason,
+        )
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except OrderAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except OrderCancellationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return _to_order_response(order)
+
+
+@router.post("/{order_id}/refund", response_model=OrderResponse)
+def refund_order(
+    order_id: int,
+    payload: OrderRefundRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> OrderResponse:
+    try:
+        order = refund_completed_order(
+            db,
+            order_id=order_id,
+            actor_user_id=user_id,
+            reason=payload.reason,
+        )
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except OrderAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except OrderRefundError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return _to_order_response(order)
 
 
 @router.post("/{order_id}/payments/mmg/initiate", response_model=CreateOrderMMGCheckoutResponse)

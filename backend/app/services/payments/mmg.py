@@ -135,3 +135,28 @@ def parse_checkout_callback(payload: dict) -> MMGCallbackPayload:
     raw_paid = payload.get("paid", payload.get("status"))
     paid = str(raw_paid).lower() in {"1", "true", "paid", "success", "verified"}
     return MMGCallbackPayload(payment_reference=reference, paid=paid)
+
+
+@dataclass(slots=True)
+class MMGRefundOutcome:
+    status: str
+    provider_reference: str | None = None
+    message: str | None = None
+
+
+def initiate_refund_with_provider(*, order_id: int, payment_reference: str | None) -> MMGRefundOutcome:
+    if settings.mmg_provider_mode == "live":
+        _require_live_config()
+        # TODO: replace with real MMG refund initiation once provider refund APIs are available.
+        return MMGRefundOutcome(status="pending", provider_reference=payment_reference, message="Refund queued.")
+
+    return MMGRefundOutcome(status="refunded", provider_reference=payment_reference, message="Mock refund recorded.")
+
+
+def verify_refund_status(*, provider_reference: str | None) -> MMGRefundOutcome:
+    if settings.mmg_provider_mode == "live":
+        _require_live_config()
+        # TODO: replace with real MMG refund status lookup when available.
+        return MMGRefundOutcome(status="pending", provider_reference=provider_reference)
+
+    return MMGRefundOutcome(status="refunded", provider_reference=provider_reference)

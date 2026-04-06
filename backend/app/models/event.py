@@ -72,6 +72,9 @@ class Event(TimestampMixin, Base):
     is_location_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     organizer: Mapped["OrganizerProfile"] = relationship(back_populates="events")
     venue: Mapped["Venue | None"] = relationship(back_populates="events")

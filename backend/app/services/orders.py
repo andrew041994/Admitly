@@ -6,11 +6,15 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.enums import OrderStatus
+from app.models.enums import OrderStatus, TicketStatus
+from app.models.event import Event
 from app.models.order import Order
+from app.models.organizer_profile import OrganizerProfile
 from app.models.order_item import OrderItem
 from app.models.ticket_hold import TicketHold
-from app.services.tickets import issue_tickets_for_completed_order
+from app.models.user import User
+from app.services.notifications import notify_order_cancelled, notify_order_refunded
+from app.services.tickets import invalidate_order_tickets, issue_tickets_for_completed_order
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -54,10 +58,37 @@ class OrderNotFoundError(OrderFlowError):
     """Raised when order does not exist."""
 
 
+class OrderAuthorizationError(OrderFlowError):
+    """Raised when actor is not authorized for order reversal operations."""
+
+
+class OrderCancellationError(OrderFlowError):
+    """Raised when pending cancellation request is invalid."""
+
+
+class OrderRefundError(OrderFlowError):
+    """Raised when refund request is invalid."""
+
+
 def _to_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _is_event_organizer_or_admin(db: Session, *, event_id: int, user_id: int) -> bool:
+    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if user is None:
+        return False
+    if user.is_admin:
+        return True
+
+    organizer_user_id = db.execute(
+        select(OrganizerProfile.user_id)
+        .join(Event, Event.organizer_id == OrganizerProfile.id)
+        .where(Event.id == event_id)
+    ).scalar_one_or_none()
+    return organizer_user_id == user_id
 
 
 def create_pending_order_from_holds(
@@ -150,7 +181,7 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
     return (
         db.execute(
             select(Order)
-            .options(joinedload(Order.order_items), joinedload(Order.ticket_holds))
+            .options(joinedload(Order.order_items), joinedload(Order.ticket_holds), joinedload(Order.tickets))
             .where(Order.id == order_id, Order.user_id == user_id)
         )
         .unique()
@@ -162,7 +193,7 @@ def get_order_with_holds(db: Session, *, order_id: int) -> Order | None:
     return (
         db.execute(
             select(Order)
-            .options(joinedload(Order.order_items), joinedload(Order.ticket_holds))
+            .options(joinedload(Order.order_items), joinedload(Order.ticket_holds), joinedload(Order.tickets))
             .where(Order.id == order_id)
         )
         .unique()
@@ -206,3 +237,92 @@ def complete_paid_order(
 
     issue_tickets_for_completed_order(db, order)
     return order
+
+
+def cancel_pending_order(
+    db: Session,
+    *,
+    order_id: int,
+    actor_user_id: int,
+    reason: str | None = None,
+) -> Order:
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        order = (
+            db.execute(
+                select(Order)
+                .options(joinedload(Order.ticket_holds))
+                .where(Order.id == order_id)
+                .with_for_update()
+            )
+            .unique()
+            .scalar_one_or_none()
+        )
+        if order is None:
+            raise OrderNotFoundError("Order not found.")
+        if order.user_id != actor_user_id:
+            raise OrderAuthorizationError("Only the order owner can cancel a pending order.")
+        if order.status == OrderStatus.CANCELLED:
+            raise OrderCancellationError("Order is already cancelled.")
+        if order.status != OrderStatus.PENDING:
+            raise OrderCancellationError("Only pending orders can be cancelled.")
+
+        now = get_guyana_now()
+        order.status = OrderStatus.CANCELLED
+        order.cancelled_at = now
+        order.cancelled_by_user_id = actor_user_id
+        order.cancel_reason = reason.strip() if reason else None
+        order.updated_at = now
+        db.flush()
+        notify_order_cancelled(order, actor_user_id=actor_user_id)
+        return order
+
+
+def refund_completed_order(
+    db: Session,
+    *,
+    order_id: int,
+    actor_user_id: int,
+    reason: str | None = None,
+) -> Order:
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        order = (
+            db.execute(
+                select(Order)
+                .options(joinedload(Order.tickets), joinedload(Order.event), joinedload(Order.order_items))
+                .where(Order.id == order_id)
+                .with_for_update()
+            )
+            .unique()
+            .scalar_one_or_none()
+        )
+        if order is None:
+            raise OrderNotFoundError("Order not found.")
+        if not _is_event_organizer_or_admin(db, event_id=order.event_id, user_id=actor_user_id):
+            raise OrderAuthorizationError("Not authorized to refund this order.")
+        if order.status != OrderStatus.COMPLETED:
+            raise OrderRefundError("Only completed orders can be refunded.")
+        if order.payment_verification_status != "verified":
+            raise OrderRefundError("Only verified-paid orders can be refunded.")
+        if order.refund_status == "refunded" or order.refunded_at is not None:
+            raise OrderRefundError("Order has already been refunded.")
+        if any(ticket.status == TicketStatus.CHECKED_IN for ticket in order.tickets):
+            raise OrderRefundError("Orders with checked-in tickets cannot be fully refunded.")
+
+        now = get_guyana_now()
+        order.refund_status = "refunded"
+        order.refunded_at = now
+        order.refunded_by_user_id = actor_user_id
+        order.refund_reason = reason.strip() if reason else None
+        order.updated_at = now
+        db.flush()
+
+        invalidate_order_tickets(
+            db,
+            order_id=order.id,
+            actor_user_id=actor_user_id,
+            reason=reason or "Order refunded",
+        )
+        notify_order_refunded(order, actor_user_id=actor_user_id)
+        return order

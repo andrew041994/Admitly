@@ -142,6 +142,63 @@ def validate_ticket_voidable(ticket: Ticket) -> None:
         raise TicketVoidError("Ticket is not eligible to be voided.")
 
 
+def invalidate_order_tickets(
+    db: Session,
+    *,
+    order_id: int,
+    actor_user_id: int,
+    reason: str | None = None,
+) -> list[Ticket]:
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        tickets = (
+            db.execute(select(Ticket).where(Ticket.order_id == order_id).with_for_update())
+            .scalars()
+            .all()
+        )
+
+        now = get_guyana_now()
+        for ticket in tickets:
+            if ticket.status == TicketStatus.ISSUED:
+                ticket.status = TicketStatus.VOIDED
+                ticket.voided_at = now
+                ticket.voided_by_user_id = actor_user_id
+                ticket.void_reason = reason.strip() if reason else None
+                ticket.updated_at = now
+                notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+
+        db.flush()
+        return tickets
+
+
+def invalidate_event_tickets(
+    db: Session,
+    *,
+    event_id: int,
+    actor_user_id: int,
+    reason: str | None = None,
+) -> list[Ticket]:
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        tickets = (
+            db.execute(select(Ticket).where(Ticket.event_id == event_id).with_for_update())
+            .scalars()
+            .all()
+        )
+        now = get_guyana_now()
+        for ticket in tickets:
+            if ticket.status == TicketStatus.ISSUED:
+                ticket.status = TicketStatus.VOIDED
+                ticket.voided_at = now
+                ticket.voided_by_user_id = actor_user_id
+                ticket.void_reason = reason.strip() if reason else None
+                ticket.updated_at = now
+                notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+
+        db.flush()
+        return tickets
+
+
 def list_tickets_for_user(db: Session, *, user_id: int, event_id: int | None = None) -> list[Ticket]:
     conditions = [Ticket.owner_user_id == user_id]
     if event_id is not None:
