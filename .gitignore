@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.venv/
+venv/
+env/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# FastAPI / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Alembic / local DB
+*.db
+*.sqlite3
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Node
+node_modules/
+
+# Build / misc
+dist/
+build/
+coverage/
