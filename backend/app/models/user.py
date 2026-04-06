@@ -9,6 +9,7 @@ from app.models.mixins import TimestampMixin
 if TYPE_CHECKING:
     from app.models.event_staff import EventStaff
     from app.models.organizer_profile import OrganizerProfile
+    from app.models.ticket import Ticket
     from app.models.ticket_hold import TicketHold
 
 
@@ -34,3 +35,7 @@ class User(TimestampMixin, Base):
     )
 
     ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="user")
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="user", foreign_keys="Ticket.user_id")
+    checked_in_tickets: Mapped[list["Ticket"]] = relationship(
+        back_populates="checked_in_by", foreign_keys="Ticket.checked_in_by_user_id"
+    )

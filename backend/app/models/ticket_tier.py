@@ -20,6 +20,7 @@ from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.order_item import OrderItem
+    from app.models.ticket import Ticket
     from app.models.ticket_hold import TicketHold
 
 
@@ -48,3 +49,4 @@ class TicketTier(TimestampMixin, Base):
     event = relationship("Event", back_populates="ticket_tiers")
     holds: Mapped[list["TicketHold"]] = relationship(back_populates="ticket_tier")
     order_items: Mapped[list["OrderItem"]] = relationship(back_populates="ticket_tier")
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="ticket_tier")

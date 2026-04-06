@@ -14,6 +14,7 @@ from app.models.mixins import TimestampMixin
 if TYPE_CHECKING:
     from app.models.event import Event
     from app.models.order_item import OrderItem
+    from app.models.ticket import Ticket
     from app.models.ticket_hold import TicketHold
     from app.models.user import User
 
@@ -43,4 +44,5 @@ class Order(TimestampMixin, Base):
     order_items: Mapped[list["OrderItem"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
     )
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="order")

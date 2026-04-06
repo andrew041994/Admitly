@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from app.models.event_staff import EventStaff
     from app.models.organizer_profile import OrganizerProfile
     from app.models.order import Order
+    from app.models.ticket import Ticket
     from app.models.ticket_hold import TicketHold
     from app.models.ticket_tier import TicketTier
     from app.models.venue import Venue
@@ -78,4 +79,5 @@ class Event(TimestampMixin, Base):
     ticket_tiers: Mapped[list["TicketTier"]] = relationship(back_populates="event")
 
     orders: Mapped[list["Order"]] = relationship(back_populates="event")
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="event")
     ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="event")

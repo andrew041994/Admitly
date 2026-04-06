@@ -10,6 +10,7 @@ from app.models.enums import OrderStatus
 from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.ticket_hold import TicketHold
+from app.services.tickets import issue_tickets_for_completed_order
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -203,5 +204,5 @@ def complete_paid_order(
     order.paid_at = _to_aware(paid_at) if paid_at is not None else get_guyana_now()
     db.flush()
 
-    # TODO: trigger downstream ticket issuance once QR/ticket generation is implemented.
+    issue_tickets_for_completed_order(db, order)
     return order

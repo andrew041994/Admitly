@@ -31,3 +31,9 @@ class OrderStatus(str, Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
+
+
+class TicketStatus(str, Enum):
+    ISSUED = "issued"
+    CHECKED_IN = "checked_in"
+    VOIDED = "voided"

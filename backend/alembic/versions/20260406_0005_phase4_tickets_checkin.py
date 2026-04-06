@@ -1,0 +1,69 @@
+"""Phase 4 tickets issuance and check-in
+
+Revision ID: 20260406_0005
+Revises: 20260406_0004
+Create Date: 2026-04-06 05:00:00
+
+"""
+
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+
+# revision identifiers, used by Alembic.
+revision: str = "20260406_0005"
+down_revision: Union[str, None] = "20260406_0004"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    ticket_status = sa.Enum("issued", "checked_in", "voided", name="ticket_status")
+    ticket_status.create(op.get_bind(), checkfirst=True)
+
+    op.create_table(
+        "tickets",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("order_id", sa.Integer(), nullable=False),
+        sa.Column("order_item_id", sa.Integer(), nullable=False),
+        sa.Column("event_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("ticket_tier_id", sa.Integer(), nullable=False),
+        sa.Column("status", ticket_status, nullable=False),
+        sa.Column("ticket_code", sa.String(length=64), nullable=False),
+        sa.Column("qr_payload", sa.Text(), nullable=False),
+        sa.Column("issued_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("checked_in_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("checked_in_by_user_id", sa.Integer(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.ForeignKeyConstraint(["checked_in_by_user_id"], ["users.id"], name=op.f("fk_tickets_checked_in_by_user_id_users")),
+        sa.ForeignKeyConstraint(["event_id"], ["events.id"], name=op.f("fk_tickets_event_id_events"), ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["order_id"], ["orders.id"], name=op.f("fk_tickets_order_id_orders"), ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["order_item_id"], ["order_items.id"], name=op.f("fk_tickets_order_item_id_order_items"), ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["ticket_tier_id"], ["ticket_tiers.id"], name=op.f("fk_tickets_ticket_tier_id_ticket_tiers")),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], name=op.f("fk_tickets_user_id_users"), ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_tickets")),
+        sa.UniqueConstraint("ticket_code", name=op.f("uq_tickets_ticket_code")),
+    )
+    op.create_index(op.f("ix_tickets_checked_in_by_user_id"), "tickets", ["checked_in_by_user_id"], unique=False)
+    op.create_index(op.f("ix_tickets_event_id"), "tickets", ["event_id"], unique=False)
+    op.create_index(op.f("ix_tickets_order_id"), "tickets", ["order_id"], unique=False)
+    op.create_index(op.f("ix_tickets_order_item_id"), "tickets", ["order_item_id"], unique=False)
+    op.create_index(op.f("ix_tickets_status"), "tickets", ["status"], unique=False)
+    op.create_index(op.f("ix_tickets_ticket_tier_id"), "tickets", ["ticket_tier_id"], unique=False)
+    op.create_index(op.f("ix_tickets_user_id"), "tickets", ["user_id"], unique=False)
+
+
+def downgrade() -> None:
+    op.drop_index(op.f("ix_tickets_user_id"), table_name="tickets")
+    op.drop_index(op.f("ix_tickets_ticket_tier_id"), table_name="tickets")
+    op.drop_index(op.f("ix_tickets_status"), table_name="tickets")
+    op.drop_index(op.f("ix_tickets_order_item_id"), table_name="tickets")
+    op.drop_index(op.f("ix_tickets_order_id"), table_name="tickets")
+    op.drop_index(op.f("ix_tickets_event_id"), table_name="tickets")
+    op.drop_index(op.f("ix_tickets_checked_in_by_user_id"), table_name="tickets")
+    op.drop_table("tickets")
+    sa.Enum("issued", "checked_in", "voided", name="ticket_status").drop(op.get_bind(), checkfirst=True)

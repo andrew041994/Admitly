@@ -11,6 +11,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.order import Order
+    from app.models.ticket import Ticket
     from app.models.ticket_tier import TicketTier
 
 
@@ -33,3 +34,4 @@ class OrderItem(Base):
 
     order: Mapped["Order"] = relationship(back_populates="order_items")
     ticket_tier: Mapped["TicketTier"] = relationship(back_populates="order_items")
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="order_item", cascade="all, delete-orphan")
