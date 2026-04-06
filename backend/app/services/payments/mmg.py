@@ -54,6 +54,11 @@ def _require_live_config() -> None:
         )
 
 
+def validate_mmg_provider_config() -> None:
+    if settings.mmg_provider_mode == "live":
+        _require_live_config()
+
+
 def _mock_checkout_url(reference: str) -> str:
     return f"https://mock.mmg.local/checkout/{reference}"
 

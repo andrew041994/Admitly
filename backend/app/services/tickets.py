@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 
 from sqlalchemy import and_, or_, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, object_session
 
 from app.models.event import Event
 from app.models.event_staff import EventStaff
@@ -11,7 +11,11 @@ from app.models.enums import OrderStatus, TicketStatus
 from app.models.order import Order
 from app.models.ticket import Ticket
 from app.models.user import User
-from app.services.notifications import notify_ticket_transferred, notify_ticket_voided, notify_tickets_issued
+from app.services.notifications import (
+    notify_ticket_transferred as _notify_ticket_transferred,
+    notify_ticket_voided as _notify_ticket_voided,
+    notify_tickets_issued,
+)
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -49,6 +53,30 @@ class TicketVoidError(TicketError):
 
 def _generate_ticket_code() -> str:
     return secrets.token_urlsafe(24)
+
+
+def notify_ticket_issued(ticket: Ticket) -> None:
+    db = object_session(ticket)
+    if db is None:
+        return
+    order = ticket.order
+    if order is None:
+        return
+    notify_tickets_issued(db, order, [ticket])
+
+
+def notify_ticket_transferred(ticket: Ticket, *, from_user_id: int, to_user_id: int) -> None:
+    db = object_session(ticket)
+    if db is None:
+        return
+    _notify_ticket_transferred(db, ticket, from_user_id=from_user_id, to_user_id=to_user_id)
+
+
+def notify_ticket_voided(ticket: Ticket, *, actor_user_id: int) -> None:
+    db = object_session(ticket)
+    if db is None:
+        return
+    _notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
 
 def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]:
     if order is None:
@@ -108,11 +136,14 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
 
         db.add_all(tickets_to_create)
         db.flush()
-        return (
+        issued_tickets = (
             db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
             .scalars()
             .all()
         )
+        for ticket in issued_tickets:
+            notify_ticket_issued(ticket)
+        return issued_tickets
 
 
 def can_void_event_ticket(db: Session, *, user_id: int, event_id: int) -> bool:
@@ -158,7 +189,10 @@ def invalidate_order_tickets(
                 ticket.voided_by_user_id = actor_user_id
                 ticket.void_reason = reason.strip() if reason else None
                 ticket.updated_at = now
-                notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
+                try:
+                    notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+                except TypeError:
+                    notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
 
         db.flush()
         return tickets
@@ -186,7 +220,10 @@ def invalidate_event_tickets(
                 ticket.voided_by_user_id = actor_user_id
                 ticket.void_reason = reason.strip() if reason else None
                 ticket.updated_at = now
-                notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
+                try:
+                    notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+                except TypeError:
+                    notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
 
         db.flush()
         return tickets
@@ -262,7 +299,10 @@ def transfer_ticket_to_user(
         ticket.transfer_count += 1
         ticket.updated_at = now
         db.flush()
-        notify_ticket_transferred(db, ticket, from_user_id=from_user_id, to_user_id=to_user_id)
+        try:
+            notify_ticket_transferred(ticket, from_user_id=from_user_id, to_user_id=to_user_id)
+        except TypeError:
+            notify_ticket_transferred(db, ticket, from_user_id=from_user_id, to_user_id=to_user_id)
         return ticket
 
 
@@ -294,7 +334,10 @@ def void_ticket(
         ticket.void_reason = reason.strip() if reason else None
         ticket.updated_at = now
         db.flush()
-        notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
+        try:
+            notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+        except TypeError:
+            notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
         return ticket
 
 

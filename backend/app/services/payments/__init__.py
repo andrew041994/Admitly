@@ -21,6 +21,7 @@ from app.services.payments.mmg import (
     create_checkout_for_order,
     initiate_refund_with_provider,
     parse_checkout_callback,
+    validate_mmg_provider_config,
     verify_agent_payment_reference,
     verify_refund_status,
 )
@@ -69,6 +70,7 @@ def _assert_order_owner(order: Order, *, user_id: int) -> None:
 def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
     order = _load_order_for_payment(db, order_id=order_id)
     _assert_order_owner(order, user_id=user_id)
+    validate_mmg_provider_config()
     validate_order_still_payable(order)
 
     if order.payment_method == "mmg_agent":
@@ -105,6 +107,7 @@ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -
 def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
     order = _load_order_for_payment(db, order_id=order_id)
     _assert_order_owner(order, user_id=user_id)
+    validate_mmg_provider_config()
     validate_order_still_payable(order)
 
     if order.payment_method == "mmg_checkout":

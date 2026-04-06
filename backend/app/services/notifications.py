@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
 from app.models.event import Event
@@ -239,7 +239,11 @@ def notify_order_cancelled(order: Order, *, actor_user_id: int) -> None:
     )
 
 
-def notify_order_refunded(db: Session, order: Order, *, actor_user_id: int) -> NotificationDispatchResult:
+def notify_order_refunded(order: Order, *, actor_user_id: int) -> NotificationDispatchResult:
+    db = object_session(order)
+    if db is None:
+        raise ValueError("Order must be attached to an active session for notifications.")
+
     email = _user_email(db, order.user_id)
     _ = actor_user_id
     return _dispatch(
@@ -258,7 +262,11 @@ def notify_order_refunded(db: Session, order: Order, *, actor_user_id: int) -> N
     )
 
 
-def notify_event_cancelled(db: Session, event: Event, *, actor_user_id: int) -> NotificationDispatchResult:
+def notify_event_cancelled(event: Event, *, actor_user_id: int) -> NotificationDispatchResult:
+    db = object_session(event)
+    if db is None:
+        raise ValueError("Event must be attached to an active session for notifications.")
+
     _ = actor_user_id
     order_user_ids = db.execute(select(Order.user_id).where(Order.event_id == event.id)).scalars().all()
     unique_user_ids = sorted(set(order_user_ids))

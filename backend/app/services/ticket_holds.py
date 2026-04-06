@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -59,6 +59,8 @@ def calculate_ticket_hold_expiry(event_starts_at: datetime, now: datetime | None
 
 def get_ticket_type_availability(db: Session, ticket_tier_id: int, now: datetime | None = None) -> int:
     reference_now = _to_aware(now) if now is not None else get_guyana_now()
+    if now is None:
+        reference_now = datetime.combine(reference_now.date(), time.min, tzinfo=reference_now.tzinfo)
 
     ticket_tier = db.execute(
         select(TicketTier).where(TicketTier.id == ticket_tier_id)
