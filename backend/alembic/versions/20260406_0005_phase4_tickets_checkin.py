@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -20,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    ticket_status = sa.Enum("issued", "checked_in", "voided", name="ticket_status")
+    ticket_status = postgresql.ENUM("issued", "checked_in", "voided", name="ticket_status", create_type=False)
     ticket_status.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
@@ -66,4 +67,4 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_tickets_event_id"), table_name="tickets")
     op.drop_index(op.f("ix_tickets_checked_in_by_user_id"), table_name="tickets")
     op.drop_table("tickets")
-    sa.Enum("issued", "checked_in", "voided", name="ticket_status").drop(op.get_bind(), checkfirst=True)
+    postgresql.ENUM("issued", "checked_in", "voided", name="ticket_status").drop(op.get_bind(), checkfirst=True)

@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -18,10 +19,12 @@ down_revision: Union[str, None] = "20260406_0001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-order_status = sa.Enum("pending", "completed", "cancelled", "expired", name="order_status")
+order_status = postgresql.ENUM("pending", "completed", "cancelled", "expired", name="order_status", create_type=False)
 
 
 def upgrade() -> None:
+    order_status.create(op.get_bind(), checkfirst=True)
+
     op.create_table(
         "orders",
         sa.Column("id", sa.Integer(), nullable=False),

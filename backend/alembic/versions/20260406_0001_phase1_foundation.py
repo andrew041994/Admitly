@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -19,13 +20,23 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-event_status = sa.Enum("draft", "published", "cancelled", "completed", name="event_status")
-event_visibility = sa.Enum("public", "unlisted", "private", name="event_visibility")
-event_approval_status = sa.Enum("pending", "approved", "rejected", name="event_approval_status")
-event_staff_role = sa.Enum("owner", "manager", "scanner", name="event_staff_role")
+event_status = postgresql.ENUM(
+    "draft", "published", "cancelled", "completed", name="event_status", create_type=False
+)
+event_visibility = postgresql.ENUM("public", "unlisted", "private", name="event_visibility", create_type=False)
+event_approval_status = postgresql.ENUM(
+    "pending", "approved", "rejected", name="event_approval_status", create_type=False
+)
+event_staff_role = postgresql.ENUM("owner", "manager", "scanner", name="event_staff_role", create_type=False)
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    event_status.create(bind, checkfirst=True)
+    event_visibility.create(bind, checkfirst=True)
+    event_approval_status.create(bind, checkfirst=True)
+    event_staff_role.create(bind, checkfirst=True)
+
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), nullable=False),
