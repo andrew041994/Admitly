@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -12,6 +11,11 @@ from app.models.enums import OrderStatus, TicketStatus
 from app.models.order import Order
 from app.models.ticket import Ticket
 from app.models.user import User
+from app.services.ticket_notifications import (
+    notify_ticket_issued,
+    notify_ticket_transferred,
+    notify_ticket_voided,
+)
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -43,10 +47,12 @@ class TicketTransferError(TicketError):
     """Raised when a transfer request is invalid."""
 
 
+class TicketVoidError(TicketError):
+    """Raised when a void request is invalid."""
+
+
 def _generate_ticket_code() -> str:
     return secrets.token_urlsafe(24)
-
-
 
 def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]:
     if order is None:
@@ -106,12 +112,34 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
 
         db.add_all(tickets_to_create)
         db.flush()
+        for ticket in tickets_to_create:
+            notify_ticket_issued(ticket)
 
         return (
             db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
             .scalars()
             .all()
         )
+
+
+def can_void_event_ticket(db: Session, *, user_id: int, event_id: int) -> bool:
+    event = (
+        db.execute(select(Event).options(joinedload(Event.organizer)).where(Event.id == event_id))
+        .unique()
+        .scalar_one_or_none()
+    )
+    if event is None:
+        return False
+    return event.organizer is not None and event.organizer.user_id == user_id
+
+
+def validate_ticket_voidable(ticket: Ticket) -> None:
+    if ticket.status == TicketStatus.CHECKED_IN:
+        raise TicketVoidError("Checked-in tickets cannot be voided.")
+    if ticket.status == TicketStatus.VOIDED:
+        raise TicketVoidError("Ticket is already voided.")
+    if ticket.status != TicketStatus.ISSUED:
+        raise TicketVoidError("Ticket is not eligible to be voided.")
 
 
 def list_tickets_for_user(db: Session, *, user_id: int, event_id: int | None = None) -> list[Ticket]:
@@ -184,6 +212,39 @@ def transfer_ticket_to_user(
         ticket.transfer_count += 1
         ticket.updated_at = now
         db.flush()
+        notify_ticket_transferred(ticket, from_user_id=from_user_id, to_user_id=to_user_id)
+        return ticket
+
+
+def void_ticket(
+    db: Session,
+    *,
+    ticket_id: int,
+    actor_user_id: int,
+    reason: str | None = None,
+) -> Ticket:
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        ticket = (
+            db.execute(select(Ticket).where(Ticket.id == ticket_id).with_for_update())
+            .scalars()
+            .first()
+        )
+        if ticket is None:
+            raise TicketNotFoundError("Ticket not found.")
+        if not can_void_event_ticket(db, user_id=actor_user_id, event_id=ticket.event_id):
+            raise TicketAuthorizationError("Not authorized to void tickets for this event.")
+
+        validate_ticket_voidable(ticket)
+
+        now = get_guyana_now()
+        ticket.status = TicketStatus.VOIDED
+        ticket.voided_at = now
+        ticket.voided_by_user_id = actor_user_id
+        ticket.void_reason = reason.strip() if reason else None
+        ticket.updated_at = now
+        db.flush()
+        notify_ticket_voided(ticket, actor_user_id=actor_user_id)
         return ticket
 
 

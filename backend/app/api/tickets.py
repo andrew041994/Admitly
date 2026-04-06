@@ -3,17 +3,25 @@ from sqlalchemy.orm import Session
 
 from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
-from app.schemas.ticket import TicketCheckInRequest, TicketCheckInResponse, TicketResponse, TicketTransferRequest
+from app.schemas.ticket import (
+    TicketCheckInRequest,
+    TicketCheckInResponse,
+    TicketResponse,
+    TicketTransferRequest,
+    TicketVoidRequest,
+)
 from app.services.tickets import (
     TicketAuthorizationError,
     TicketCheckInConflictError,
     TicketCrossEventError,
     TicketNotFoundError,
     TicketTransferError,
+    TicketVoidError,
     check_in_ticket_for_event,
     list_tickets_for_order_owner,
     list_tickets_for_user,
     transfer_ticket_to_user,
+    void_ticket,
 )
 
 router = APIRouter(tags=["tickets"])
@@ -34,6 +42,9 @@ def _to_ticket_response(ticket) -> TicketResponse:
         issued_at=ticket.issued_at,
         checked_in_at=ticket.checked_in_at,
         transferred_at=ticket.transferred_at,
+        voided_at=ticket.voided_at,
+        voided_by_user_id=ticket.voided_by_user_id,
+        void_reason=ticket.void_reason,
         transfer_count=ticket.transfer_count,
     )
 
@@ -83,6 +94,30 @@ def transfer_ticket(
     except TicketNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except TicketTransferError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return _to_ticket_response(ticket)
+
+
+@router.post("/tickets/{ticket_id}/void", response_model=TicketResponse)
+def void_existing_ticket(
+    ticket_id: int,
+    payload: TicketVoidRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketResponse:
+    try:
+        ticket = void_ticket(
+            db,
+            ticket_id=ticket_id,
+            actor_user_id=user_id,
+            reason=payload.reason,
+        )
+    except TicketAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except TicketNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TicketVoidError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return _to_ticket_response(ticket)

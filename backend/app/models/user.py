@@ -45,3 +45,6 @@ class User(TimestampMixin, Base):
     checked_in_tickets: Mapped[list["Ticket"]] = relationship(
         back_populates="checked_in_by", foreign_keys="Ticket.checked_in_by_user_id"
     )
+    voided_tickets: Mapped[list["Ticket"]] = relationship(
+        back_populates="voided_by", foreign_keys="Ticket.voided_by_user_id"
+    )

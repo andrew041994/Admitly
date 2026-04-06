@@ -49,10 +49,13 @@ class Ticket(TimestampMixin, Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     checked_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     transferred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     transfer_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     checked_in_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True
     )
+    voided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    void_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     order: Mapped["Order"] = relationship(back_populates="tickets")
     order_item: Mapped["OrderItem"] = relationship(back_populates="tickets")
@@ -64,3 +67,4 @@ class Ticket(TimestampMixin, Base):
     checked_in_by: Mapped["User | None"] = relationship(
         back_populates="checked_in_tickets", foreign_keys=[checked_in_by_user_id]
     )
+    voided_by: Mapped["User | None"] = relationship(back_populates="voided_tickets", foreign_keys=[voided_by_user_id])

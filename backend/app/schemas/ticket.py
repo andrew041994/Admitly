@@ -19,6 +19,9 @@ class TicketResponse(BaseModel):
     issued_at: datetime
     checked_in_at: datetime | None
     transferred_at: datetime | None
+    voided_at: datetime | None
+    voided_by_user_id: int | None
+    void_reason: str | None
     transfer_count: int
 
 
@@ -39,3 +42,7 @@ class TicketCheckInResponse(BaseModel):
     checked_in_at: datetime | None
     checked_in_by_user_id: int | None
     message: str
+
+
+class TicketVoidRequest(BaseModel):
+    reason: str | None = None

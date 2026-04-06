@@ -28,12 +28,15 @@ from app.services.tickets import (
     TicketIssuanceError,
     TicketNotFoundError,
     TicketTransferError,
+    TicketVoidError,
     can_check_in_event_tickets,
+    can_void_event_ticket,
     check_in_ticket_for_event,
     issue_tickets_for_completed_order,
     list_tickets_for_order_owner,
     list_tickets_for_user,
     transfer_ticket_to_user,
+    void_ticket,
 )
 
 
@@ -494,3 +497,172 @@ def test_concurrent_duplicate_scan_only_one_succeeds(tmp_path: Path) -> None:
 
     assert results.count(True) == 1
     assert results.count(False) == 1
+
+
+def test_organizer_can_void_ticket_and_audit_fields_are_set(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    voided = void_ticket(
+        db_session,
+        ticket_id=ticket.id,
+        actor_user_id=event.organizer.user_id,
+        reason="fraud prevention",
+    )
+
+    assert voided.status == TicketStatus.VOIDED
+    assert voided.voided_at is not None
+    assert voided.voided_by_user_id == event.organizer.user_id
+    assert voided.void_reason == "fraud prevention"
+    assert voided.owner_user_id == order.user_id
+    assert voided.purchaser_user_id == order.user_id
+    assert len(list_tickets_for_order_owner(db_session, order_id=order.id, user_id=order.user_id)) == 1
+
+
+def test_unrelated_user_cannot_void_ticket(db_session: Session) -> None:
+    order, _, _, _, _ = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    outsider = User(email="void-outsider@example.com", full_name="Outsider")
+    db_session.add(outsider)
+    db_session.commit()
+    db_session.refresh(outsider)
+
+    with pytest.raises(TicketAuthorizationError):
+        void_ticket(
+            db_session,
+            ticket_id=ticket.id,
+            actor_user_id=outsider.id,
+            reason="not allowed",
+        )
+
+
+def test_checked_in_and_already_voided_tickets_cannot_be_voided(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=2)
+    tickets = issue_tickets_for_completed_order(db_session, order)
+
+    check_in_ticket_for_event(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=tickets[0].qr_payload,
+        ticket_code=None,
+    )
+    with pytest.raises(TicketVoidError):
+        void_ticket(
+            db_session,
+            ticket_id=tickets[0].id,
+            actor_user_id=event.organizer.user_id,
+        )
+
+    void_ticket(
+        db_session,
+        ticket_id=tickets[1].id,
+        actor_user_id=event.organizer.user_id,
+    )
+    with pytest.raises(TicketVoidError):
+        void_ticket(
+            db_session,
+            ticket_id=tickets[1].id,
+            actor_user_id=event.organizer.user_id,
+        )
+
+
+def test_voided_ticket_cannot_be_transferred_or_checked_in(db_session: Session) -> None:
+    order, _, _, buyer, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    recipient = User(email="void-recipient@example.com", full_name="Recipient")
+    db_session.add(recipient)
+    db_session.commit()
+    db_session.refresh(recipient)
+
+    void_ticket(
+        db_session,
+        ticket_id=ticket.id,
+        actor_user_id=event.organizer.user_id,
+        reason="duplicate",
+    )
+
+    with pytest.raises(TicketTransferError):
+        transfer_ticket_to_user(
+            db_session,
+            ticket_id=ticket.id,
+            from_user_id=buyer.id,
+            to_user_id=recipient.id,
+        )
+
+    with pytest.raises(TicketCheckInConflictError):
+        check_in_ticket_for_event(
+            db_session,
+            scanner_user_id=event.organizer.user_id,
+            event_id=event.id,
+            qr_payload=ticket.qr_payload,
+            ticket_code=None,
+        )
+
+
+def test_void_permissions_are_event_scoped_and_organizer_only(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, user_email="void-scope@example.com", quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    staff_user = User(email="void-staff@example.com", full_name="Staff")
+    db_session.add(staff_user)
+    db_session.flush()
+    db_session.add(
+        EventStaff(
+            event_id=event.id,
+            user_id=staff_user.id,
+            role=EventStaffRole.MANAGER,
+            is_active=True,
+            invited_by_user_id=event.organizer.user_id,
+        )
+    )
+    db_session.commit()
+
+    assert can_void_event_ticket(db_session, user_id=event.organizer.user_id, event_id=event.id)
+    assert not can_void_event_ticket(db_session, user_id=staff_user.id, event_id=event.id)
+
+    with pytest.raises(TicketAuthorizationError):
+        void_ticket(
+            db_session,
+            ticket_id=ticket.id,
+            actor_user_id=staff_user.id,
+        )
+
+
+def test_ticket_lifecycle_notification_hooks_are_called(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(
+        "app.services.tickets.notify_ticket_issued",
+        lambda ticket: calls.append(("issued", ticket.id)),
+    )
+    monkeypatch.setattr(
+        "app.services.tickets.notify_ticket_transferred",
+        lambda ticket, **_: calls.append(("transferred", ticket.id)),
+    )
+    monkeypatch.setattr(
+        "app.services.tickets.notify_ticket_voided",
+        lambda ticket, **_: calls.append(("voided", ticket.id)),
+    )
+
+    order, _, _, buyer, event = _seed_order(db_session, user_email="hooks@example.com", quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    recipient = User(email="hooks-recipient@example.com", full_name="Recipient")
+    db_session.add(recipient)
+    db_session.commit()
+    db_session.refresh(recipient)
+
+    transfer_ticket_to_user(
+        db_session,
+        ticket_id=ticket.id,
+        from_user_id=buyer.id,
+        to_user_id=recipient.id,
+    )
+    void_ticket(
+        db_session,
+        ticket_id=ticket.id,
+        actor_user_id=event.organizer.user_id,
+        reason="ops",
+    )
+
+    assert [name for name, _ in calls] == ["issued", "transferred", "voided"]
