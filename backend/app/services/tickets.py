@@ -11,6 +11,7 @@ from app.models.event_staff import EventStaff
 from app.models.enums import OrderStatus, TicketStatus
 from app.models.order import Order
 from app.models.ticket import Ticket
+from app.models.user import User
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -36,6 +37,10 @@ class TicketCheckInConflictError(TicketError):
 
 class TicketCrossEventError(TicketError):
     """Raised when ticket does not belong to route event."""
+
+
+class TicketTransferError(TicketError):
+    """Raised when a transfer request is invalid."""
 
 
 def _generate_ticket_code() -> str:
@@ -89,6 +94,8 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
                         order_item_id=item.id,
                         event_id=locked_order.event_id,
                         user_id=locked_order.user_id,
+                        purchaser_user_id=locked_order.user_id,
+                        owner_user_id=locked_order.user_id,
                         ticket_tier_id=item.ticket_tier_id,
                         status=TicketStatus.ISSUED,
                         ticket_code=ticket_code,
@@ -108,7 +115,7 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
 
 
 def list_tickets_for_user(db: Session, *, user_id: int, event_id: int | None = None) -> list[Ticket]:
-    conditions = [Ticket.user_id == user_id]
+    conditions = [Ticket.owner_user_id == user_id]
     if event_id is not None:
         conditions.append(Ticket.event_id == event_id)
 
@@ -131,6 +138,53 @@ def list_tickets_for_order_owner(db: Session, *, order_id: int, user_id: int) ->
         .scalars()
         .all()
     )
+
+
+def validate_ticket_transferable(ticket: Ticket, *, current_user_id: int) -> None:
+    if ticket.owner_user_id != current_user_id:
+        raise TicketAuthorizationError("Only the current ticket owner can transfer this ticket.")
+    if ticket.status == TicketStatus.CHECKED_IN:
+        raise TicketTransferError("Checked-in tickets cannot be transferred.")
+    if ticket.status == TicketStatus.VOIDED:
+        raise TicketTransferError("Voided tickets cannot be transferred.")
+    if ticket.status != TicketStatus.ISSUED:
+        raise TicketTransferError("Ticket is not eligible for transfer.")
+
+
+def transfer_ticket_to_user(
+    db: Session,
+    *,
+    ticket_id: int,
+    from_user_id: int,
+    to_user_id: int,
+) -> Ticket:
+    if from_user_id == to_user_id:
+        raise TicketTransferError("Cannot transfer a ticket to yourself.")
+
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        ticket = (
+            db.execute(select(Ticket).where(Ticket.id == ticket_id).with_for_update())
+            .scalars()
+            .first()
+        )
+        if ticket is None:
+            raise TicketNotFoundError("Ticket not found.")
+
+        validate_ticket_transferable(ticket, current_user_id=from_user_id)
+
+        user = db.execute(select(User.id).where(User.id == to_user_id)).scalar_one_or_none()
+        if user is None:
+            raise TicketTransferError("Recipient user not found.")
+
+        now = get_guyana_now()
+        ticket.owner_user_id = to_user_id
+        ticket.user_id = to_user_id
+        ticket.transferred_at = now
+        ticket.transfer_count += 1
+        ticket.updated_at = now
+        db.flush()
+        return ticket
 
 
 def can_check_in_event_tickets(db: Session, *, user_id: int, event_id: int) -> bool:

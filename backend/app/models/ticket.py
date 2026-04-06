@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -34,6 +34,12 @@ class Ticket(TimestampMixin, Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    purchaser_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     ticket_tier_id: Mapped[int] = mapped_column(ForeignKey("ticket_tiers.id"), nullable=False, index=True)
     status: Mapped[TicketStatus] = mapped_column(
         Enum(TicketStatus, name="ticket_status"), nullable=False, default=TicketStatus.ISSUED, index=True
@@ -42,6 +48,8 @@ class Ticket(TimestampMixin, Base):
     qr_payload: Mapped[str] = mapped_column(Text, nullable=False)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     checked_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    transferred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    transfer_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     checked_in_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True
     )
@@ -50,6 +58,8 @@ class Ticket(TimestampMixin, Base):
     order_item: Mapped["OrderItem"] = relationship(back_populates="tickets")
     event: Mapped["Event"] = relationship(back_populates="tickets")
     user: Mapped["User"] = relationship(back_populates="tickets", foreign_keys=[user_id])
+    purchaser: Mapped["User"] = relationship(back_populates="purchased_tickets", foreign_keys=[purchaser_user_id])
+    owner: Mapped["User"] = relationship(back_populates="owned_tickets", foreign_keys=[owner_user_id])
     ticket_tier: Mapped["TicketTier"] = relationship(back_populates="tickets")
     checked_in_by: Mapped["User | None"] = relationship(
         back_populates="checked_in_tickets", foreign_keys=[checked_in_by_user_id]

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
@@ -26,11 +27,13 @@ from app.services.tickets import (
     TicketCrossEventError,
     TicketIssuanceError,
     TicketNotFoundError,
+    TicketTransferError,
     can_check_in_event_tickets,
     check_in_ticket_for_event,
     issue_tickets_for_completed_order,
     list_tickets_for_order_owner,
     list_tickets_for_user,
+    transfer_ticket_to_user,
 )
 
 
@@ -152,6 +155,8 @@ def test_issued_ticket_links_match_order_and_item(db_session: Session) -> None:
     assert ticket.order_id == order.id
     assert ticket.order_item_id == item.id
     assert ticket.user_id == user.id
+    assert ticket.purchaser_user_id == user.id
+    assert ticket.owner_user_id == user.id
     assert ticket.event_id == event.id
     assert ticket.ticket_tier_id == tier.id
 
@@ -186,6 +191,112 @@ def test_user_can_retrieve_own_tickets_only(db_session: Session) -> None:
     db_session.commit()
     db_session.refresh(other)
     assert list_tickets_for_user(db_session, user_id=other.id) == []
+
+
+def test_owner_can_transfer_ticket_and_purchaser_is_immutable(db_session: Session) -> None:
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    recipient = User(email="recipient@example.com", full_name="Recipient")
+    db_session.add(recipient)
+    db_session.commit()
+    db_session.refresh(recipient)
+
+    transferred = transfer_ticket_to_user(
+        db_session,
+        ticket_id=ticket.id,
+        from_user_id=buyer.id,
+        to_user_id=recipient.id,
+    )
+
+    assert transferred.purchaser_user_id == buyer.id
+    assert transferred.owner_user_id == recipient.id
+    assert transferred.user_id == recipient.id
+    assert transferred.transfer_count == 1
+    assert transferred.transferred_at is not None
+
+
+def test_transfer_rejects_non_owner_checked_in_voided_self_and_unknown_user(db_session: Session) -> None:
+    order, _, _, buyer, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    unrelated = User(email="unrelated@example.com", full_name="Unrelated")
+    recipient = User(email="recipient-2@example.com", full_name="Recipient")
+    db_session.add_all([unrelated, recipient])
+    db_session.commit()
+    db_session.refresh(unrelated)
+    db_session.refresh(recipient)
+
+    with pytest.raises(TicketAuthorizationError):
+        transfer_ticket_to_user(
+            db_session,
+            ticket_id=ticket.id,
+            from_user_id=unrelated.id,
+            to_user_id=recipient.id,
+        )
+
+    with pytest.raises(TicketTransferError):
+        transfer_ticket_to_user(
+            db_session,
+            ticket_id=ticket.id,
+            from_user_id=buyer.id,
+            to_user_id=buyer.id,
+        )
+
+    check_in_ticket_for_event(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=ticket.qr_payload,
+        ticket_code=None,
+    )
+    with pytest.raises(TicketTransferError):
+        transfer_ticket_to_user(
+            db_session,
+            ticket_id=ticket.id,
+            from_user_id=buyer.id,
+            to_user_id=recipient.id,
+        )
+
+    order_2, _, _, buyer_2, _ = _seed_order(db_session, user_email="buyer2@example.com", quantity=1)
+    ticket_2 = issue_tickets_for_completed_order(db_session, order_2)[0]
+    ticket_2.status = TicketStatus.VOIDED
+    db_session.commit()
+    with pytest.raises(TicketTransferError):
+        transfer_ticket_to_user(
+            db_session,
+            ticket_id=ticket_2.id,
+            from_user_id=buyer_2.id,
+            to_user_id=recipient.id,
+        )
+
+    with pytest.raises(TicketTransferError):
+        transfer_ticket_to_user(
+            db_session,
+            ticket_id=ticket_2.id,
+            from_user_id=buyer_2.id,
+            to_user_id=999999,
+        )
+
+
+def test_partial_and_full_transfer_and_order_history_views(db_session: Session) -> None:
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=4)
+    tickets = issue_tickets_for_completed_order(db_session, order)
+    recipient = User(email="recipient-3@example.com", full_name="Recipient")
+    db_session.add(recipient)
+    db_session.commit()
+    db_session.refresh(recipient)
+
+    transfer_ticket_to_user(db_session, ticket_id=tickets[0].id, from_user_id=buyer.id, to_user_id=recipient.id)
+    buyer_owned = list_tickets_for_user(db_session, user_id=buyer.id)
+    recipient_owned = list_tickets_for_user(db_session, user_id=recipient.id)
+    assert len(buyer_owned) == 3
+    assert len(recipient_owned) == 1
+
+    for t in tickets[1:]:
+        transfer_ticket_to_user(db_session, ticket_id=t.id, from_user_id=buyer.id, to_user_id=recipient.id)
+
+    assert list_tickets_for_user(db_session, user_id=buyer.id) == []
+    assert len(list_tickets_for_user(db_session, user_id=recipient.id)) == 4
+    assert len(list_tickets_for_order_owner(db_session, order_id=order.id, user_id=buyer.id)) == 4
 
 
 def test_user_cannot_retrieve_another_users_order_tickets(db_session: Session) -> None:
@@ -273,6 +384,32 @@ def test_checkin_success_and_second_scan_rejected(db_session: Session) -> None:
         )
 
 
+def test_transferred_ticket_can_still_be_checked_in(db_session: Session) -> None:
+    order, _, _, buyer, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    recipient = User(email="recipient-4@example.com", full_name="Recipient")
+    db_session.add(recipient)
+    db_session.commit()
+    db_session.refresh(recipient)
+
+    transferred = transfer_ticket_to_user(
+        db_session,
+        ticket_id=ticket.id,
+        from_user_id=buyer.id,
+        to_user_id=recipient.id,
+    )
+    assert transferred.owner_user_id == recipient.id
+
+    scanned = check_in_ticket_for_event(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=ticket.qr_payload,
+        ticket_code=None,
+    )
+    assert scanned.status == TicketStatus.CHECKED_IN
+
+
 def test_ticket_for_different_event_is_rejected(db_session: Session) -> None:
     order_1, _, _, _, event_1 = _seed_order(db_session, user_email="a@example.com", quantity=1)
     order_2, _, _, _, event_2 = _seed_order(db_session, user_email="b@example.com", quantity=1)
@@ -346,6 +483,9 @@ def test_concurrent_duplicate_scan_only_one_succeeds(tmp_path: Path) -> None:
                 local_session.commit()
                 return True
             except TicketCheckInConflictError:
+                local_session.rollback()
+                return False
+            except OperationalError:
                 local_session.rollback()
                 return False
 

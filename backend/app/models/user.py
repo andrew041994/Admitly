@@ -36,6 +36,12 @@ class User(TimestampMixin, Base):
 
     ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="user")
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="user", foreign_keys="Ticket.user_id")
+    purchased_tickets: Mapped[list["Ticket"]] = relationship(
+        back_populates="purchaser", foreign_keys="Ticket.purchaser_user_id"
+    )
+    owned_tickets: Mapped[list["Ticket"]] = relationship(
+        back_populates="owner", foreign_keys="Ticket.owner_user_id"
+    )
     checked_in_tickets: Mapped[list["Ticket"]] = relationship(
         back_populates="checked_in_by", foreign_keys="Ticket.checked_in_by_user_id"
     )

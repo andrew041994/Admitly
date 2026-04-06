@@ -7,7 +7,7 @@ from app.schemas.mmg import (
     SubmitMMGAgentPaymentRequest,
     SubmitMMGAgentPaymentResponse,
 )
-from app.schemas.ticket import TicketCheckInRequest, TicketCheckInResponse, TicketResponse
+from app.schemas.ticket import TicketCheckInRequest, TicketCheckInResponse, TicketResponse, TicketTransferRequest
 
 __all__ = [
     "CreateTicketHoldRequest",
@@ -21,6 +21,7 @@ __all__ = [
     "SubmitMMGAgentPaymentResponse",
     "MMGCallbackResponse",
     "TicketResponse",
+    "TicketTransferRequest",
     "TicketCheckInRequest",
     "TicketCheckInResponse",
 ]
