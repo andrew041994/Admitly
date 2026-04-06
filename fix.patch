@@ -1,10 +1,10 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_orders_service.py b/backend/tests/test_orders_service.py
+diff --git a/backend/tests/test_mmg_payments_service.py b/backend/tests/test_mmg_payments_service.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e208f493f47d45c8e375982304f1153cedb3dbd9
+index 0000000000000000000000000000000000000000..25df4dfa0991482739f2769837a0ecaeaa146b58
 --- /dev/null
-+++ b/backend/tests/test_orders_service.py
-@@ -0,0 +1,336 @@
++++ b/backend/tests/test_mmg_payments_service.py
+@@ -0,0 +1,230 @@
 +from datetime import datetime, timedelta, timezone
 +from decimal import Decimal
 +
@@ -12,16 +12,18 @@ index 0000000000000000000000000000000000000000..e208f493f47d45c8e375982304f1153c
 +from sqlalchemy import create_engine
 +from sqlalchemy.orm import Session, sessionmaker
 +
++from app.core.config import settings
 +from app.db.base import Base
-+from app.models import Event, OrganizerProfile, Order, TicketHold, TicketTier, User, Venue
++from app.models import Event, OrganizerProfile, Order, OrderItem, TicketHold, TicketTier, User, Venue
 +from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
-+from app.services.orders import (
-+    EmptyHoldSelectionError,
-+    HoldAlreadyAttachedError,
-+    HoldEventMismatchError,
-+    HoldExpiredError,
-+    HoldOwnershipError,
-+    create_pending_order_from_holds,
++from app.services.orders import OrderNotPayableError, validate_order_still_payable
++from app.services.payments import (
++    PaymentAuthorizationError,
++    create_mmg_agent_checkout_for_order,
++    create_mmg_checkout_for_order,
++    handle_mmg_callback,
++    mark_agent_payment_verified,
++    submit_mmg_agent_payment,
 +)
 +from app.services.ticket_holds import get_ticket_type_availability
 +
@@ -35,15 +37,16 @@ index 0000000000000000000000000000000000000000..e208f493f47d45c8e375982304f1153c
 +        yield session
 +
 +
-+def _seed_event_with_tiers(
-+    db: Session,
-+    *,
-+    owner_email: str,
-+    start_at: datetime,
-+    tier_prices: list[Decimal],
-+    quantity_total: int = 100,
-+) -> tuple[User, Event, list[TicketTier]]:
-+    user = User(email=owner_email, full_name="Owner")
++@pytest.fixture(autouse=True)
++def mmg_config() -> None:
++    settings.mmg_enabled = True
++    settings.mmg_provider_mode = "mock"
++    settings.mmg_agent_auto_verify_enabled = True
++
++
++def _seed_order_with_hold(db: Session, *, user_email: str = "u@example.com") -> tuple[Order, TicketTier, User]:
++    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
++    user = User(email=user_email, full_name="User")
 +    db.add(user)
 +    db.flush()
 +
@@ -59,9 +62,9 @@ index 0000000000000000000000000000000000000000..e208f493f47d45c8e375982304f1153c
 +        organizer_id=organizer.id,
 +        venue_id=venue.id,
 +        title="Concert",
-+        slug=f"concert-{owner_email}-{int(start_at.timestamp())}",
-+        start_at=start_at,
-+        end_at=start_at + timedelta(hours=4),
++        slug=f"concert-{user_email}",
++        start_at=now + timedelta(days=3),
++        end_at=now + timedelta(days=3, hours=3),
 +        status=EventStatus.PUBLISHED,
 +        visibility=EventVisibility.PUBLIC,
 +        approval_status=EventApprovalStatus.APPROVED,
@@ -71,276 +74,167 @@ index 0000000000000000000000000000000000000000..e208f493f47d45c8e375982304f1153c
 +    db.add(event)
 +    db.flush()
 +
-+    tiers: list[TicketTier] = []
-+    for idx, price in enumerate(tier_prices):
-+        tier = TicketTier(
-+            event_id=event.id,
-+            name=f"Tier {idx + 1}",
-+            tier_code=f"TIER{idx + 1}",
-+            price_amount=price,
-+            currency="GYD",
-+            quantity_total=quantity_total,
-+            quantity_sold=0,
-+            quantity_held=0,
-+            min_per_order=1,
-+            max_per_order=10,
-+            is_active=True,
-+            sort_order=idx,
-+        )
-+        db.add(tier)
-+        tiers.append(tier)
-+
-+    db.commit()
-+    for tier in tiers:
-+        db.refresh(tier)
-+    db.refresh(user)
-+    db.refresh(event)
-+    return user, event, tiers
-+
-+
-+def _create_hold(
-+    db: Session,
-+    *,
-+    event_id: int,
-+    tier_id: int,
-+    user_id: int,
-+    quantity: int,
-+    expires_at: datetime,
-+    order_id: int | None = None,
-+) -> TicketHold:
-+    hold = TicketHold(
-+        event_id=event_id,
-+        ticket_tier_id=tier_id,
-+        user_id=user_id,
-+        quantity=quantity,
-+        expires_at=expires_at,
-+        order_id=order_id,
-+    )
-+    db.add(hold)
-+    db.commit()
-+    db.refresh(hold)
-+    return hold
-+
-+
-+def test_create_pending_order_from_single_active_hold(db_session: Session) -> None:
-+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
-+    user, event, tiers = _seed_event_with_tiers(
-+        db_session,
-+        owner_email="owner1@example.com",
-+        start_at=now + timedelta(days=3),
-+        tier_prices=[Decimal("150.00")],
-+    )
-+    hold = _create_hold(
-+        db_session,
++    tier = TicketTier(
 +        event_id=event.id,
-+        tier_id=tiers[0].id,
-+        user_id=user.id,
-+        quantity=2,
-+        expires_at=now + timedelta(hours=2),
++        name="General",
++        tier_code="GEN",
++        price_amount=Decimal("100.00"),
++        currency="GYD",
++        quantity_total=10,
++        quantity_sold=0,
++        quantity_held=0,
++        min_per_order=1,
++        max_per_order=10,
++        is_active=True,
++        sort_order=0,
 +    )
++    db.add(tier)
++    db.flush()
 +
-+    order = create_pending_order_from_holds(db_session, user_id=user.id, hold_ids=[hold.id], now=now)
-+
-+    assert order.status == OrderStatus.PENDING
-+    assert order.total_amount == Decimal("300.00")
-+    assert len(order.order_items) == 1
-+    assert order.order_items[0].quantity == 2
-+    assert order.order_items[0].unit_price == Decimal("150.00")
-+
-+    db_session.refresh(hold)
-+    assert hold.order_id == order.id
-+
-+
-+def test_create_pending_order_from_multiple_holds_same_event(db_session: Session) -> None:
-+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
-+    user, event, tiers = _seed_event_with_tiers(
-+        db_session,
-+        owner_email="owner2@example.com",
-+        start_at=now + timedelta(days=3),
-+        tier_prices=[Decimal("100.00"), Decimal("250.00")],
-+    )
-+    hold_1 = _create_hold(
-+        db_session,
-+        event_id=event.id,
-+        tier_id=tiers[0].id,
-+        user_id=user.id,
-+        quantity=1,
-+        expires_at=now + timedelta(hours=2),
-+    )
-+    hold_2 = _create_hold(
-+        db_session,
-+        event_id=event.id,
-+        tier_id=tiers[1].id,
-+        user_id=user.id,
-+        quantity=2,
-+        expires_at=now + timedelta(hours=2),
-+    )
-+
-+    order = create_pending_order_from_holds(
-+        db_session,
-+        user_id=user.id,
-+        hold_ids=[hold_1.id, hold_2.id],
-+        now=now,
-+    )
-+
-+    assert order.status == OrderStatus.PENDING
-+    assert order.total_amount == Decimal("600.00")
-+    assert len(order.order_items) == 2
-+
-+
-+def test_create_pending_order_rejects_empty_hold_ids(db_session: Session) -> None:
-+    with pytest.raises(EmptyHoldSelectionError):
-+        create_pending_order_from_holds(db_session, user_id=1, hold_ids=[])
-+
-+
-+def test_create_pending_order_rejects_hold_belonging_to_another_user(db_session: Session) -> None:
-+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
-+    user, event, tiers = _seed_event_with_tiers(
-+        db_session,
-+        owner_email="owner3@example.com",
-+        start_at=now + timedelta(days=3),
-+        tier_prices=[Decimal("100.00")],
-+    )
-+    other_user = User(email="other@example.com", full_name="Other")
-+    db_session.add(other_user)
-+    db_session.commit()
-+    db_session.refresh(other_user)
-+
-+    hold = _create_hold(
-+        db_session,
-+        event_id=event.id,
-+        tier_id=tiers[0].id,
-+        user_id=other_user.id,
-+        quantity=1,
-+        expires_at=now + timedelta(hours=2),
-+    )
-+
-+    with pytest.raises(HoldOwnershipError):
-+        create_pending_order_from_holds(db_session, user_id=user.id, hold_ids=[hold.id], now=now)
-+
-+
-+def test_create_pending_order_rejects_expired_hold(db_session: Session) -> None:
-+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
-+    user, event, tiers = _seed_event_with_tiers(
-+        db_session,
-+        owner_email="owner4@example.com",
-+        start_at=now + timedelta(days=3),
-+        tier_prices=[Decimal("100.00")],
-+    )
-+    hold = _create_hold(
-+        db_session,
-+        event_id=event.id,
-+        tier_id=tiers[0].id,
-+        user_id=user.id,
-+        quantity=1,
-+        expires_at=now - timedelta(minutes=1),
-+    )
-+
-+    with pytest.raises(HoldExpiredError):
-+        create_pending_order_from_holds(db_session, user_id=user.id, hold_ids=[hold.id], now=now)
-+
-+
-+def test_create_pending_order_rejects_already_attached_hold(db_session: Session) -> None:
-+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
-+    user, event, tiers = _seed_event_with_tiers(
-+        db_session,
-+        owner_email="owner5@example.com",
-+        start_at=now + timedelta(days=3),
-+        tier_prices=[Decimal("100.00")],
-+    )
-+    existing_order = Order(
++    order = Order(
 +        user_id=user.id,
 +        event_id=event.id,
 +        status=OrderStatus.PENDING,
-+        total_amount=Decimal("100.00"),
++        total_amount=Decimal("200.00"),
 +        currency="GYD",
 +    )
-+    db_session.add(existing_order)
-+    db_session.commit()
-+    db_session.refresh(existing_order)
++    db.add(order)
++    db.flush()
 +
-+    hold = _create_hold(
-+        db_session,
-+        event_id=event.id,
-+        tier_id=tiers[0].id,
-+        user_id=user.id,
-+        quantity=1,
-+        expires_at=now + timedelta(hours=1),
-+        order_id=existing_order.id,
-+    )
-+
-+    with pytest.raises(HoldAlreadyAttachedError):
-+        create_pending_order_from_holds(db_session, user_id=user.id, hold_ids=[hold.id], now=now)
-+
-+
-+def test_create_pending_order_rejects_holds_from_multiple_events(db_session: Session) -> None:
-+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
-+    user_1, event_1, tiers_1 = _seed_event_with_tiers(
-+        db_session,
-+        owner_email="owner6a@example.com",
-+        start_at=now + timedelta(days=3),
-+        tier_prices=[Decimal("100.00")],
-+    )
-+    user_2, event_2, tiers_2 = _seed_event_with_tiers(
-+        db_session,
-+        owner_email="owner6b@example.com",
-+        start_at=now + timedelta(days=4),
-+        tier_prices=[Decimal("120.00")],
-+    )
-+
-+    hold_1 = _create_hold(
-+        db_session,
-+        event_id=event_1.id,
-+        tier_id=tiers_1[0].id,
-+        user_id=user_1.id,
-+        quantity=1,
-+        expires_at=now + timedelta(hours=2),
-+    )
-+    hold_2 = _create_hold(
-+        db_session,
-+        event_id=event_2.id,
-+        tier_id=tiers_2[0].id,
-+        user_id=user_1.id,
-+        quantity=1,
-+        expires_at=now + timedelta(hours=2),
-+    )
-+
-+    assert user_1.id != user_2.id
-+
-+    with pytest.raises(HoldEventMismatchError):
-+        create_pending_order_from_holds(
-+            db_session,
-+            user_id=user_1.id,
-+            hold_ids=[hold_1.id, hold_2.id],
-+            now=now,
++    db.add(OrderItem(order_id=order.id, ticket_tier_id=tier.id, quantity=2, unit_price=Decimal("100.00")))
++    db.add(
++        TicketHold(
++            event_id=event.id,
++            ticket_tier_id=tier.id,
++            user_id=user.id,
++            quantity=2,
++            expires_at=now + timedelta(hours=2),
++            order_id=order.id,
 +        )
-+
-+
-+def test_pending_orders_do_not_count_as_sold_and_no_double_count_after_conversion(db_session: Session) -> None:
-+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
-+    user, event, tiers = _seed_event_with_tiers(
-+        db_session,
-+        owner_email="owner7@example.com",
-+        start_at=now + timedelta(days=3),
-+        tier_prices=[Decimal("100.00")],
-+        quantity_total=10,
 +    )
-+    hold = _create_hold(
++    db.commit()
++    db.refresh(order)
++    db.refresh(tier)
++    db.refresh(user)
++    return order, tier, user
++
++
++def test_validate_order_still_payable_passes_for_pending_with_active_holds(db_session: Session) -> None:
++    order, _, _ = _seed_order_with_hold(db_session)
++    validate_order_still_payable(order)
++
++
++def test_validate_order_still_payable_rejects_expired_hold(db_session: Session) -> None:
++    order, _, _ = _seed_order_with_hold(db_session)
++    order.ticket_holds[0].expires_at = datetime(2026, 4, 6, 8, 0, tzinfo=timezone.utc)
++    with pytest.raises(OrderNotPayableError):
++        validate_order_still_payable(order, now=datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc))
++    assert order.status == OrderStatus.EXPIRED
++
++
++def test_validate_order_still_payable_rejects_non_pending_statuses(db_session: Session) -> None:
++    order, _, _ = _seed_order_with_hold(db_session)
++    for status in (OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.EXPIRED):
++        order.status = status
++        with pytest.raises(OrderNotPayableError):
++            validate_order_still_payable(order)
++
++
++def test_mmg_checkout_initiation_is_idempotent_and_pending_not_sold(db_session: Session) -> None:
++    order, tier, user = _seed_order_with_hold(db_session)
++
++    before = get_ticket_type_availability(db_session, tier.id)
++    first = create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
++    second = create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
++    after = get_ticket_type_availability(db_session, tier.id)
++
++    assert first.checkout_url
++    assert first.payment_reference == second.payment_reference
++    assert first.checkout_url == second.checkout_url
++    assert first.status == "pending"
++    assert before == after
++
++
++def test_mmg_checkout_rejects_wrong_user(db_session: Session) -> None:
++    order, _, _ = _seed_order_with_hold(db_session)
++    with pytest.raises(PaymentAuthorizationError):
++        create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=999)
++
++
++def test_mmg_agent_initiation_and_submit_outcomes(db_session: Session) -> None:
++    order, tier, user = _seed_order_with_hold(db_session)
++
++    initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
++    assert initiated.payment_reference.startswith("AGT-")
++    assert get_ticket_type_availability(db_session, tier.id) == 8
++
++    verified = submit_mmg_agent_payment(
 +        db_session,
-+        event_id=event.id,
-+        tier_id=tiers[0].id,
++        order_id=order.id,
 +        user_id=user.id,
-+        quantity=3,
-+        expires_at=now + timedelta(hours=2),
++        submitted_reference_code=initiated.payment_reference,
 +    )
++    assert verified.payment_verification_status == "verified"
++    assert verified.status == "completed"
++    assert get_ticket_type_availability(db_session, tier.id) == 8
 +
-+    availability_before = get_ticket_type_availability(db_session, ticket_tier_id=tiers[0].id, now=now)
-+    assert availability_before == 7
 +
-+    create_pending_order_from_holds(db_session, user_id=user.id, hold_ids=[hold.id], now=now)
++def test_mmg_agent_submit_pending_and_rejected_paths(db_session: Session) -> None:
++    settings.mmg_agent_auto_verify_enabled = False
++    order, _, user = _seed_order_with_hold(db_session, user_email="pending@example.com")
++    initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
 +
-+    availability_after = get_ticket_type_availability(db_session, ticket_tier_id=tiers[0].id, now=now)
-+    assert availability_after == 7
++    pending = submit_mmg_agent_payment(
++        db_session,
++        order_id=order.id,
++        user_id=user.id,
++        submitted_reference_code=initiated.payment_reference,
++    )
++    assert pending.payment_verification_status == "pending_verification"
++    assert pending.status == "pending"
++
++    settings.mmg_agent_auto_verify_enabled = True
++    order2, _, user2 = _seed_order_with_hold(db_session, user_email="reject@example.com")
++    initiated2 = create_mmg_agent_checkout_for_order(db_session, order_id=order2.id, user_id=user2.id)
++    rejected = submit_mmg_agent_payment(
++        db_session,
++        order_id=order2.id,
++        user_id=user2.id,
++        submitted_reference_code=f"{initiated2.payment_reference}-FAIL",
++    )
++    assert rejected.payment_verification_status == "rejected"
++    assert rejected.status == "pending"
++
++
++def test_manual_agent_verify_hook_and_callback_scaffold(db_session: Session) -> None:
++    order, _, user = _seed_order_with_hold(db_session, user_email="manual@example.com")
++    initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
++
++    mark_agent_payment_verified(db_session, order_id=order.id, payment_reference=initiated.payment_reference)
++    db_session.refresh(order)
++    assert order.status == OrderStatus.COMPLETED
++
++    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email="cb@example.com")
++    create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
++    callback = handle_mmg_callback(
++        db_session,
++        payload={"payment_reference": checkout_order.payment_reference, "status": "paid"},
++    )
++    assert callback.status == "completed"
++
++
++def test_live_mode_missing_config_fails_clearly(db_session: Session) -> None:
++    settings.mmg_provider_mode = "live"
++    settings.mmg_base_url = None
++    settings.mmg_merchant_id = None
++    settings.mmg_api_key = None
++    settings.mmg_api_secret = None
++    settings.mmg_callback_url = None
++
++    order, _, user = _seed_order_with_hold(db_session, user_email="live@example.com")
++    with pytest.raises(Exception) as exc:
++        create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
++    assert "missing required config" in str(exc.value).lower()
  
 EOF
 )

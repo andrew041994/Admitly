@@ -77,9 +77,13 @@ def get_ticket_type_availability(db: Session, ticket_tier_id: int, now: datetime
 
     active_holds = (
         db.execute(
-            select(func.coalesce(func.sum(TicketHold.quantity), 0)).where(
+            select(func.coalesce(func.sum(TicketHold.quantity), 0))
+            .select_from(TicketHold)
+            .outerjoin(Order, Order.id == TicketHold.order_id)
+            .where(
                 TicketHold.ticket_tier_id == ticket_tier_id,
                 TicketHold.expires_at > reference_now,
+                (TicketHold.order_id.is_(None)) | (Order.status == OrderStatus.PENDING),
             )
         ).scalar_one()
         or 0

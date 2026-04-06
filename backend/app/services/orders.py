@@ -45,6 +45,14 @@ class HoldCurrencyMismatchError(OrderFlowError):
     """Raised when provided holds span multiple currencies."""
 
 
+class OrderNotPayableError(OrderFlowError):
+    """Raised when pending order is no longer payable."""
+
+
+class OrderNotFoundError(OrderFlowError):
+    """Raised when order does not exist."""
+
+
 def _to_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
@@ -149,10 +157,51 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
     )
 
 
-def validate_order_still_payable(order: Order, now: datetime | None = None) -> bool:
+def get_order_with_holds(db: Session, *, order_id: int) -> Order | None:
+    return (
+        db.execute(
+            select(Order)
+            .options(joinedload(Order.order_items), joinedload(Order.ticket_holds))
+            .where(Order.id == order_id)
+        )
+        .unique()
+        .scalar_one_or_none()
+    )
+
+
+def validate_order_still_payable(order: Order | None, now: datetime | None = None) -> None:
+    if order is None:
+        raise OrderNotFoundError("Order not found.")
+
     reference_now = _to_aware(now) if now is not None else get_guyana_now()
     if order.status != OrderStatus.PENDING:
-        return False
+        raise OrderNotPayableError("Only pending orders can be paid.")
     if not order.ticket_holds:
-        return False
-    return all(_to_aware(hold.expires_at) > reference_now for hold in order.ticket_holds)
+        raise OrderNotPayableError("Order has no linked holds.")
+
+    if not all(_to_aware(hold.expires_at) > reference_now for hold in order.ticket_holds):
+        order.status = OrderStatus.EXPIRED
+        raise OrderNotPayableError("Order holds have expired.")
+
+
+def complete_paid_order(
+    db: Session,
+    order: Order,
+    *,
+    paid_at: datetime | None = None,
+    payment_reference: str | None = None,
+) -> Order:
+    if order.payment_verification_status != "verified":
+        raise OrderNotPayableError("Order payment is not verified.")
+
+    if order.status != OrderStatus.COMPLETED:
+        order.status = OrderStatus.COMPLETED
+
+    if payment_reference:
+        order.payment_reference = payment_reference
+
+    order.paid_at = _to_aware(paid_at) if paid_at is not None else get_guyana_now()
+    db.flush()
+
+    # TODO: trigger downstream ticket issuance once QR/ticket generation is implemented.
+    return order

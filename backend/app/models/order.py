@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Enum, ForeignKey, Numeric, String
+from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -30,6 +31,12 @@ class Order(TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="GYD")
     payment_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payment_intent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    payment_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payment_reference: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    payment_checkout_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    payment_verification_status: Mapped[str] = mapped_column(String(64), nullable=False, default="not_started")
+    payment_submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["User"] = relationship()
     event: Mapped["Event"] = relationship(back_populates="orders")
