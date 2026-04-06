@@ -95,5 +95,5 @@ def cancel_event(
             actor_user_id=actor_user_id,
             reason=reason or "Event cancelled",
         )
-        notify_event_cancelled(event, actor_user_id=actor_user_id)
+        notify_event_cancelled(db, event, actor_user_id=actor_user_id)
         return event

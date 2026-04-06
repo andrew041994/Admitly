@@ -13,7 +13,13 @@ from app.models.organizer_profile import OrganizerProfile
 from app.models.order_item import OrderItem
 from app.models.ticket_hold import TicketHold
 from app.models.user import User
-from app.services.notifications import notify_order_cancelled, notify_order_refunded
+from app.services.notifications import (
+    NotificationDispatchResult,
+    notify_order_cancelled,
+    notify_order_completed,
+    notify_order_refunded,
+    notify_tickets_issued,
+)
 from app.services.tickets import invalidate_order_tickets, issue_tickets_for_completed_order
 from app.services.ticket_holds import get_guyana_now
 
@@ -226,7 +232,8 @@ def complete_paid_order(
     if order.payment_verification_status != "verified":
         raise OrderNotPayableError("Order payment is not verified.")
 
-    if order.status != OrderStatus.COMPLETED:
+    became_completed = order.status != OrderStatus.COMPLETED
+    if became_completed:
         order.status = OrderStatus.COMPLETED
 
     if payment_reference:
@@ -235,7 +242,10 @@ def complete_paid_order(
     order.paid_at = _to_aware(paid_at) if paid_at is not None else get_guyana_now()
     db.flush()
 
-    issue_tickets_for_completed_order(db, order)
+    tickets = issue_tickets_for_completed_order(db, order)
+    if became_completed:
+        notify_order_completed(db, order)
+        notify_tickets_issued(db, order, tickets)
     return order
 
 
@@ -324,5 +334,44 @@ def refund_completed_order(
             actor_user_id=actor_user_id,
             reason=reason or "Order refunded",
         )
-        notify_order_refunded(order, actor_user_id=actor_user_id)
+        notify_order_refunded(db, order, actor_user_id=actor_user_id)
         return order
+
+
+class OrderResendError(OrderFlowError):
+    """Raised when resend is not allowed."""
+
+
+def resend_order_confirmation(
+    db: Session,
+    *,
+    order_id: int,
+    actor_user_id: int,
+) -> NotificationDispatchResult:
+    order = (
+        db.execute(
+            select(Order)
+            .options(joinedload(Order.tickets), joinedload(Order.event))
+            .where(Order.id == order_id)
+        )
+        .unique()
+        .scalar_one_or_none()
+    )
+    if order is None:
+        raise OrderNotFoundError("Order not found.")
+    if order.user_id != actor_user_id:
+        raise OrderAuthorizationError("Only the order owner can resend confirmation notifications.")
+    if order.status != OrderStatus.COMPLETED:
+        raise OrderResendError("Only completed orders can resend confirmation notifications.")
+
+    completed_result = notify_order_completed(db, order)
+    tickets_result = notify_tickets_issued(db, order, list(order.tickets))
+    return NotificationDispatchResult(
+        success=completed_result.success and tickets_result.success,
+        channel_results={
+            "order_email": completed_result.channel_results.get("email", "skipped"),
+            "order_push": completed_result.channel_results.get("push", "skipped"),
+            "tickets_email": tickets_result.channel_results.get("email", "skipped"),
+            "tickets_push": tickets_result.channel_results.get("push", "skipped"),
+        },
+    )

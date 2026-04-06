@@ -24,6 +24,13 @@ class Settings(BaseSettings):
         default=True, alias="MMG_AGENT_MANUAL_FALLBACK_ENABLED"
     )
 
+    email_notifications_enabled: bool = Field(default=False, alias="EMAIL_NOTIFICATIONS_ENABLED")
+    email_provider: str = Field(default="noop", alias="EMAIL_PROVIDER")
+    email_from_address: str | None = Field(default=None, alias="EMAIL_FROM_ADDRESS")
+
+    push_notifications_enabled: bool = Field(default=False, alias="PUSH_NOTIFICATIONS_ENABLED")
+    push_provider: str = Field(default="noop", alias="PUSH_PROVIDER")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

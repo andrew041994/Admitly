@@ -11,11 +11,7 @@ from app.models.enums import OrderStatus, TicketStatus
 from app.models.order import Order
 from app.models.ticket import Ticket
 from app.models.user import User
-from app.services.ticket_notifications import (
-    notify_ticket_issued,
-    notify_ticket_transferred,
-    notify_ticket_voided,
-)
+from app.services.notifications import notify_ticket_transferred, notify_ticket_voided, notify_tickets_issued
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -112,9 +108,6 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
 
         db.add_all(tickets_to_create)
         db.flush()
-        for ticket in tickets_to_create:
-            notify_ticket_issued(ticket)
-
         return (
             db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
             .scalars()
@@ -165,7 +158,7 @@ def invalidate_order_tickets(
                 ticket.voided_by_user_id = actor_user_id
                 ticket.void_reason = reason.strip() if reason else None
                 ticket.updated_at = now
-                notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+                notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
 
         db.flush()
         return tickets
@@ -193,7 +186,7 @@ def invalidate_event_tickets(
                 ticket.voided_by_user_id = actor_user_id
                 ticket.void_reason = reason.strip() if reason else None
                 ticket.updated_at = now
-                notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+                notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
 
         db.flush()
         return tickets
@@ -269,7 +262,7 @@ def transfer_ticket_to_user(
         ticket.transfer_count += 1
         ticket.updated_at = now
         db.flush()
-        notify_ticket_transferred(ticket, from_user_id=from_user_id, to_user_id=to_user_id)
+        notify_ticket_transferred(db, ticket, from_user_id=from_user_id, to_user_id=to_user_id)
         return ticket
 
 
@@ -301,7 +294,7 @@ def void_ticket(
         ticket.void_reason = reason.strip() if reason else None
         ticket.updated_at = now
         db.flush()
-        notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+        notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
         return ticket
 
 
@@ -371,3 +364,18 @@ def check_in_ticket_for_event(
         ticket.updated_at = now
         db.flush()
         return ticket
+
+
+def resend_ticket_notification(
+    db: Session,
+    *,
+    ticket_id: int,
+    actor_user_id: int,
+):
+    ticket = db.execute(select(Ticket).where(Ticket.id == ticket_id)).scalar_one_or_none()
+    if ticket is None:
+        raise TicketNotFoundError("Ticket not found.")
+    if ticket.owner_user_id != actor_user_id:
+        raise TicketAuthorizationError("Only the current ticket owner can resend ticket notifications.")
+
+    return notify_tickets_issued(db, ticket.order, [ticket])

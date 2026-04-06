@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from app.models.event_staff import EventStaff
     from app.models.organizer_profile import OrganizerProfile
     from app.models.ticket import Ticket
+    from app.models.push_token import PushToken
     from app.models.ticket_hold import TicketHold
 
 
@@ -35,6 +36,7 @@ class User(TimestampMixin, Base):
     )
 
     ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="user")
+    push_tokens: Mapped[list["PushToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="user", foreign_keys="Ticket.user_id")
     purchased_tickets: Mapped[list["Ticket"]] = relationship(
         back_populates="purchaser", foreign_keys="Ticket.purchaser_user_id"

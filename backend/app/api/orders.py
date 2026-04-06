@@ -10,6 +10,7 @@ from app.schemas.mmg import (
     SubmitMMGAgentPaymentRequest,
     SubmitMMGAgentPaymentResponse,
 )
+from app.schemas.notification import NotificationDispatchResponse
 from app.schemas.order import (
     CreatePendingOrderFromHoldsRequest,
     OrderCancelRequest,
@@ -33,6 +34,8 @@ from app.services.orders import (
     create_pending_order_from_holds,
     get_order_for_user,
     refund_completed_order,
+    resend_order_confirmation,
+    OrderResendError,
 )
 from app.services.payments import (
     MMGProviderError,
@@ -260,3 +263,21 @@ def submit_agent_payment(
         payment_verification_status=snapshot.payment_verification_status,
         message=snapshot.message or "Payment submission accepted.",
     )
+
+
+@router.post("/{order_id}/resend-confirmation", response_model=NotificationDispatchResponse)
+def resend_order_confirmation_notification(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> NotificationDispatchResponse:
+    try:
+        result = resend_order_confirmation(db, order_id=order_id, actor_user_id=user_id)
+    except OrderNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except OrderAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except OrderResendError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return NotificationDispatchResponse(success=result.success, channel_results=result.channel_results)

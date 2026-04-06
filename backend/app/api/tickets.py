@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
+from app.schemas.notification import NotificationDispatchResponse
 from app.schemas.ticket import (
     TicketCheckInRequest,
     TicketCheckInResponse,
@@ -22,6 +23,7 @@ from app.services.tickets import (
     list_tickets_for_user,
     transfer_ticket_to_user,
     void_ticket,
+    resend_ticket_notification,
 )
 
 router = APIRouter(tags=["tickets"])
@@ -159,3 +161,19 @@ def check_in_event_ticket(
         checked_in_by_user_id=ticket.checked_in_by_user_id,
         message="Ticket checked in successfully.",
     )
+
+
+@router.post("/tickets/{ticket_id}/resend", response_model=NotificationDispatchResponse)
+def resend_ticket(
+    ticket_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> NotificationDispatchResponse:
+    try:
+        result = resend_ticket_notification(db, ticket_id=ticket_id, actor_user_id=user_id)
+    except TicketAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except TicketNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return NotificationDispatchResponse(success=result.success, channel_results=result.channel_results)
