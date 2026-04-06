@@ -47,4 +47,4 @@ class TicketTier(TimestampMixin, Base):
 
     event = relationship("Event", back_populates="ticket_tiers")
     holds: Mapped[list["TicketHold"]] = relationship(back_populates="ticket_tier")
-    order_items: Mapped[list["OrderItem"]] = relationship()
+    order_items: Mapped[list["OrderItem"]] = relationship(back_populates="ticket_tier")

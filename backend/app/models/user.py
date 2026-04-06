@@ -33,4 +33,4 @@ class User(TimestampMixin, Base):
         back_populates="invited_by_user", foreign_keys="EventStaff.invited_by_user_id"
     )
 
-    ticket_holds: Mapped[list["TicketHold"]] = relationship()
+    ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="user")

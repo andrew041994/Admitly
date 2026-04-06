@@ -31,7 +31,7 @@ class Order(TimestampMixin, Base):
     payment_intent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     user: Mapped["User"] = relationship()
-    event: Mapped["Event"] = relationship()
+    event: Mapped["Event"] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
     )

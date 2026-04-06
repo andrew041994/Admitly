@@ -32,4 +32,4 @@ class OrderItem(Base):
     )
 
     order: Mapped["Order"] = relationship(back_populates="items")
-    ticket_tier: Mapped["TicketTier"] = relationship()
+    ticket_tier: Mapped["TicketTier"] = relationship(back_populates="order_items")

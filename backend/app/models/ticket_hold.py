@@ -31,6 +31,6 @@ class TicketHold(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    event: Mapped["Event"] = relationship()
+    event: Mapped["Event"] = relationship(back_populates="ticket_holds")
     ticket_tier: Mapped["TicketTier"] = relationship(back_populates="holds")
-    user: Mapped["User | None"] = relationship()
+    user: Mapped["User | None"] = relationship(back_populates="ticket_holds")
