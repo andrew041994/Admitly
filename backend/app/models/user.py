@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from app.models.ticket import Ticket
     from app.models.push_token import PushToken
     from app.models.ticket_hold import TicketHold
+    from app.models.ticket_transfer_invite import TicketTransferInvite
 
 
 class User(TimestampMixin, Base):
@@ -49,4 +50,16 @@ class User(TimestampMixin, Base):
     )
     voided_tickets: Mapped[list["Ticket"]] = relationship(
         back_populates="voided_by", foreign_keys="Ticket.voided_by_user_id"
+    )
+    sent_transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
+        back_populates="sender", foreign_keys="TicketTransferInvite.sender_user_id"
+    )
+    received_transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
+        back_populates="recipient", foreign_keys="TicketTransferInvite.recipient_user_id"
+    )
+    accepted_transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
+        back_populates="accepted_by", foreign_keys="TicketTransferInvite.accepted_by_user_id"
+    )
+    revoked_transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
+        back_populates="revoked_by", foreign_keys="TicketTransferInvite.revoked_by_user_id"
     )

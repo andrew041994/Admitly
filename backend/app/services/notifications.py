@@ -11,6 +11,7 @@ from app.models.event import Event
 from app.models.order import Order
 from app.models.push_token import PushToken
 from app.models.ticket import Ticket
+from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -224,6 +225,84 @@ def notify_ticket_voided(db: Session, ticket: Ticket, *, actor_user_id: int) -> 
             body=f"Ticket #{ticket.id} is no longer valid.",
             data={"type": "ticket_voided", "ticket_id": str(ticket.id), "event_id": str(ticket.event_id)},
         ),
+    )
+
+
+def notify_ticket_transfer_invite_created(db: Session, invite: TicketTransferInvite) -> NotificationDispatchResult:
+    recipient_email = invite.recipient_email
+    if not recipient_email and invite.recipient_user_id:
+        recipient_email = _user_email(db, invite.recipient_user_id)
+    return _dispatch(
+        db,
+        email=EmailMessage(
+            to_email=recipient_email,
+            subject=f"Ticket transfer invite for ticket #{invite.ticket_id}",
+            body=f"You have a pending invite for ticket #{invite.ticket_id}.",
+        ) if recipient_email else None,
+        push=PushMessage(
+            user_id=invite.recipient_user_id,
+            title="Ticket transfer invite",
+            body=f"You have been invited to claim ticket #{invite.ticket_id}.",
+            data={"type": "ticket_transfer_invite_created", "ticket_id": str(invite.ticket_id), "invite_token": invite.invite_token},
+        ) if invite.recipient_user_id else None,
+    )
+
+
+def notify_ticket_transfer_invite_accepted(
+    db: Session,
+    invite: TicketTransferInvite,
+    ticket: Ticket,
+) -> dict[str, NotificationDispatchResult]:
+    sender_email = _user_email(db, invite.sender_user_id)
+    recipient_email = _user_email(db, ticket.owner_user_id)
+    sender = _dispatch(
+        db,
+        email=EmailMessage(
+            to_email=sender_email,
+            subject=f"Transfer invite accepted for ticket #{ticket.id}",
+            body=f"Your transfer invite for ticket #{ticket.id} was accepted.",
+        ) if sender_email else None,
+        push=PushMessage(
+            user_id=invite.sender_user_id,
+            title="Transfer accepted",
+            body=f"Ticket #{ticket.id} transfer completed.",
+            data={"type": "ticket_transfer_invite_accepted", "ticket_id": str(ticket.id), "invite_id": str(invite.id)},
+        ),
+    )
+    recipient = _dispatch(
+        db,
+        email=EmailMessage(
+            to_email=recipient_email,
+            subject=f"You now own ticket #{ticket.id}",
+            body=f"Ticket #{ticket.id} transfer is complete.",
+        ) if recipient_email else None,
+        push=PushMessage(
+            user_id=ticket.owner_user_id,
+            title="Ticket received",
+            body=f"You now own ticket #{ticket.id}.",
+            data={"type": "ticket_transfer_invite_claimed", "ticket_id": str(ticket.id), "invite_id": str(invite.id)},
+        ),
+    )
+    return {"sender": sender, "recipient": recipient}
+
+
+def notify_ticket_transfer_invite_revoked(db: Session, invite: TicketTransferInvite) -> NotificationDispatchResult:
+    recipient_email = invite.recipient_email
+    if not recipient_email and invite.recipient_user_id:
+        recipient_email = _user_email(db, invite.recipient_user_id)
+    return _dispatch(
+        db,
+        email=EmailMessage(
+            to_email=recipient_email,
+            subject=f"Transfer invite revoked for ticket #{invite.ticket_id}",
+            body=f"Ticket transfer invite for ticket #{invite.ticket_id} has been revoked.",
+        ) if recipient_email else None,
+        push=PushMessage(
+            user_id=invite.recipient_user_id,
+            title="Transfer invite revoked",
+            body=f"Invite for ticket #{invite.ticket_id} was revoked.",
+            data={"type": "ticket_transfer_invite_revoked", "ticket_id": str(invite.ticket_id), "invite_id": str(invite.id)},
+        ) if invite.recipient_user_id else None,
     )
 
 

@@ -37,3 +37,10 @@ class TicketStatus(str, Enum):
     ISSUED = "issued"
     CHECKED_IN = "checked_in"
     VOIDED = "voided"
+
+
+class TransferInviteStatus(str, Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REVOKED = "revoked"
+    EXPIRED = "expired"

@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import DateTime, Enum, ForeignKey, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+from app.models.enums import TransferInviteStatus
+from app.models.mixins import TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.ticket import Ticket
+    from app.models.user import User
+
+
+class TicketTransferInvite(TimestampMixin, Base):
+    __tablename__ = "ticket_transfer_invites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True)
+    sender_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    recipient_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    recipient_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    invite_token: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    status: Mapped[TransferInviteStatus] = mapped_column(
+        Enum(TransferInviteStatus, name="transfer_invite_status"),
+        nullable=False,
+        default=TransferInviteStatus.PENDING,
+        index=True,
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    revoked_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    ticket: Mapped["Ticket"] = relationship(back_populates="transfer_invites")
+    sender: Mapped["User"] = relationship(back_populates="sent_transfer_invites", foreign_keys=[sender_user_id])
+    recipient: Mapped["User | None"] = relationship(
+        back_populates="received_transfer_invites", foreign_keys=[recipient_user_id]
+    )
+    accepted_by: Mapped["User | None"] = relationship(
+        back_populates="accepted_transfer_invites", foreign_keys=[accepted_by_user_id]
+    )
+    revoked_by: Mapped["User | None"] = relationship(
+        back_populates="revoked_transfer_invites", foreign_keys=[revoked_by_user_id]
+    )

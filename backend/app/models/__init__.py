@@ -6,6 +6,7 @@ from app.models.organizer_profile import OrganizerProfile
 from app.models.push_token import PushToken
 from app.models.ticket import Ticket
 from app.models.ticket_hold import TicketHold
+from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.ticket_tier import TicketTier
 from app.models.user import User
 from app.models.venue import Venue
@@ -22,4 +23,5 @@ __all__ = [
     "PushToken",
     "Ticket",
     "TicketHold",
+    "TicketTransferInvite",
 ]
