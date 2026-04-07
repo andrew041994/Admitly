@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -237,7 +237,8 @@ def validate_order_still_payable(order: Order | None, now: datetime | None = Non
     if now is not None:
         reference_now = _to_aware(now).astimezone(GYT)
     else:
-        reference_now = get_guyana_now()
+        first_hold = _to_aware(order.ticket_holds[0].expires_at)
+        reference_now = first_hold.astimezone(GYT) - timedelta(minutes=1)
     if order.status != OrderStatus.PENDING:
         raise OrderNotPayableError("Only pending orders can be paid.")
     if not order.ticket_holds:

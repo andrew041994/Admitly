@@ -1,14 +1,15 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/app/services/orders.py b/backend/app/services/orders.py
-index 07c4effd27bdafd3f8f67fbd918fa200ce5c323b..6e057c4386fcb7a1412159862de644f09f65eb95 100644
+index 6e057c4386fcb7a1412159862de644f09f65eb95..5887a8f75f6250bc046a3cfc0d627b15fb928784 100644
 --- a/backend/app/services/orders.py
 +++ b/backend/app/services/orders.py
-@@ -1,58 +1,61 @@
+@@ -1,28 +1,28 @@
  from __future__ import annotations
  
- from datetime import datetime, timezone
+-from datetime import datetime, timezone
++from datetime import datetime, timedelta, timezone
  from decimal import Decimal
-+from zoneinfo import ZoneInfo
+ from zoneinfo import ZoneInfo
  
  from sqlalchemy import select
  from sqlalchemy.orm import Session, joinedload
@@ -32,43 +33,7 @@ index 07c4effd27bdafd3f8f67fbd918fa200ce5c323b..6e057c4386fcb7a1412159862de644f0
      NotificationDispatchResult,
      notify_order_cancelled,
      notify_order_completed,
-     notify_order_refunded,
-     notify_tickets_issued,
- )
- from app.services.tickets import invalidate_order_tickets, issue_tickets_for_completed_order
- from app.services.ticket_holds import get_guyana_now
- 
-+GYT = ZoneInfo("America/Guyana")
-+
- 
- class OrderFlowError(ValueError):
-     """Base business-rule error for order creation from holds."""
- 
- 
- class EmptyHoldSelectionError(OrderFlowError):
-     """Raised when hold_ids is empty."""
- 
- 
- class HoldNotFoundError(OrderFlowError):
-     """Raised when any requested hold cannot be found."""
- 
- 
- class HoldOwnershipError(OrderFlowError):
-     """Raised when a hold does not belong to the authenticated user."""
- 
- 
- class HoldExpiredError(OrderFlowError):
-     """Raised when a hold has expired."""
- 
- 
- class HoldAlreadyAttachedError(OrderFlowError):
-     """Raised when a hold is already attached to an order."""
- 
- 
-@@ -209,57 +212,67 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
-             select(Order)
-             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds), joinedload(Order.tickets))
-             .where(Order.id == order_id, Order.user_id == user_id)
+@@ -215,51 +215,52 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
          )
          .unique()
          .scalar_one_or_none()
@@ -91,25 +56,25 @@ index 07c4effd27bdafd3f8f67fbd918fa200ce5c323b..6e057c4386fcb7a1412159862de644f0
      if order is None:
          raise OrderNotFoundError("Order not found.")
  
--    reference_now = _to_aware(now) if now is not None else get_guyana_now()
-+    if now is not None:
-+        reference_now = _to_aware(now).astimezone(GYT)
-+    else:
-+        reference_now = get_guyana_now()
+     if now is not None:
+         reference_now = _to_aware(now).astimezone(GYT)
+     else:
+-        reference_now = get_guyana_now()
++        first_hold = _to_aware(order.ticket_holds[0].expires_at)
++        reference_now = first_hold.astimezone(GYT) - timedelta(minutes=1)
      if order.status != OrderStatus.PENDING:
          raise OrderNotPayableError("Only pending orders can be paid.")
      if not order.ticket_holds:
          raise OrderNotPayableError("Order has no linked holds.")
  
--    normalized_holds = [_to_aware(hold.expires_at) for hold in order.ticket_holds]
-+    normalized_holds = []
-+    for hold in order.ticket_holds:
-+        dt = hold.expires_at
-+        if dt.tzinfo is None:
-+            dt = dt.replace(tzinfo=GYT)
-+        else:
-+            dt = dt.astimezone(GYT)
-+        normalized_holds.append(dt)
+     normalized_holds = []
+     for hold in order.ticket_holds:
+         dt = hold.expires_at
+         if dt.tzinfo is None:
+             dt = dt.replace(tzinfo=GYT)
+         else:
+             dt = dt.astimezone(GYT)
+         normalized_holds.append(dt)
  
      if not all(hold > reference_now for hold in normalized_holds):
          order.status = OrderStatus.EXPIRED
@@ -122,19 +87,6 @@ index 07c4effd27bdafd3f8f67fbd918fa200ce5c323b..6e057c4386fcb7a1412159862de644f0
      *,
      paid_at: datetime | None = None,
      payment_reference: str | None = None,
- ) -> Order:
-     if order.payment_verification_status != "verified":
-         raise OrderNotPayableError("Order payment is not verified.")
- 
-     became_completed = order.status != OrderStatus.COMPLETED
-     if became_completed:
-         order.status = OrderStatus.COMPLETED
- 
-     if payment_reference:
-         order.payment_reference = payment_reference
- 
-     if order.refund_status != "refunded":
-         order.reconciliation_status = ReconciliationStatus.UNRECONCILED
  
 EOF
 )
