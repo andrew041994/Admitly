@@ -1,35 +1,42 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_reminders_service.py b/backend/tests/test_reminders_service.py
+diff --git a/backend/tests/test_finance_reporting_service.py b/backend/tests/test_finance_reporting_service.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..626d1af0ef815e1d3cc7fbbcb1a338b5966825ca
+index 0000000000000000000000000000000000000000..1dcde314ae301b9783b136d10ea7689e50884238
 --- /dev/null
-+++ b/backend/tests/test_reminders_service.py
-@@ -0,0 +1,260 @@
-+from __future__ import annotations
-+
++++ b/backend/tests/test_finance_reporting_service.py
+@@ -0,0 +1,265 @@
 +from datetime import datetime, timedelta, timezone
 +from decimal import Decimal
++import os
 +
 +import pytest
-+from sqlalchemy import create_engine, select
++from sqlalchemy import create_engine
 +from sqlalchemy.orm import Session, sessionmaker
 +
++os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
++
 +from app.db.base import Base
-+from app.models import Event, EventReminderLog, OrganizerProfile, Order, OrderItem, Ticket, TicketTier, User, Venue
++from app.models import Event, OrganizerProfile, Order, User, Venue
 +from app.models.enums import (
 +    EventApprovalStatus,
 +    EventStatus,
 +    EventVisibility,
 +    OrderStatus,
-+    ReminderType,
-+    TicketStatus,
++    PayoutStatus,
++    ReconciliationStatus,
 +)
-+from app.services.reminders import (
-+    dispatch_due_event_reminders,
-+    get_eligible_event_reminder_recipients,
-+    should_send_reminder_for_event,
++from app.services.finance_reporting import (
++    FinanceReportingAuthorizationError,
++    get_event_finance_summary,
++    get_order_payout_eligible_amount,
++    get_organizer_payout_summary,
++    is_order_financially_eligible_for_payout,
++    list_event_finance_orders,
++    mark_order_payout_status,
++    mark_order_reconciled,
++    validate_organizer_finance_access,
 +)
-+from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
++from app.services.orders import complete_paid_order
 +
 +
 +@pytest.fixture
@@ -41,230 +48,228 @@ index 0000000000000000000000000000000000000000..626d1af0ef815e1d3cc7fbbcb1a338b5
 +        yield session
 +
 +
-+def _seed_order(db: Session, *, suffix: str, event_start_at: datetime) -> tuple[Order, User, Event]:
-+    buyer = User(email=f"buyer-{suffix}@example.com", full_name="Buyer")
-+    organizer_user = User(email=f"org-{suffix}@example.com", full_name="Organizer")
-+    db.add_all([buyer, organizer_user])
++def _seed_finance_data(db: Session):
++    now = datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc)
++
++    organizer_user = User(email="organizer-finance@example.com", full_name="Organizer")
++    unrelated_user = User(email="unrelated-finance@example.com", full_name="Unrelated")
++    admin_user = User(email="admin-finance@example.com", full_name="Admin", is_admin=True)
++    buyer = User(email="buyer-finance@example.com", full_name="Buyer")
++    db.add_all([organizer_user, unrelated_user, admin_user, buyer])
 +    db.flush()
 +
-+    organizer = OrganizerProfile(user_id=organizer_user.id, business_name="Org", display_name="Org")
++    organizer = OrganizerProfile(user_id=organizer_user.id, business_name="Biz", display_name="Biz")
 +    db.add(organizer)
 +    db.flush()
 +
-+    venue = Venue(organizer_id=organizer.id, name="Venue")
++    venue = Venue(organizer_id=organizer.id, name="Main Venue")
 +    db.add(venue)
 +    db.flush()
 +
 +    event = Event(
 +        organizer_id=organizer.id,
 +        venue_id=venue.id,
-+        title=f"Reminder Event {suffix}",
-+        slug=f"reminder-event-{suffix}",
-+        start_at=event_start_at,
-+        end_at=event_start_at + timedelta(hours=2),
++        title="Finance Event",
++        slug="finance-event",
++        start_at=now + timedelta(days=7),
++        end_at=now + timedelta(days=7, hours=3),
 +        status=EventStatus.PUBLISHED,
 +        visibility=EventVisibility.PUBLIC,
 +        approval_status=EventApprovalStatus.APPROVED,
 +        timezone="America/Guyana",
 +        is_location_pinned=False,
 +    )
-+    db.add(event)
-+    db.flush()
-+
-+    tier = TicketTier(
-+        event_id=event.id,
-+        name="General",
-+        tier_code=f"GEN-{suffix}",
-+        price_amount=Decimal("125.00"),
-+        currency="GYD",
-+        quantity_total=100,
-+        quantity_sold=0,
-+        quantity_held=0,
-+        min_per_order=1,
-+        max_per_order=10,
-+        is_active=True,
-+        sort_order=0,
++    other_event = Event(
++        organizer_id=organizer.id,
++        venue_id=venue.id,
++        title="Finance Event 2",
++        slug="finance-event-2",
++        start_at=now + timedelta(days=8),
++        end_at=now + timedelta(days=8, hours=3),
++        status=EventStatus.PUBLISHED,
++        visibility=EventVisibility.PUBLIC,
++        approval_status=EventApprovalStatus.APPROVED,
++        timezone="America/Guyana",
++        is_location_pinned=False,
 +    )
-+    db.add(tier)
++    db.add_all([event, other_event])
 +    db.flush()
 +
-+    order = Order(
++    completed_eligible = Order(
 +        user_id=buyer.id,
 +        event_id=event.id,
 +        status=OrderStatus.COMPLETED,
-+        total_amount=Decimal("250.00"),
++        total_amount=Decimal("100.00"),
 +        currency="GYD",
 +        payment_verification_status="verified",
++        reconciliation_status=ReconciliationStatus.UNRECONCILED,
++        payout_status=PayoutStatus.ELIGIBLE,
 +    )
-+    db.add(order)
-+    db.flush()
-+
-+    db.add(OrderItem(order_id=order.id, ticket_tier_id=tier.id, quantity=2, unit_price=Decimal("125.00")))
++    completed_reconciled = Order(
++        user_id=buyer.id,
++        event_id=event.id,
++        status=OrderStatus.COMPLETED,
++        total_amount=Decimal("50.00"),
++        currency="GYD",
++        payment_verification_status="verified",
++        reconciliation_status=ReconciliationStatus.RECONCILED,
++        payout_status=PayoutStatus.ELIGIBLE,
++    )
++    refunded_order = Order(
++        user_id=buyer.id,
++        event_id=event.id,
++        status=OrderStatus.COMPLETED,
++        total_amount=Decimal("30.00"),
++        currency="GYD",
++        payment_verification_status="verified",
++        refund_status="refunded",
++        refunded_at=now,
++        reconciliation_status=ReconciliationStatus.UNRECONCILED,
++        payout_status=PayoutStatus.ELIGIBLE,
++    )
++    pending_order = Order(
++        user_id=buyer.id,
++        event_id=event.id,
++        status=OrderStatus.PENDING,
++        total_amount=Decimal("70.00"),
++        currency="GYD",
++        payment_verification_status="pending",
++    )
++    cancelled_order = Order(
++        user_id=buyer.id,
++        event_id=event.id,
++        status=OrderStatus.CANCELLED,
++        total_amount=Decimal("90.00"),
++        currency="GYD",
++        payment_verification_status="not_started",
++    )
++    other_event_order = Order(
++        user_id=buyer.id,
++        event_id=other_event.id,
++        status=OrderStatus.COMPLETED,
++        total_amount=Decimal("40.00"),
++        currency="GYD",
++        payment_verification_status="verified",
++        reconciliation_status=ReconciliationStatus.UNRECONCILED,
++        payout_status=PayoutStatus.PAID,
++    )
++    db.add_all(
++        [completed_eligible, completed_reconciled, refunded_order, pending_order, cancelled_order, other_event_order]
++    )
 +    db.commit()
-+    db.refresh(order)
-+    db.refresh(buyer)
-+    db.refresh(event)
-+    return order, buyer, event
++
++    return {
++        "organizer_user": organizer_user,
++        "unrelated_user": unrelated_user,
++        "admin_user": admin_user,
++        "event": event,
++        "other_event": other_event,
++        "completed_eligible": completed_eligible,
++        "pending_order": pending_order,
++        "cancelled_order": cancelled_order,
++        "refunded_order": refunded_order,
++    }
 +
 +
-+def test_should_send_window_logic() -> None:
-+    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-+    event_24 = Event(start_at=now + timedelta(hours=24), end_at=now + timedelta(hours=25), organizer_id=1, venue_id=None,
-+                     title="E1", slug="e1", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
-+                     approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
-+    event_3 = Event(start_at=now + timedelta(hours=3), end_at=now + timedelta(hours=4), organizer_id=1, venue_id=None,
-+                    title="E2", slug="e2", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
-+                    approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
-+    event_30 = Event(start_at=now + timedelta(minutes=30), end_at=now + timedelta(hours=1), organizer_id=1, venue_id=None,
-+                     title="E3", slug="e3", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
-+                     approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
-+    outside = Event(start_at=now + timedelta(hours=10), end_at=now + timedelta(hours=11), organizer_id=1, venue_id=None,
-+                    title="E4", slug="e4", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
-+                    approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
++def test_payout_eligibility_helper_rules(db_session: Session) -> None:
++    data = _seed_finance_data(db_session)
++    completed = data["completed_eligible"]
++    pending = data["pending_order"]
++    cancelled = data["cancelled_order"]
++    refunded = data["refunded_order"]
 +
-+    assert should_send_reminder_for_event(event_24, ReminderType.HOURS_24_BEFORE, now=now)
-+    assert should_send_reminder_for_event(event_3, ReminderType.HOURS_3_BEFORE, now=now)
-+    assert should_send_reminder_for_event(event_30, ReminderType.MINUTES_30_BEFORE, now=now)
-+    assert not should_send_reminder_for_event(outside, ReminderType.HOURS_24_BEFORE, now=now)
++    assert is_order_financially_eligible_for_payout(completed) is True
++    assert is_order_financially_eligible_for_payout(pending) is False
++    assert is_order_financially_eligible_for_payout(cancelled) is False
++    assert get_order_payout_eligible_amount(refunded) == Decimal("0.00")
 +
 +
-+def test_recipients_use_current_owner_after_transfer(db_session: Session) -> None:
-+    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-+    order, buyer, event = _seed_order(db_session, suffix="transfer-owner", event_start_at=now + timedelta(hours=24, minutes=5))
-+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++def test_event_finance_summary_rollups(db_session: Session) -> None:
++    data = _seed_finance_data(db_session)
++    summary = get_event_finance_summary(db_session, event_id=data["event"].id)
 +
-+    recipient = User(email="recipient-reminder@example.com", full_name="Recipient")
-+    db_session.add(recipient)
-+    db_session.commit()
-+    db_session.refresh(recipient)
++    assert summary.gross_sales_amount == Decimal("180.00")
++    assert summary.refunded_amount == Decimal("30.00")
++    assert summary.net_sales_amount == Decimal("150.00")
++    assert summary.eligible_payout_amount == Decimal("150.00")
++    assert summary.reconciled_amount == Decimal("50.00")
++    assert summary.unreconciled_amount == Decimal("130.00")
++    assert summary.completed_order_count == 3
 +
-+    transfer_ticket_to_user(db_session, ticket_id=ticket.id, from_user_id=buyer.id, to_user_id=recipient.id)
 +
-+    recipients = get_eligible_event_reminder_recipients(
-+        db_session,
-+        event_id=event.id,
-+        reminder_type=ReminderType.HOURS_24_BEFORE,
-+        now=now,
++def test_finance_order_list_filters_to_event_and_statuses(db_session: Session) -> None:
++    data = _seed_finance_data(db_session)
++    rows = list_event_finance_orders(db_session, event_id=data["event"].id)
++    assert {row.order_id for row in rows}.isdisjoint(
++        {order.order_id for order in list_event_finance_orders(db_session, event_id=data["other_event"].id)}
 +    )
-+    user_ids = {user.id for user, _ in recipients}
-+    assert recipient.id in user_ids
 +
-+
-+def test_recipient_eligibility_and_grouping(db_session: Session) -> None:
-+    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-+    order, buyer, event = _seed_order(db_session, suffix="eligible", event_start_at=now + timedelta(hours=3, minutes=5))
-+    tickets = issue_tickets_for_completed_order(db_session, order)
-+
-+    tickets[0].status = TicketStatus.CHECKED_IN
-+    tickets[0].checked_in_at = now
-+    db_session.flush()
-+
-+    recipients = get_eligible_event_reminder_recipients(
++    filtered = list_event_finance_orders(
 +        db_session,
-+        event_id=event.id,
-+        reminder_type=ReminderType.HOURS_3_BEFORE,
-+        now=now,
++        event_id=data["event"].id,
++        reconciliation_status=ReconciliationStatus.RECONCILED,
 +    )
-+    assert recipients == [(buyer, 1)]
-+
-+    tickets[1].status = TicketStatus.VOIDED
-+    db_session.flush()
-+    recipients = get_eligible_event_reminder_recipients(
-+        db_session,
-+        event_id=event.id,
-+        reminder_type=ReminderType.HOURS_3_BEFORE,
-+        now=now,
-+    )
-+    assert recipients == []
-+
-+    event.status = EventStatus.CANCELLED
-+    db_session.flush()
-+    recipients = get_eligible_event_reminder_recipients(
-+        db_session,
-+        event_id=event.id,
-+        reminder_type=ReminderType.HOURS_3_BEFORE,
-+        now=now,
-+    )
-+    assert recipients == []
++    assert len(filtered) == 1
++    assert filtered[0].reconciliation_status == "reconciled"
 +
 +
-+def test_dispatch_dedup_and_repeat_runs(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-+    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-+    order, buyer, event = _seed_order(db_session, suffix="dedup", event_start_at=now + timedelta(minutes=35))
-+    issue_tickets_for_completed_order(db_session, order)
++def test_organizer_payout_summary_and_access(db_session: Session) -> None:
++    data = _seed_finance_data(db_session)
++    organizer_id = data["organizer_user"].id
 +
-+    calls: list[tuple[int, int, str]] = []
++    validate_organizer_finance_access(db_session, actor_user_id=organizer_id, organizer_user_id=organizer_id)
++    summary = get_organizer_payout_summary(db_session, organizer_user_id=organizer_id)
++    assert summary.total_gross_sales == Decimal("220.00")
++    assert summary.total_refunded == Decimal("30.00")
++    assert summary.total_payout_eligible == Decimal("150.00")
 +
-+    def _fake_notify(db, *, event, user, reminder_type, ticket_count):
-+        calls.append((event.id, user.id, reminder_type.value))
-+        from app.services.notifications import NotificationDispatchResult
-+
-+        return NotificationDispatchResult(success=True, channel_results={"email": "sent_mock", "push": "sent_mock:1"})
-+
-+    monkeypatch.setattr("app.services.reminders.notify_event_reminder", _fake_notify)
-+
-+    summary1 = dispatch_due_event_reminders(db_session, now=now)
-+    db_session.commit()
-+    summary2 = dispatch_due_event_reminders(db_session, now=now)
-+
-+    assert summary1.reminders_sent == 1
-+    assert summary2.reminders_sent == 0
-+    assert len(calls) == 1
-+
-+    logs = db_session.execute(
-+        select(EventReminderLog).where(
-+            EventReminderLog.event_id == event.id,
-+            EventReminderLog.user_id == buyer.id,
-+            EventReminderLog.reminder_type == ReminderType.MINUTES_30_BEFORE,
++    with pytest.raises(FinanceReportingAuthorizationError):
++        validate_organizer_finance_access(
++            db_session,
++            actor_user_id=data["unrelated_user"].id,
++            organizer_user_id=organizer_id,
 +        )
-+    ).scalars().all()
-+    assert len(logs) == 1
 +
 +
-+def test_dispatch_uses_email_and_push_paths(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-+    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-+    order, _, _ = _seed_order(db_session, suffix="channels", event_start_at=now + timedelta(hours=24, minutes=1))
-+    issue_tickets_for_completed_order(db_session, order)
++def test_internal_reconciliation_actions_require_admin(db_session: Session) -> None:
++    data = _seed_finance_data(db_session)
++    order_id = data["completed_eligible"].id
 +
-+    monkeypatch.setattr("app.services.notifications.settings.email_notifications_enabled", True)
-+    monkeypatch.setattr("app.services.notifications.settings.email_provider", "mock")
-+    monkeypatch.setattr("app.services.notifications.settings.push_notifications_enabled", True)
-+    monkeypatch.setattr("app.services.notifications.settings.push_provider", "mock")
++    mark_order_reconciled(
++        db_session,
++        order_id=order_id,
++        actor_user_id=data["admin_user"].id,
++        note="MMG statement matched",
++    )
++    updated = mark_order_payout_status(
++        db_session,
++        order_id=order_id,
++        actor_user_id=data["admin_user"].id,
++        payout_status=PayoutStatus.INCLUDED,
++        note="Batch Apr-07",
++    )
++    assert updated.payout_status == PayoutStatus.INCLUDED
++    assert updated.payout_included_at is not None
 +
-+    sent = {"email": 0, "push": 0}
-+
-+    def _email(message):
-+        sent["email"] += 1
-+        return "sent_mock"
-+
-+    def _push(db, message):
-+        sent["push"] += 1
-+        return "sent_mock:1"
-+
-+    monkeypatch.setattr("app.services.notifications._send_email", _email)
-+    monkeypatch.setattr("app.services.notifications._send_push", _push)
-+
-+    dispatch_due_event_reminders(db_session, now=now)
-+
-+    assert sent["email"] == 1
-+    assert sent["push"] == 1
++    with pytest.raises(FinanceReportingAuthorizationError):
++        mark_order_reconciled(
++            db_session,
++            order_id=order_id,
++            actor_user_id=data["organizer_user"].id,
++        )
 +
 +
-+def test_reminder_dispatch_does_not_mutate_ticket_state(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-+    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-+    order, _, _ = _seed_order(db_session, suffix="no-mutate", event_start_at=now + timedelta(hours=3, minutes=1))
-+    tickets = issue_tickets_for_completed_order(db_session, order)
-+    before = [(t.id, t.owner_user_id, t.status) for t in tickets]
++def test_completed_payment_initializes_finance_defaults(db_session: Session) -> None:
++    data = _seed_finance_data(db_session)
++    order = data["pending_order"]
++    order.status = OrderStatus.PENDING
++    order.payment_verification_status = "verified"
 +
-+    monkeypatch.setattr("app.services.notifications.settings.email_notifications_enabled", False)
-+    monkeypatch.setattr("app.services.notifications.settings.push_notifications_enabled", False)
++    complete_paid_order(db_session, order)
 +
-+    dispatch_due_event_reminders(db_session, now=now)
-+
-+    for ticket_id, owner_id, status in before:
-+        ticket = db_session.execute(select(Ticket).where(Ticket.id == ticket_id)).scalar_one()
-+        assert ticket.owner_user_id == owner_id
-+        assert ticket.status == status
++    assert order.status == OrderStatus.COMPLETED
++    assert order.reconciliation_status == ReconciliationStatus.UNRECONCILED
++    assert order.payout_status == PayoutStatus.ELIGIBLE
  
 EOF
 )

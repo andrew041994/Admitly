@@ -6,7 +6,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.enums import OrderStatus, TicketStatus
+from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
 from app.models.event import Event
 from app.models.order import Order
 from app.models.organizer_profile import OrganizerProfile
@@ -243,6 +243,10 @@ def complete_paid_order(
 
     if payment_reference:
         order.payment_reference = payment_reference
+
+    if order.refund_status != "refunded":
+        order.reconciliation_status = ReconciliationStatus.UNRECONCILED
+        order.payout_status = PayoutStatus.ELIGIBLE
 
     order.paid_at = _to_aware(paid_at) if paid_at is not None else get_guyana_now()
     db.flush()

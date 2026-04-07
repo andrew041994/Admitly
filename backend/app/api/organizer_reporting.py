@@ -5,7 +5,12 @@ from sqlalchemy.orm import Session
 
 from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
-from app.models.enums import OrderStatus, TicketStatus
+from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
+from app.schemas.finance import (
+    EventFinanceOrderRowResponse,
+    EventFinanceSummaryResponse,
+    OrganizerPayoutSummaryResponse,
+)
 from app.schemas.reporting import (
     OrganizerCheckInRowResponse,
     OrganizerCheckInSummaryResponse,
@@ -13,6 +18,12 @@ from app.schemas.reporting import (
     OrganizerOrderRowResponse,
     OrganizerTicketRowResponse,
     OrganizerTierSummaryRowResponse,
+)
+from app.services.finance_reporting import (
+    get_event_finance_summary,
+    get_organizer_payout_summary,
+    list_event_finance_orders,
+    validate_organizer_finance_access,
 )
 from app.services.reporting import (
     EventReportingAuthorizationError,
@@ -138,6 +149,105 @@ def get_organizer_event_orders(
         )
         for o in orders
     ]
+
+
+@router.get("/{event_id}/finance-summary", response_model=EventFinanceSummaryResponse)
+def get_organizer_event_finance_summary(
+    event_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> EventFinanceSummaryResponse:
+    _authorize(db, user_id=user_id, event_id=event_id)
+    summary = get_event_finance_summary(db, event_id=event_id)
+    return EventFinanceSummaryResponse(
+        event_id=summary.event_id,
+        event_status=summary.event_status,
+        gross_sales_amount=float(summary.gross_sales_amount),
+        refunded_amount=float(summary.refunded_amount),
+        net_sales_amount=float(summary.net_sales_amount),
+        completed_order_count=summary.completed_order_count,
+        refunded_order_count=summary.refunded_order_count,
+        eligible_payout_amount=float(summary.eligible_payout_amount),
+        reconciled_amount=float(summary.reconciled_amount),
+        unreconciled_amount=float(summary.unreconciled_amount),
+        eligible_order_count=summary.eligible_order_count,
+        reconciled_order_count=summary.reconciled_order_count,
+        unreconciled_order_count=summary.unreconciled_order_count,
+        payout_included_amount=float(summary.payout_included_amount),
+        payout_paid_amount=float(summary.payout_paid_amount),
+        currency=summary.currency,
+        generated_at=summary.generated_at,
+    )
+
+
+@router.get("/{event_id}/finance-orders", response_model=list[EventFinanceOrderRowResponse])
+def get_organizer_event_finance_orders(
+    event_id: int,
+    reconciliation_status: ReconciliationStatus | None = Query(default=None),
+    payout_status: PayoutStatus | None = Query(default=None),
+    refund_status: str | None = Query(default=None),
+    created_after: datetime | None = Query(default=None),
+    created_before: datetime | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[EventFinanceOrderRowResponse]:
+    _authorize(db, user_id=user_id, event_id=event_id)
+    rows = list_event_finance_orders(
+        db,
+        event_id=event_id,
+        reconciliation_status=reconciliation_status,
+        payout_status=payout_status,
+        refund_status=refund_status,
+        created_after=created_after,
+        created_before=created_before,
+        limit=limit,
+        offset=offset,
+    )
+    return [
+        EventFinanceOrderRowResponse(
+            order_id=row.order_id,
+            buyer_user_id=row.buyer_user_id,
+            status=row.status,
+            refund_status=row.refund_status,
+            reconciliation_status=row.reconciliation_status,
+            payout_status=row.payout_status,
+            total_amount=float(row.total_amount),
+            refunded_amount=float(row.refunded_amount),
+            payout_eligible_amount=float(row.payout_eligible_amount),
+            currency=row.currency,
+            payment_provider=row.payment_provider,
+            payment_method=row.payment_method,
+            payment_reference=row.payment_reference,
+            created_at=row.created_at,
+            completed_at=row.completed_at,
+            refunded_at=row.refunded_at,
+            reconciled_at=row.reconciled_at,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/payout-summary", response_model=OrganizerPayoutSummaryResponse)
+def get_organizer_payout_overview(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> OrganizerPayoutSummaryResponse:
+    validate_organizer_finance_access(db, actor_user_id=user_id, organizer_user_id=user_id)
+    summary = get_organizer_payout_summary(db, organizer_user_id=user_id)
+    return OrganizerPayoutSummaryResponse(
+        organizer_user_id=summary.organizer_user_id,
+        total_gross_sales=float(summary.total_gross_sales),
+        total_refunded=float(summary.total_refunded),
+        total_net_sales=float(summary.total_net_sales),
+        total_payout_eligible=float(summary.total_payout_eligible),
+        total_reconciled=float(summary.total_reconciled),
+        total_unreconciled=float(summary.total_unreconciled),
+        total_paid_out=float(summary.total_paid_out),
+        currency=summary.currency,
+        generated_at=summary.generated_at,
+    )
 
 
 @router.get("/{event_id}/tickets", response_model=list[OrganizerTicketRowResponse])

@@ -8,7 +8,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import OrderStatus
+from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
@@ -45,6 +45,23 @@ class Order(TimestampMixin, Base):
     refunded_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     refund_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     refund_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_refunded")
+    reconciliation_status: Mapped[ReconciliationStatus] = mapped_column(
+        Enum(ReconciliationStatus, name="reconciliation_status"),
+        nullable=False,
+        default=ReconciliationStatus.UNRECONCILED,
+    )
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reconciled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    reconciliation_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payout_status: Mapped[PayoutStatus] = mapped_column(
+        Enum(PayoutStatus, name="payout_status"),
+        nullable=False,
+        default=PayoutStatus.NOT_READY,
+    )
+    payout_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    payout_included_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    payout_paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    payout_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped["User"] = relationship(foreign_keys=[user_id])
     event: Mapped["Event"] = relationship(back_populates="orders")

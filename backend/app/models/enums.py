@@ -33,6 +33,21 @@ class OrderStatus(str, Enum):
     EXPIRED = "expired"
 
 
+class ReconciliationStatus(str, Enum):
+    UNRECONCILED = "unreconciled"
+    RECONCILED = "reconciled"
+    DISPUTED = "disputed"
+    EXCLUDED = "excluded"
+
+
+class PayoutStatus(str, Enum):
+    NOT_READY = "not_ready"
+    ELIGIBLE = "eligible"
+    INCLUDED = "included"
+    PAID = "paid"
+    HELD = "held"
+
+
 class TicketStatus(str, Enum):
     ISSUED = "issued"
     CHECKED_IN = "checked_in"
