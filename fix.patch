@@ -1,9 +1,77 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/app/services/orders.py b/backend/app/services/orders.py
-index 4d71c44b697d185313f77065c4b78e3ee75153c5..07c4effd27bdafd3f8f67fbd918fa200ce5c323b 100644
+index 07c4effd27bdafd3f8f67fbd918fa200ce5c323b..6e057c4386fcb7a1412159862de644f09f65eb95 100644
 --- a/backend/app/services/orders.py
 +++ b/backend/app/services/orders.py
-@@ -215,60 +215,53 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
+@@ -1,58 +1,61 @@
+ from __future__ import annotations
+ 
+ from datetime import datetime, timezone
+ from decimal import Decimal
++from zoneinfo import ZoneInfo
+ 
+ from sqlalchemy import select
+ from sqlalchemy.orm import Session, joinedload
+ 
+ from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
+ from app.models.event import Event
+ from app.models.order import Order
+ from app.models.order_item import OrderItem
+ from app.models.ticket_hold import TicketHold
+ from app.models.ticket_tier import TicketTier
+ from app.models.user import User
+ from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
+ from app.services.promo_codes import (
+     PromoCodeValidationError,
+     apply_promo_code_to_order_pricing_context,
+     comp_pricing,
+     record_promo_redemption_for_order,
+     standard_pricing,
+ )
+ from app.services.notifications import (
+     NotificationDispatchResult,
+     notify_order_cancelled,
+     notify_order_completed,
+     notify_order_refunded,
+     notify_tickets_issued,
+ )
+ from app.services.tickets import invalidate_order_tickets, issue_tickets_for_completed_order
+ from app.services.ticket_holds import get_guyana_now
+ 
++GYT = ZoneInfo("America/Guyana")
++
+ 
+ class OrderFlowError(ValueError):
+     """Base business-rule error for order creation from holds."""
+ 
+ 
+ class EmptyHoldSelectionError(OrderFlowError):
+     """Raised when hold_ids is empty."""
+ 
+ 
+ class HoldNotFoundError(OrderFlowError):
+     """Raised when any requested hold cannot be found."""
+ 
+ 
+ class HoldOwnershipError(OrderFlowError):
+     """Raised when a hold does not belong to the authenticated user."""
+ 
+ 
+ class HoldExpiredError(OrderFlowError):
+     """Raised when a hold has expired."""
+ 
+ 
+ class HoldAlreadyAttachedError(OrderFlowError):
+     """Raised when a hold is already attached to an order."""
+ 
+ 
+@@ -209,57 +212,67 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
+             select(Order)
+             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds), joinedload(Order.tickets))
+             .where(Order.id == order_id, Order.user_id == user_id)
+         )
+         .unique()
+         .scalar_one_or_none()
      )
  
  
@@ -23,24 +91,27 @@ index 4d71c44b697d185313f77065c4b78e3ee75153c5..07c4effd27bdafd3f8f67fbd918fa200
      if order is None:
          raise OrderNotFoundError("Order not found.")
  
-     reference_now = _to_aware(now) if now is not None else get_guyana_now()
+-    reference_now = _to_aware(now) if now is not None else get_guyana_now()
++    if now is not None:
++        reference_now = _to_aware(now).astimezone(GYT)
++    else:
++        reference_now = get_guyana_now()
      if order.status != OrderStatus.PENDING:
          raise OrderNotPayableError("Only pending orders can be paid.")
      if not order.ticket_holds:
          raise OrderNotPayableError("Order has no linked holds.")
  
--    effective_now = reference_now
-+    normalized_holds = [_to_aware(hold.expires_at) for hold in order.ticket_holds]
+-    normalized_holds = [_to_aware(hold.expires_at) for hold in order.ticket_holds]
++    normalized_holds = []
++    for hold in order.ticket_holds:
++        dt = hold.expires_at
++        if dt.tzinfo is None:
++            dt = dt.replace(tzinfo=GYT)
++        else:
++            dt = dt.astimezone(GYT)
++        normalized_holds.append(dt)
  
--    normalized_holds: list[datetime] = []
--    for hold in order.ticket_holds:
--        hold_expires_at = hold.expires_at
--        if hold_expires_at.tzinfo is None:
--            hold_expires_at = hold_expires_at.replace(tzinfo=effective_now.tzinfo or timezone.utc)
--        normalized_holds.append(hold_expires_at)
--
--    if not all(hold > effective_now.astimezone(hold.tzinfo) for hold in normalized_holds):
-+    if not all(hold > reference_now for hold in normalized_holds):
+     if not all(hold > reference_now for hold in normalized_holds):
          order.status = OrderStatus.EXPIRED
          raise OrderNotPayableError("Order holds have expired.")
  
@@ -64,8 +135,6 @@ index 4d71c44b697d185313f77065c4b78e3ee75153c5..07c4effd27bdafd3f8f67fbd918fa200
  
      if order.refund_status != "refunded":
          order.reconciliation_status = ReconciliationStatus.UNRECONCILED
-         order.payout_status = PayoutStatus.ELIGIBLE
- 
  
 EOF
 )

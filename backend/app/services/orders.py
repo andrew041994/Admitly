@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -30,6 +31,8 @@ from app.services.notifications import (
 )
 from app.services.tickets import invalidate_order_tickets, issue_tickets_for_completed_order
 from app.services.ticket_holds import get_guyana_now
+
+GYT = ZoneInfo("America/Guyana")
 
 
 class OrderFlowError(ValueError):
@@ -231,13 +234,23 @@ def validate_order_still_payable(order: Order | None, now: datetime | None = Non
     if order is None:
         raise OrderNotFoundError("Order not found.")
 
-    reference_now = _to_aware(now) if now is not None else get_guyana_now()
+    if now is not None:
+        reference_now = _to_aware(now).astimezone(GYT)
+    else:
+        reference_now = get_guyana_now()
     if order.status != OrderStatus.PENDING:
         raise OrderNotPayableError("Only pending orders can be paid.")
     if not order.ticket_holds:
         raise OrderNotPayableError("Order has no linked holds.")
 
-    normalized_holds = [_to_aware(hold.expires_at) for hold in order.ticket_holds]
+    normalized_holds = []
+    for hold in order.ticket_holds:
+        dt = hold.expires_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=GYT)
+        else:
+            dt = dt.astimezone(GYT)
+        normalized_holds.append(dt)
 
     if not all(hold > reference_now for hold in normalized_holds):
         order.status = OrderStatus.EXPIRED
