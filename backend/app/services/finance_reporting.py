@@ -7,9 +7,11 @@ from decimal import Decimal
 from sqlalchemy import Select, and_, case, func, select
 from sqlalchemy.orm import Session
 
-from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus
+from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus, RefundStatus
 from app.models.event import Event
 from app.models.order import Order
+from app.models.organizer_balance_adjustment import OrganizerBalanceAdjustment
+from app.models.refund import Refund
 from app.models.order_item import OrderItem
 from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
@@ -125,14 +127,24 @@ def _is_verified_paid_order(order: Order) -> bool:
     return order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified"
 
 
-def get_order_refunded_amount(order: Order) -> Decimal:
+def get_order_refunded_amount(order: Order, *, db: Session | None = None) -> Decimal:
+    if db is not None:
+        total = db.execute(
+            select(func.coalesce(func.sum(Refund.amount), 0)).where(
+                Refund.order_id == order.id,
+                Refund.status == RefundStatus.PROCESSED,
+            )
+        ).scalar_one()
+        refunded = Decimal(total or 0)
+        if refunded > Decimal("0.00"):
+            return refunded
     if order.refund_status == "refunded":
         return Decimal(order.total_amount)
     return Decimal("0.00")
 
 
-def get_order_net_amount(order: Order) -> Decimal:
-    return Decimal(order.total_amount) - get_order_refunded_amount(order)
+def get_order_net_amount(order: Order, *, db: Session | None = None) -> Decimal:
+    return Decimal(order.total_amount) - get_order_refunded_amount(order, db=db)
 
 
 def is_order_financially_eligible_for_payout(order: Order) -> bool:
@@ -147,10 +159,10 @@ def is_order_financially_eligible_for_payout(order: Order) -> bool:
     return True
 
 
-def get_order_payout_eligible_amount(order: Order) -> Decimal:
+def get_order_payout_eligible_amount(order: Order, *, db: Session | None = None) -> Decimal:
     if not is_order_financially_eligible_for_payout(order):
         return Decimal("0.00")
-    return Decimal(order.total_amount)
+    return max(Decimal("0.00"), Decimal(order.total_amount) - get_order_refunded_amount(order, db=db))
 
 
 def _event_order_query(event_id: int) -> Select[tuple[Order]]:
@@ -243,7 +255,9 @@ def get_event_finance_summary(db: Session, *, event_id: int) -> EventFinanceSumm
     )
 
     orders = db.execute(_event_order_query(event_id)).scalars().all()
-    eligible_payout_amount = sum(get_order_payout_eligible_amount(order) for order in orders)
+    refunded_amount = sum((get_order_refunded_amount(order, db=db) for order in orders if _is_verified_paid_order(order)), Decimal("0.00"))
+    refunded_order_count = sum(1 for order in orders if _is_verified_paid_order(order) and get_order_refunded_amount(order, db=db) > Decimal("0.00"))
+    eligible_payout_amount = sum(get_order_payout_eligible_amount(order, db=db) for order in orders)
 
     comp_order_count = int(
         db.execute(select(func.count(Order.id)).where(Order.event_id == event_id, Order.is_comp.is_(True))).scalar_one() or 0
@@ -280,7 +294,7 @@ def get_event_finance_summary(db: Session, *, event_id: int) -> EventFinanceSumm
         refunded_amount=refunded_amount,
         net_sales_amount=gross_sales_amount - refunded_amount,
         completed_order_count=int(counts[0] or 0),
-        refunded_order_count=int(counts[1] or 0),
+        refunded_order_count=int(refunded_order_count),
         eligible_payout_amount=Decimal(eligible_payout_amount),
         reconciled_amount=reconciled_amount,
         unreconciled_amount=unreconciled_amount,
@@ -336,8 +350,8 @@ def list_event_finance_orders(
             total_amount=Decimal(order.total_amount),
             is_comp=bool(order.is_comp),
             pricing_source=order.pricing_source.value,
-            refunded_amount=get_order_refunded_amount(order),
-            payout_eligible_amount=get_order_payout_eligible_amount(order),
+            refunded_amount=get_order_refunded_amount(order, db=db),
+            payout_eligible_amount=get_order_payout_eligible_amount(order, db=db),
             currency=order.currency,
             payment_provider=order.payment_provider,
             payment_method=order.payment_method,
@@ -376,7 +390,7 @@ def get_organizer_payout_summary(db: Session, *, organizer_user_id: int) -> Orga
     paid_orders = [o for o in orders if _is_verified_paid_order(o)]
 
     total_gross_sales = sum((Decimal(o.total_amount) for o in paid_orders), Decimal("0.00"))
-    total_refunded = sum((get_order_refunded_amount(o) for o in paid_orders), Decimal("0.00"))
+    total_refunded = sum((get_order_refunded_amount(o, db=db) for o in paid_orders), Decimal("0.00"))
     total_reconciled = sum(
         (Decimal(o.total_amount) for o in paid_orders if o.reconciliation_status == ReconciliationStatus.RECONCILED),
         Decimal("0.00"),
@@ -395,7 +409,8 @@ def get_organizer_payout_summary(db: Session, *, organizer_user_id: int) -> Orga
         total_gross_sales=total_gross_sales,
         total_refunded=total_refunded,
         total_net_sales=total_gross_sales - total_refunded,
-        total_payout_eligible=sum((get_order_payout_eligible_amount(o) for o in orders), Decimal("0.00")),
+        total_payout_eligible=sum((get_order_payout_eligible_amount(o, db=db) for o in orders), Decimal("0.00"))
+        + Decimal(db.execute(select(func.coalesce(func.sum(OrganizerBalanceAdjustment.amount), 0)).where(OrganizerBalanceAdjustment.organizer_id.in_(select(OrganizerProfile.id).where(OrganizerProfile.user_id == organizer_user_id)))).scalar_one() or 0),
         total_reconciled=total_reconciled,
         total_unreconciled=total_unreconciled,
         total_paid_out=total_paid_out,

@@ -1,70 +1,282 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/alembic/versions/20260407_0013_phase13_promos_discounts_comps.py b/backend/alembic/versions/20260407_0013_phase13_promos_discounts_comps.py
-index 51887f54dd336a01540e16d71c9d13be8fa35866..8d1585ad0fcd1c70c102c6a634569e05c0fe88a4 100644
---- a/backend/alembic/versions/20260407_0013_phase13_promos_discounts_comps.py
-+++ b/backend/alembic/versions/20260407_0013_phase13_promos_discounts_comps.py
-@@ -1,47 +1,59 @@
- """Phase 13 promo codes, discounts, and comps
- 
- Revision ID: 20260407_0013
- Revises: 20260407_0012
- Create Date: 2026-04-07 14:00:00
- 
- """
- 
- from typing import Sequence, Union
- 
- from alembic import op
- import sqlalchemy as sa
-+from sqlalchemy.dialects import postgresql
- 
- 
- # revision identifiers, used by Alembic.
- revision: str = "20260407_0013"
- down_revision: Union[str, None] = "20260407_0012"
- branch_labels: Union[str, Sequence[str], None] = None
- depends_on: Union[str, Sequence[str], None] = None
- 
--promo_discount_type_enum = sa.Enum("percentage", "fixed_amount", name="promo_code_discount_type")
--pricing_source_enum = sa.Enum("standard", "promo_code", "comp", name="pricing_source")
-+promo_discount_type_enum = postgresql.ENUM(
-+    "percentage",
-+    "fixed_amount",
-+    name="promo_code_discount_type",
-+    create_type=False,
+diff --git a/backend/tests/test_refunds_disputes_service.py b/backend/tests/test_refunds_disputes_service.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..65e20234f591596d27f67c7ad660d0e3e8bec438
+--- /dev/null
++++ b/backend/tests/test_refunds_disputes_service.py
+@@ -0,0 +1,272 @@
++from datetime import datetime, timedelta, timezone
++from decimal import Decimal
++
++import pytest
++from sqlalchemy import create_engine, select
++from sqlalchemy.orm import Session, sessionmaker
++
++from app.db.base import Base
++from app.models import (
++    Dispute,
++    Event,
++    FinancialEntry,
++    OrganizerBalanceAdjustment,
++    OrganizerProfile,
++    Order,
++    User,
++    Venue,
 +)
-+pricing_source_enum = postgresql.ENUM(
-+    "standard",
-+    "promo_code",
-+    "comp",
-+    name="pricing_source",
-+    create_type=False,
++from app.models.enums import (
++    DisputeStatus,
++    EventApprovalStatus,
++    EventStatus,
++    EventVisibility,
++    OrderStatus,
++    PayoutStatus,
++    RefundReason,
++    RefundStatus,
 +)
- 
- 
- def upgrade() -> None:
-     bind = op.get_bind()
-     promo_discount_type_enum.create(bind, checkfirst=True)
-     pricing_source_enum.create(bind, checkfirst=True)
- 
-     op.create_table(
-         "promo_codes",
-         sa.Column("id", sa.Integer(), nullable=False),
-         sa.Column("event_id", sa.Integer(), nullable=False),
-         sa.Column("code", sa.String(length=64), nullable=False),
-         sa.Column("code_normalized", sa.String(length=64), nullable=False),
-         sa.Column("description", sa.Text(), nullable=True),
-         sa.Column("discount_type", promo_discount_type_enum, nullable=False),
-         sa.Column("discount_value", sa.Numeric(10, 2), nullable=False),
-         sa.Column("currency", sa.String(length=3), nullable=True),
-         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
-         sa.Column("valid_from", sa.DateTime(timezone=True), nullable=True),
-         sa.Column("valid_until", sa.DateTime(timezone=True), nullable=True),
-         sa.Column("max_total_redemptions", sa.Integer(), nullable=True),
-         sa.Column("max_redemptions_per_user", sa.Integer(), nullable=True),
-         sa.Column("min_order_amount", sa.Numeric(10, 2), nullable=True),
-         sa.Column("applies_to_all_tiers", sa.Boolean(), nullable=False, server_default=sa.true()),
-         sa.Column("created_by_user_id", sa.Integer(), nullable=True),
++from app.services.refunds import (
++    DisputeValidationError,
++    RefundAuthorizationError,
++    RefundValidationError,
++    approve_refund,
++    get_order_remaining_refundable,
++    reject_refund,
++    request_refund,
++    resolve_dispute,
++    submit_dispute,
++)
++
++
++@pytest.fixture
++def db_session() -> Session:
++    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
++    Base.metadata.create_all(engine)
++    SessionLocal = sessionmaker(bind=engine, future=True)
++    with SessionLocal() as session:
++        yield session
++
++
++def _seed(db: Session):
++    now = datetime.now(timezone.utc)
++    admin = User(email="admin@phase14.test", full_name="Admin", is_admin=True)
++    organizer_user = User(email="org@phase14.test", full_name="Organizer")
++    buyer = User(email="buyer@phase14.test", full_name="Buyer")
++    other_buyer = User(email="other@phase14.test", full_name="Other")
++    db.add_all([admin, organizer_user, buyer, other_buyer])
++    db.flush()
++
++    organizer = OrganizerProfile(user_id=organizer_user.id, business_name="Org", display_name="Org")
++    db.add(organizer)
++    db.flush()
++
++    venue = Venue(organizer_id=organizer.id, name="Venue")
++    db.add(venue)
++    db.flush()
++
++    event = Event(
++        organizer_id=organizer.id,
++        venue_id=venue.id,
++        title="Refund Event",
++        slug=f"refund-event-{int(now.timestamp())}",
++        start_at=now + timedelta(days=2),
++        end_at=now + timedelta(days=2, hours=4),
++        status=EventStatus.PUBLISHED,
++        visibility=EventVisibility.PUBLIC,
++        approval_status=EventApprovalStatus.APPROVED,
++        timezone="America/Guyana",
++        is_location_pinned=False,
++    )
++    db.add(event)
++    db.flush()
++
++    paid_order = Order(
++        user_id=buyer.id,
++        event_id=event.id,
++        status=OrderStatus.COMPLETED,
++        total_amount=Decimal("100.00"),
++        subtotal_amount=Decimal("120.00"),
++        discount_amount=Decimal("20.00"),
++        currency="GYD",
++        payment_verification_status="verified",
++        payout_status=PayoutStatus.ELIGIBLE,
++    )
++    comp_order = Order(
++        user_id=buyer.id,
++        event_id=event.id,
++        status=OrderStatus.COMPLETED,
++        total_amount=Decimal("0.00"),
++        subtotal_amount=Decimal("50.00"),
++        discount_amount=Decimal("50.00"),
++        currency="GYD",
++        payment_verification_status="verified",
++        is_comp=True,
++    )
++    paid_out_order = Order(
++        user_id=buyer.id,
++        event_id=event.id,
++        status=OrderStatus.COMPLETED,
++        total_amount=Decimal("60.00"),
++        subtotal_amount=Decimal("60.00"),
++        discount_amount=Decimal("0.00"),
++        currency="GYD",
++        payment_verification_status="verified",
++        payout_status=PayoutStatus.PAID,
++        payout_paid_at=now,
++    )
++    db.add_all([paid_order, comp_order, paid_out_order])
++    db.commit()
++
++    return {
++        "admin": admin,
++        "buyer": buyer,
++        "other_buyer": other_buyer,
++        "paid_order": paid_order,
++        "comp_order": comp_order,
++        "paid_out_order": paid_out_order,
++    }
++
++
++def test_refund_request_permissions_and_limits(db_session: Session) -> None:
++    data = _seed(db_session)
++
++    refund = request_refund(
++        db_session,
++        user_id=data["buyer"].id,
++        order_id=data["paid_order"].id,
++        reason=RefundReason.USER_REQUEST,
++        amount=None,
++        note=None,
++    )
++    assert refund.status == RefundStatus.PENDING
++    assert Decimal(refund.amount) == Decimal("100.00")
++
++    with pytest.raises(RefundAuthorizationError):
++        request_refund(
++            db_session,
++            user_id=data["other_buyer"].id,
++            order_id=data["paid_order"].id,
++            reason=RefundReason.USER_REQUEST,
++            amount=Decimal("10.00"),
++            note=None,
++        )
++
++    with pytest.raises(RefundValidationError):
++        request_refund(
++            db_session,
++            user_id=data["buyer"].id,
++            order_id=data["comp_order"].id,
++            reason=RefundReason.USER_REQUEST,
++            amount=Decimal("10.00"),
++            note=None,
++        )
++
++
++def test_partial_refunds_cannot_exceed_remaining(db_session: Session) -> None:
++    data = _seed(db_session)
++
++    first = request_refund(
++        db_session,
++        user_id=data["buyer"].id,
++        order_id=data["paid_order"].id,
++        reason=RefundReason.USER_REQUEST,
++        amount=Decimal("40.00"),
++        note=None,
++    )
++    approve_refund(db_session, refund_id=first.id, actor_user_id=data["admin"].id, amount=None, admin_notes="ok")
++
++    remaining = get_order_remaining_refundable(db_session, order=data["paid_order"])
++    assert remaining == Decimal("60.00")
++
++    with pytest.raises(RefundValidationError):
++        request_refund(
++            db_session,
++            user_id=data["buyer"].id,
++            order_id=data["paid_order"].id,
++            reason=RefundReason.USER_REQUEST,
++            amount=Decimal("70.00"),
++            note=None,
++        )
++
++
++def test_approve_refund_creates_financial_entries_and_reject_keeps_accounting_clean(db_session: Session) -> None:
++    data = _seed(db_session)
++
++    refund = request_refund(
++        db_session,
++        user_id=data["buyer"].id,
++        order_id=data["paid_order"].id,
++        reason=RefundReason.USER_REQUEST,
++        amount=Decimal("25.00"),
++        note=None,
++    )
++    processed = approve_refund(db_session, refund_id=refund.id, actor_user_id=data["admin"].id, amount=None, admin_notes="approved")
++    assert processed.status == RefundStatus.PROCESSED
++
++    entries = db_session.execute(select(FinancialEntry).where(FinancialEntry.refund_id == processed.id)).scalars().all()
++    assert len(entries) == 1
++    assert Decimal(entries[0].amount) == Decimal("-25.00")
++
++    reject_candidate = request_refund(
++        db_session,
++        user_id=data["buyer"].id,
++        order_id=data["paid_order"].id,
++        reason=RefundReason.OTHER,
++        amount=Decimal("5.00"),
++        note=None,
++    )
++    reject_refund(db_session, refund_id=reject_candidate.id, actor_user_id=data["admin"].id, admin_notes="denied")
++    rejected_entries = db_session.execute(select(FinancialEntry).where(FinancialEntry.refund_id == reject_candidate.id)).scalars().all()
++    assert rejected_entries == []
++
++
++def test_paid_out_refund_creates_balance_offset(db_session: Session) -> None:
++    data = _seed(db_session)
++
++    refund = request_refund(
++        db_session,
++        user_id=data["buyer"].id,
++        order_id=data["paid_out_order"].id,
++        reason=RefundReason.FRAUD,
++        amount=Decimal("10.00"),
++        note=None,
++    )
++    approve_refund(db_session, refund_id=refund.id, actor_user_id=data["admin"].id, amount=None, admin_notes="fraud")
++
++    adjustments = db_session.execute(select(OrganizerBalanceAdjustment).where(OrganizerBalanceAdjustment.refund_id == refund.id)).scalars().all()
++    assert len(adjustments) == 1
++    assert Decimal(adjustments[0].amount) == Decimal("-10.00")
++
++
++def test_dispute_creation_uniqueness_and_resolve_with_refund(db_session: Session) -> None:
++    data = _seed(db_session)
++
++    dispute = submit_dispute(
++        db_session,
++        user_id=data["buyer"].id,
++        order_id=data["paid_order"].id,
++        message="I was charged twice",
++    )
++    assert dispute.status == DisputeStatus.OPEN
++
++    with pytest.raises(DisputeValidationError):
++        submit_dispute(
++            db_session,
++            user_id=data["buyer"].id,
++            order_id=data["paid_order"].id,
++            message="second",
++        )
++
++    resolved = resolve_dispute(
++        db_session,
++        dispute_id=dispute.id,
++        actor_user_id=data["admin"].id,
++        resolution="approved",
++        admin_notes="resolve with partial refund",
++        refund_amount=Decimal("15.00"),
++        refund_reason=RefundReason.DUPLICATE_PURCHASE,
++    )
++    assert resolved.status == DisputeStatus.RESOLVED
++    created_refunds = db_session.execute(select(FinancialEntry).join(Dispute, Dispute.order_id == FinancialEntry.order_id).where(Dispute.id == dispute.id)).scalars().all()
++    assert created_refunds
  
 EOF
 )

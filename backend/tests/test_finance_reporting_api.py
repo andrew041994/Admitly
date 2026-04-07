@@ -13,3 +13,12 @@ def test_finance_reporting_routes_registered() -> None:
     assert "/organizer/events/payout-summary" in route_paths
     assert "/internal/orders/{order_id}/reconcile" in route_paths
     assert "/internal/orders/{order_id}/payout-status" in route_paths
+    assert "/refunds/request" in route_paths
+    assert "/refunds/my" in route_paths
+    assert "/disputes" in route_paths
+    assert "/admin/refunds" in route_paths
+    assert "/admin/refunds/{refund_id}/approve" in route_paths
+    assert "/admin/refunds/{refund_id}/reject" in route_paths
+    assert "/admin/disputes" in route_paths
+    assert "/admin/disputes/{dispute_id}/resolve" in route_paths
+    assert "/admin/disputes/{dispute_id}/reject" in route_paths

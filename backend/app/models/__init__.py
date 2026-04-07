@@ -1,6 +1,10 @@
 from app.models.event import Event
 from app.models.event_reminder_log import EventReminderLog
 from app.models.event_staff import EventStaff
+from app.models.dispute import Dispute
+from app.models.financial_entry import FinancialEntry
+from app.models.organizer_balance_adjustment import OrganizerBalanceAdjustment
+from app.models.refund import Refund
 from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.organizer_profile import OrganizerProfile
@@ -25,6 +29,10 @@ __all__ = [
     "TicketTier",
     "Order",
     "OrderItem",
+    "Refund",
+    "Dispute",
+    "FinancialEntry",
+    "OrganizerBalanceAdjustment",
     "PromoCode",
     "PromoCodeRedemption",
     "PromoCodeTicketTier",

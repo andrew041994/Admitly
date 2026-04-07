@@ -76,3 +76,33 @@ class PricingSource(str, Enum):
     STANDARD = "standard"
     PROMO_CODE = "promo_code"
     COMP = "comp"
+
+
+class RefundStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    PROCESSED = "processed"
+
+
+class DisputeStatus(str, Enum):
+    OPEN = "open"
+    UNDER_REVIEW = "under_review"
+    RESOLVED = "resolved"
+    REJECTED = "rejected"
+
+
+class RefundReason(str, Enum):
+    EVENT_CANCELED = "event_canceled"
+    DUPLICATE_PURCHASE = "duplicate_purchase"
+    FRAUD = "fraud"
+    USER_REQUEST = "user_request"
+    OTHER = "other"
+
+
+class FinancialEntryType(str, Enum):
+    REFUND_REVERSAL = "refund_reversal"
+
+
+class BalanceAdjustmentType(str, Enum):
+    REFUND_OFFSET = "refund_offset"

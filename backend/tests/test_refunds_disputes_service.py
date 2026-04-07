@@ -1,0 +1,272 @@
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.db.base import Base
+from app.models import (
+    Dispute,
+    Event,
+    FinancialEntry,
+    OrganizerBalanceAdjustment,
+    OrganizerProfile,
+    Order,
+    User,
+    Venue,
+)
+from app.models.enums import (
+    DisputeStatus,
+    EventApprovalStatus,
+    EventStatus,
+    EventVisibility,
+    OrderStatus,
+    PayoutStatus,
+    RefundReason,
+    RefundStatus,
+)
+from app.services.refunds import (
+    DisputeValidationError,
+    RefundAuthorizationError,
+    RefundValidationError,
+    approve_refund,
+    get_order_remaining_refundable,
+    reject_refund,
+    request_refund,
+    resolve_dispute,
+    submit_dispute,
+)
+
+
+@pytest.fixture
+def db_session() -> Session:
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        yield session
+
+
+def _seed(db: Session):
+    now = datetime.now(timezone.utc)
+    admin = User(email="admin@phase14.test", full_name="Admin", is_admin=True)
+    organizer_user = User(email="org@phase14.test", full_name="Organizer")
+    buyer = User(email="buyer@phase14.test", full_name="Buyer")
+    other_buyer = User(email="other@phase14.test", full_name="Other")
+    db.add_all([admin, organizer_user, buyer, other_buyer])
+    db.flush()
+
+    organizer = OrganizerProfile(user_id=organizer_user.id, business_name="Org", display_name="Org")
+    db.add(organizer)
+    db.flush()
+
+    venue = Venue(organizer_id=organizer.id, name="Venue")
+    db.add(venue)
+    db.flush()
+
+    event = Event(
+        organizer_id=organizer.id,
+        venue_id=venue.id,
+        title="Refund Event",
+        slug=f"refund-event-{int(now.timestamp())}",
+        start_at=now + timedelta(days=2),
+        end_at=now + timedelta(days=2, hours=4),
+        status=EventStatus.PUBLISHED,
+        visibility=EventVisibility.PUBLIC,
+        approval_status=EventApprovalStatus.APPROVED,
+        timezone="America/Guyana",
+        is_location_pinned=False,
+    )
+    db.add(event)
+    db.flush()
+
+    paid_order = Order(
+        user_id=buyer.id,
+        event_id=event.id,
+        status=OrderStatus.COMPLETED,
+        total_amount=Decimal("100.00"),
+        subtotal_amount=Decimal("120.00"),
+        discount_amount=Decimal("20.00"),
+        currency="GYD",
+        payment_verification_status="verified",
+        payout_status=PayoutStatus.ELIGIBLE,
+    )
+    comp_order = Order(
+        user_id=buyer.id,
+        event_id=event.id,
+        status=OrderStatus.COMPLETED,
+        total_amount=Decimal("0.00"),
+        subtotal_amount=Decimal("50.00"),
+        discount_amount=Decimal("50.00"),
+        currency="GYD",
+        payment_verification_status="verified",
+        is_comp=True,
+    )
+    paid_out_order = Order(
+        user_id=buyer.id,
+        event_id=event.id,
+        status=OrderStatus.COMPLETED,
+        total_amount=Decimal("60.00"),
+        subtotal_amount=Decimal("60.00"),
+        discount_amount=Decimal("0.00"),
+        currency="GYD",
+        payment_verification_status="verified",
+        payout_status=PayoutStatus.PAID,
+        payout_paid_at=now,
+    )
+    db.add_all([paid_order, comp_order, paid_out_order])
+    db.commit()
+
+    return {
+        "admin": admin,
+        "buyer": buyer,
+        "other_buyer": other_buyer,
+        "paid_order": paid_order,
+        "comp_order": comp_order,
+        "paid_out_order": paid_out_order,
+    }
+
+
+def test_refund_request_permissions_and_limits(db_session: Session) -> None:
+    data = _seed(db_session)
+
+    refund = request_refund(
+        db_session,
+        user_id=data["buyer"].id,
+        order_id=data["paid_order"].id,
+        reason=RefundReason.USER_REQUEST,
+        amount=None,
+        note=None,
+    )
+    assert refund.status == RefundStatus.PENDING
+    assert Decimal(refund.amount) == Decimal("100.00")
+
+    with pytest.raises(RefundAuthorizationError):
+        request_refund(
+            db_session,
+            user_id=data["other_buyer"].id,
+            order_id=data["paid_order"].id,
+            reason=RefundReason.USER_REQUEST,
+            amount=Decimal("10.00"),
+            note=None,
+        )
+
+    with pytest.raises(RefundValidationError):
+        request_refund(
+            db_session,
+            user_id=data["buyer"].id,
+            order_id=data["comp_order"].id,
+            reason=RefundReason.USER_REQUEST,
+            amount=Decimal("10.00"),
+            note=None,
+        )
+
+
+def test_partial_refunds_cannot_exceed_remaining(db_session: Session) -> None:
+    data = _seed(db_session)
+
+    first = request_refund(
+        db_session,
+        user_id=data["buyer"].id,
+        order_id=data["paid_order"].id,
+        reason=RefundReason.USER_REQUEST,
+        amount=Decimal("40.00"),
+        note=None,
+    )
+    approve_refund(db_session, refund_id=first.id, actor_user_id=data["admin"].id, amount=None, admin_notes="ok")
+
+    remaining = get_order_remaining_refundable(db_session, order=data["paid_order"])
+    assert remaining == Decimal("60.00")
+
+    with pytest.raises(RefundValidationError):
+        request_refund(
+            db_session,
+            user_id=data["buyer"].id,
+            order_id=data["paid_order"].id,
+            reason=RefundReason.USER_REQUEST,
+            amount=Decimal("70.00"),
+            note=None,
+        )
+
+
+def test_approve_refund_creates_financial_entries_and_reject_keeps_accounting_clean(db_session: Session) -> None:
+    data = _seed(db_session)
+
+    refund = request_refund(
+        db_session,
+        user_id=data["buyer"].id,
+        order_id=data["paid_order"].id,
+        reason=RefundReason.USER_REQUEST,
+        amount=Decimal("25.00"),
+        note=None,
+    )
+    processed = approve_refund(db_session, refund_id=refund.id, actor_user_id=data["admin"].id, amount=None, admin_notes="approved")
+    assert processed.status == RefundStatus.PROCESSED
+
+    entries = db_session.execute(select(FinancialEntry).where(FinancialEntry.refund_id == processed.id)).scalars().all()
+    assert len(entries) == 1
+    assert Decimal(entries[0].amount) == Decimal("-25.00")
+
+    reject_candidate = request_refund(
+        db_session,
+        user_id=data["buyer"].id,
+        order_id=data["paid_order"].id,
+        reason=RefundReason.OTHER,
+        amount=Decimal("5.00"),
+        note=None,
+    )
+    reject_refund(db_session, refund_id=reject_candidate.id, actor_user_id=data["admin"].id, admin_notes="denied")
+    rejected_entries = db_session.execute(select(FinancialEntry).where(FinancialEntry.refund_id == reject_candidate.id)).scalars().all()
+    assert rejected_entries == []
+
+
+def test_paid_out_refund_creates_balance_offset(db_session: Session) -> None:
+    data = _seed(db_session)
+
+    refund = request_refund(
+        db_session,
+        user_id=data["buyer"].id,
+        order_id=data["paid_out_order"].id,
+        reason=RefundReason.FRAUD,
+        amount=Decimal("10.00"),
+        note=None,
+    )
+    approve_refund(db_session, refund_id=refund.id, actor_user_id=data["admin"].id, amount=None, admin_notes="fraud")
+
+    adjustments = db_session.execute(select(OrganizerBalanceAdjustment).where(OrganizerBalanceAdjustment.refund_id == refund.id)).scalars().all()
+    assert len(adjustments) == 1
+    assert Decimal(adjustments[0].amount) == Decimal("-10.00")
+
+
+def test_dispute_creation_uniqueness_and_resolve_with_refund(db_session: Session) -> None:
+    data = _seed(db_session)
+
+    dispute = submit_dispute(
+        db_session,
+        user_id=data["buyer"].id,
+        order_id=data["paid_order"].id,
+        message="I was charged twice",
+    )
+    assert dispute.status == DisputeStatus.OPEN
+
+    with pytest.raises(DisputeValidationError):
+        submit_dispute(
+            db_session,
+            user_id=data["buyer"].id,
+            order_id=data["paid_order"].id,
+            message="second",
+        )
+
+    resolved = resolve_dispute(
+        db_session,
+        dispute_id=dispute.id,
+        actor_user_id=data["admin"].id,
+        resolution="approved",
+        admin_notes="resolve with partial refund",
+        refund_amount=Decimal("15.00"),
+        refund_reason=RefundReason.DUPLICATE_PURCHASE,
+    )
+    assert resolved.status == DisputeStatus.RESOLVED
+    created_refunds = db_session.execute(select(FinancialEntry).join(Dispute, Dispute.order_id == FinancialEntry.order_id).where(Dispute.id == dispute.id)).scalars().all()
+    assert created_refunds

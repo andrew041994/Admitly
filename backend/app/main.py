@@ -8,6 +8,7 @@ from app.api.organizer_reporting import router as organizer_reporting_router
 from app.api.organizer_promos import router as organizer_promos_router
 from app.api.orders import router as orders_router
 from app.api.payments import router as payments_router
+from app.api.refunds import router as refunds_router
 from app.api.ticket_holds import router as ticket_holds_router
 from app.api.tickets import router as tickets_router
 from app.api.ticket_transfer_invites import router as ticket_transfer_invites_router
@@ -20,6 +21,7 @@ app.include_router(ticket_holds_router)
 app.include_router(orders_router)
 app.include_router(notifications_router)
 app.include_router(payments_router)
+app.include_router(refunds_router)
 app.include_router(tickets_router)
 app.include_router(ticket_transfer_invites_router)
 app.include_router(organizer_reporting_router)
