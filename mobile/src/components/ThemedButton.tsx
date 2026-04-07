@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { theme } from '../theme';
 
@@ -6,19 +6,31 @@ type ThemedButtonProps = {
   label: string;
   onPress: () => void;
   variant?: 'primary' | 'secondary';
+  disabled?: boolean;
+  loading?: boolean;
 };
 
-export function ThemedButton({ label, onPress, variant = 'primary' }: ThemedButtonProps) {
+export function ThemedButton({
+  label,
+  onPress,
+  variant = 'primary',
+  disabled = false,
+  loading = false,
+}: ThemedButtonProps) {
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled || loading}
       style={({ pressed }) => [
         styles.base,
         variant === 'primary' ? styles.primary : styles.secondary,
-        pressed && styles.pressed,
+        (pressed || disabled || loading) && styles.pressed,
       ]}
     >
-      <Text style={[styles.label, variant === 'secondary' && styles.secondaryLabel]}>{label}</Text>
+      <View style={styles.content}>
+        {loading ? <ActivityIndicator color={variant === 'primary' ? '#090909' : theme.colors.primary} /> : null}
+        <Text style={[styles.label, variant === 'secondary' && styles.secondaryLabel]}>{label}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -49,5 +61,10 @@ const styles = StyleSheet.create({
   },
   secondaryLabel: {
     color: theme.colors.primary,
+  },
+  content: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    alignItems: 'center',
   },
 });

@@ -1,13 +1,16 @@
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { SessionProvider } from './context/SessionContext';
 import { RootNavigator } from './navigation/RootNavigator';
 
 export default function App() {
   return (
-    <SessionProvider>
-      <StatusBar style="light" />
-      <RootNavigator />
-    </SessionProvider>
+    <SafeAreaProvider>
+      <SessionProvider>
+        <StatusBar style="light" />
+        <RootNavigator />
+      </SessionProvider>
+    </SafeAreaProvider>
   );
 }

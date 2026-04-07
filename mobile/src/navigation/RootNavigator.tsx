@@ -5,11 +5,12 @@ import { useSession } from '../context/SessionContext';
 import { theme } from '../theme';
 import { AppStackParamList, AuthStackParamList } from './types';
 import { BootScreen } from './screens/BootScreen';
+import { ForgotPasswordScreen } from './screens/ForgotPasswordScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { PlaceholderScreen } from './screens/PlaceholderScreen';
+import { ResetPasswordScreen } from './screens/ResetPasswordScreen';
 import { SignInScreen } from './screens/SignInScreen';
 import { SignUpScreen } from './screens/SignUpScreen';
-import { WelcomeScreen } from './screens/WelcomeScreen';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
@@ -27,28 +28,37 @@ const navTheme = {
 };
 
 function AuthNavigator() {
-  const { signInPlaceholder } = useSession();
-
   return (
     <AuthStack.Navigator
+      initialRouteName="SignIn"
       screenOptions={{
         headerStyle: { backgroundColor: theme.colors.surface },
         headerTintColor: theme.colors.primary,
         contentStyle: { backgroundColor: theme.colors.background },
       }}
     >
-      <AuthStack.Screen name="Welcome" options={{ headerShown: false }}>
+      <AuthStack.Screen name="SignIn" options={{ headerShown: false }}>
         {({ navigation }) => (
-          <WelcomeScreen
-            onGetStarted={() => navigation.navigate('SignIn')}
-            onCreateAccount={() => navigation.navigate('SignUp')}
+          <SignInScreen
+            onGoToSignUp={() => navigation.navigate('SignUp')}
+            onGoToForgotPassword={() => navigation.navigate('ForgotPassword')}
           />
         )}
       </AuthStack.Screen>
-      <AuthStack.Screen name="SignIn">
-        {() => <SignInScreen onContinue={signInPlaceholder} />}
+      <AuthStack.Screen name="SignUp" options={{ headerShown: false }}>
+        {({ navigation }) => <SignUpScreen onGoToSignIn={() => navigation.navigate('SignIn')} />}
       </AuthStack.Screen>
-      <AuthStack.Screen name="SignUp" component={SignUpScreen} />
+      <AuthStack.Screen name="ForgotPassword" options={{ headerShown: false }}>
+        {({ navigation }) => (
+          <ForgotPasswordScreen
+            onGoToSignIn={() => navigation.navigate('SignIn')}
+            onGoToResetPassword={() => navigation.navigate('ResetPassword')}
+          />
+        )}
+      </AuthStack.Screen>
+      <AuthStack.Screen name="ResetPassword" options={{ headerShown: false }}>
+        {({ navigation }) => <ResetPasswordScreen onGoToSignIn={() => navigation.navigate('SignIn')} />}
+      </AuthStack.Screen>
     </AuthStack.Navigator>
   );
 }
@@ -71,11 +81,15 @@ function SignedInNavigator() {
       </AppStack.Screen>
       <AppStack.Screen
         name="EventDetail"
-        children={() => <PlaceholderScreen title="Event detail" description="Event detail foundation route only." />}
+        children={() => (
+          <PlaceholderScreen title="Event detail" description="Event detail foundation route only." />
+        )}
       />
       <AppStack.Screen
         name="MyTickets"
-        children={() => <PlaceholderScreen title="My tickets" description="Ticket wallet UI is out of scope in Phase 1." />}
+        children={() => (
+          <PlaceholderScreen title="My tickets" description="Ticket wallet UI is out of scope in Phase 1." />
+        )}
       />
       <AppStack.Screen
         name="Profile"
