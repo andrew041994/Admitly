@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -18,8 +19,19 @@ down_revision: Union[str, None] = "20260406_0009"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+transfer_invite_status_enum = postgresql.ENUM(
+    "pending",
+    "accepted",
+    "revoked",
+    "expired",
+    name="transfer_invite_status",
+    create_type=False,
+)
+
 
 def upgrade() -> None:
+    transfer_invite_status_enum.create(op.get_bind(), checkfirst=True)
+
     op.create_table(
         "ticket_transfer_invites",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -31,7 +43,7 @@ def upgrade() -> None:
         sa.Column("invite_token", sa.String(length=128), nullable=False),
         sa.Column(
             "status",
-            sa.Enum("pending", "accepted", "revoked", "expired", name="transfer_invite_status"),
+            transfer_invite_status_enum,
             nullable=False,
         ),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
@@ -72,6 +84,4 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_ticket_transfer_invites_sender_user_id"), table_name="ticket_transfer_invites")
     op.drop_index(op.f("ix_ticket_transfer_invites_ticket_id"), table_name="ticket_transfer_invites")
     op.drop_table("ticket_transfer_invites")
-    sa.Enum("pending", "accepted", "revoked", "expired", name="transfer_invite_status").drop(
-        op.get_bind(), checkfirst=True
-    )
+    transfer_invite_status_enum.drop(op.get_bind(), checkfirst=True)

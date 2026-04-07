@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -18,8 +19,19 @@ down_revision: Union[str, None] = "20260407_0012"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-promo_discount_type_enum = sa.Enum("percentage", "fixed_amount", name="promo_code_discount_type")
-pricing_source_enum = sa.Enum("standard", "promo_code", "comp", name="pricing_source")
+promo_discount_type_enum = postgresql.ENUM(
+    "percentage",
+    "fixed_amount",
+    name="promo_code_discount_type",
+    create_type=False,
+)
+pricing_source_enum = postgresql.ENUM(
+    "standard",
+    "promo_code",
+    "comp",
+    name="pricing_source",
+    create_type=False,
+)
 
 
 def upgrade() -> None:

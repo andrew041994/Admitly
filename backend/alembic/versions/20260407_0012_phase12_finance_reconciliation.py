@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -19,20 +20,22 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-reconciliation_status_enum = sa.Enum(
+reconciliation_status_enum = postgresql.ENUM(
     "unreconciled",
     "reconciled",
     "disputed",
     "excluded",
     name="reconciliation_status",
+    create_type=False,
 )
-payout_status_enum = sa.Enum(
+payout_status_enum = postgresql.ENUM(
     "not_ready",
     "eligible",
     "included",
     "paid",
     "held",
     name="payout_status",
+    create_type=False,
 )
 
 

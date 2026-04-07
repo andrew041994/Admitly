@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -18,8 +19,18 @@ down_revision: Union[str, None] = "20260406_0010"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+reminder_type_enum = postgresql.ENUM(
+    "24_hours_before",
+    "3_hours_before",
+    "30_minutes_before",
+    name="reminder_type",
+    create_type=False,
+)
+
 
 def upgrade() -> None:
+    reminder_type_enum.create(op.get_bind(), checkfirst=True)
+
     op.create_table(
         "event_reminder_logs",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -27,7 +38,7 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column(
             "reminder_type",
-            sa.Enum("24_hours_before", "3_hours_before", "30_minutes_before", name="reminder_type"),
+            reminder_type_enum,
             nullable=False,
         ),
         sa.Column("sent_at", sa.DateTime(timezone=True), nullable=False),
@@ -48,6 +59,4 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_event_reminder_logs_user_id"), table_name="event_reminder_logs")
     op.drop_index(op.f("ix_event_reminder_logs_event_id"), table_name="event_reminder_logs")
     op.drop_table("event_reminder_logs")
-    sa.Enum("24_hours_before", "3_hours_before", "30_minutes_before", name="reminder_type").drop(
-        op.get_bind(), checkfirst=True
-    )
+    reminder_type_enum.drop(op.get_bind(), checkfirst=True)

@@ -1,24 +1,70 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_promo_codes_api.py b/backend/tests/test_promo_codes_api.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..053d67f1aa1f53c66e59bda164917d80264f88b3
---- /dev/null
-+++ b/backend/tests/test_promo_codes_api.py
-@@ -0,0 +1,14 @@
-+import os
-+
-+os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-+
-+from app.main import app
-+
-+
-+def test_promo_and_comp_routes_registered() -> None:
-+    route_paths = {route.path for route in app.routes}
-+
-+    assert "/organizer/events/{event_id}/promo-codes" in route_paths
-+    assert "/organizer/events/{event_id}/promo-codes/{promo_code_id}" in route_paths
-+    assert "/organizer/events/{event_id}/promo-codes/validate" in route_paths
-+    assert "/organizer/events/{event_id}/comp-orders" in route_paths
+diff --git a/backend/alembic/versions/20260407_0013_phase13_promos_discounts_comps.py b/backend/alembic/versions/20260407_0013_phase13_promos_discounts_comps.py
+index 51887f54dd336a01540e16d71c9d13be8fa35866..8d1585ad0fcd1c70c102c6a634569e05c0fe88a4 100644
+--- a/backend/alembic/versions/20260407_0013_phase13_promos_discounts_comps.py
++++ b/backend/alembic/versions/20260407_0013_phase13_promos_discounts_comps.py
+@@ -1,47 +1,59 @@
+ """Phase 13 promo codes, discounts, and comps
+ 
+ Revision ID: 20260407_0013
+ Revises: 20260407_0012
+ Create Date: 2026-04-07 14:00:00
+ 
+ """
+ 
+ from typing import Sequence, Union
+ 
+ from alembic import op
+ import sqlalchemy as sa
++from sqlalchemy.dialects import postgresql
+ 
+ 
+ # revision identifiers, used by Alembic.
+ revision: str = "20260407_0013"
+ down_revision: Union[str, None] = "20260407_0012"
+ branch_labels: Union[str, Sequence[str], None] = None
+ depends_on: Union[str, Sequence[str], None] = None
+ 
+-promo_discount_type_enum = sa.Enum("percentage", "fixed_amount", name="promo_code_discount_type")
+-pricing_source_enum = sa.Enum("standard", "promo_code", "comp", name="pricing_source")
++promo_discount_type_enum = postgresql.ENUM(
++    "percentage",
++    "fixed_amount",
++    name="promo_code_discount_type",
++    create_type=False,
++)
++pricing_source_enum = postgresql.ENUM(
++    "standard",
++    "promo_code",
++    "comp",
++    name="pricing_source",
++    create_type=False,
++)
+ 
+ 
+ def upgrade() -> None:
+     bind = op.get_bind()
+     promo_discount_type_enum.create(bind, checkfirst=True)
+     pricing_source_enum.create(bind, checkfirst=True)
+ 
+     op.create_table(
+         "promo_codes",
+         sa.Column("id", sa.Integer(), nullable=False),
+         sa.Column("event_id", sa.Integer(), nullable=False),
+         sa.Column("code", sa.String(length=64), nullable=False),
+         sa.Column("code_normalized", sa.String(length=64), nullable=False),
+         sa.Column("description", sa.Text(), nullable=True),
+         sa.Column("discount_type", promo_discount_type_enum, nullable=False),
+         sa.Column("discount_value", sa.Numeric(10, 2), nullable=False),
+         sa.Column("currency", sa.String(length=3), nullable=True),
+         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+         sa.Column("valid_from", sa.DateTime(timezone=True), nullable=True),
+         sa.Column("valid_until", sa.DateTime(timezone=True), nullable=True),
+         sa.Column("max_total_redemptions", sa.Integer(), nullable=True),
+         sa.Column("max_redemptions_per_user", sa.Integer(), nullable=True),
+         sa.Column("min_order_amount", sa.Numeric(10, 2), nullable=True),
+         sa.Column("applies_to_all_tiers", sa.Boolean(), nullable=False, server_default=sa.true()),
+         sa.Column("created_by_user_id", sa.Integer(), nullable=True),
  
 EOF
 )
