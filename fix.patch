@@ -1,67 +1,177 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/alembic/versions/20260407_0018_phase16b_reminder_delivery_tracking.py b/backend/alembic/versions/20260407_0018_phase16b_reminder_delivery_tracking.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..cdee39b4fc5c53268012a723e650eb28e5fe4894
---- /dev/null
-+++ b/backend/alembic/versions/20260407_0018_phase16b_reminder_delivery_tracking.py
-@@ -0,0 +1,57 @@
-+"""Phase 16B reminder delivery tracking
-+
-+Revision ID: 20260407_0018
-+Revises: 20260407_0016
-+Create Date: 2026-04-07 14:20:00
-+
-+"""
-+
-+from typing import Sequence, Union
-+
-+from alembic import op
-+import sqlalchemy as sa
-+
-+
-+# revision identifiers, used by Alembic.
-+revision: str = "20260407_0018"
-+down_revision: Union[str, None] = "20260407_0016"
-+branch_labels: Union[str, Sequence[str], None] = None
-+depends_on: Union[str, Sequence[str], None] = None
-+
-+
-+def upgrade() -> None:
-+    op.add_column(
-+        "event_reminder_logs",
-+        sa.Column("scheduled_for", sa.DateTime(timezone=True), nullable=True),
+diff --git a/backend/tests/test_reminders_service.py b/backend/tests/test_reminders_service.py
+index d85f534924736ce8a3eff757ab640ac88ebab776..bf172712c0e9bd3ba0dc2b1369ca81c6f3a82019 100644
+--- a/backend/tests/test_reminders_service.py
++++ b/backend/tests/test_reminders_service.py
+@@ -1,47 +1,48 @@
+ from __future__ import annotations
+ 
+ from datetime import datetime, timedelta, timezone
+ from decimal import Decimal
+ 
+ import pytest
+ from sqlalchemy import create_engine, select
+ from sqlalchemy.orm import Session, sessionmaker
+ 
+ from app.db.base import Base
+ from app.models import Event, EventReminderLog, OrganizerProfile, Order, OrderItem, Ticket, TicketTier, User, Venue
+ from app.models.enums import (
+     EventApprovalStatus,
+     EventStatus,
+     EventVisibility,
+     OrderStatus,
+     ReminderType,
+     TicketStatus,
+ )
+ from app.services.reminders import (
+     dispatch_due_event_reminders,
+     get_eligible_event_reminder_recipients,
++    get_reminder_due_times_for_event,
+     should_send_reminder_for_event,
+ )
+ from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
+ 
+ 
+ @pytest.fixture
+ def db_session() -> Session:
+     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+     Base.metadata.create_all(engine)
+     SessionLocal = sessionmaker(bind=engine, future=True)
+     with SessionLocal() as session:
+         yield session
+ 
+ 
+ def _seed_order(db: Session, *, suffix: str, event_start_at: datetime) -> tuple[Order, User, Event]:
+     buyer = User(email=f"buyer-{suffix}@example.com", full_name="Buyer")
+     organizer_user = User(email=f"org-{suffix}@example.com", full_name="Organizer")
+     db.add_all([buyer, organizer_user])
+     db.flush()
+ 
+     organizer = OrganizerProfile(user_id=organizer_user.id, business_name="Org", display_name="Org")
+     db.add(organizer)
+     db.flush()
+ 
+     venue = Venue(organizer_id=organizer.id, name="Venue")
+@@ -79,95 +80,113 @@ def _seed_order(db: Session, *, suffix: str, event_start_at: datetime) -> tuple[
+         sort_order=0,
+     )
+     db.add(tier)
+     db.flush()
+ 
+     order = Order(
+         user_id=buyer.id,
+         event_id=event.id,
+         status=OrderStatus.COMPLETED,
+         total_amount=Decimal("250.00"),
+         currency="GYD",
+         payment_verification_status="verified",
+     )
+     db.add(order)
+     db.flush()
+ 
+     db.add(OrderItem(order_id=order.id, ticket_tier_id=tier.id, quantity=2, unit_price=Decimal("125.00")))
+     db.commit()
+     db.refresh(order)
+     db.refresh(buyer)
+     db.refresh(event)
+     return order, buyer, event
+ 
+ 
+ def test_should_send_window_logic() -> None:
+-    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
++    now = datetime(2026, 4, 6, 13, 0, tzinfo=timezone.utc)
+     event_24 = Event(start_at=now + timedelta(hours=24), end_at=now + timedelta(hours=25), organizer_id=1, venue_id=None,
+                      title="E1", slug="e1", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
+                      approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
+-    event_3 = Event(start_at=now + timedelta(hours=3), end_at=now + timedelta(hours=4), organizer_id=1, venue_id=None,
++    event_today = Event(start_at=now + timedelta(minutes=5), end_at=now + timedelta(hours=1), organizer_id=1, venue_id=None,
+                     title="E2", slug="e2", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
+-                    approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
++                     approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
+     event_30 = Event(start_at=now + timedelta(minutes=30), end_at=now + timedelta(hours=1), organizer_id=1, venue_id=None,
+                      title="E3", slug="e3", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
+                      approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
+     outside = Event(start_at=now + timedelta(hours=10), end_at=now + timedelta(hours=11), organizer_id=1, venue_id=None,
+                     title="E4", slug="e4", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
+                     approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
+ 
+     assert should_send_reminder_for_event(event_24, ReminderType.HOURS_24_BEFORE, now=now)
+-    assert should_send_reminder_for_event(event_3, ReminderType.HOURS_3_BEFORE, now=now)
++    assert should_send_reminder_for_event(event_today, ReminderType.HOURS_3_BEFORE, now=now)
+     assert should_send_reminder_for_event(event_30, ReminderType.MINUTES_30_BEFORE, now=now)
+     assert not should_send_reminder_for_event(outside, ReminderType.HOURS_24_BEFORE, now=now)
+ 
+ 
++def test_today_reminder_due_time_uses_event_timezone_local_morning() -> None:
++    event = Event(
++        start_at=datetime(2026, 4, 7, 14, 0, tzinfo=timezone.utc),
++        end_at=datetime(2026, 4, 7, 16, 0, tzinfo=timezone.utc),
++        organizer_id=1,
++        venue_id=None,
++        title="Timezone Event",
++        slug="tz-event",
++        status=EventStatus.PUBLISHED,
++        visibility=EventVisibility.PUBLIC,
++        approval_status=EventApprovalStatus.APPROVED,
++        timezone="America/Guyana",
++        is_location_pinned=False,
 +    )
-+    op.add_column(
-+        "event_reminder_logs",
-+        sa.Column("status", sa.String(length=32), nullable=False, server_default="sent"),
-+    )
-+    op.add_column(
-+        "event_reminder_logs",
-+        sa.Column("last_attempted_at", sa.DateTime(timezone=True), nullable=True),
-+    )
-+    op.add_column(
-+        "event_reminder_logs",
-+        sa.Column("error_message", sa.Text(), nullable=True),
-+    )
-+
-+    op.execute("UPDATE event_reminder_logs SET scheduled_for = sent_at WHERE scheduled_for IS NULL")
-+
-+    op.alter_column("event_reminder_logs", "scheduled_for", nullable=False)
-+    op.alter_column("event_reminder_logs", "sent_at", nullable=True)
-+
-+    op.create_index(op.f("ix_event_reminder_logs_scheduled_for"), "event_reminder_logs", ["scheduled_for"], unique=False)
-+    op.create_index(op.f("ix_event_reminder_logs_status"), "event_reminder_logs", ["status"], unique=False)
++    due_times = get_reminder_due_times_for_event(event)
++    assert due_times[ReminderType.HOURS_3_BEFORE] == datetime(2026, 4, 7, 13, 0, tzinfo=timezone.utc)
 +
 +
-+def downgrade() -> None:
-+    op.drop_index(op.f("ix_event_reminder_logs_status"), table_name="event_reminder_logs")
-+    op.drop_index(op.f("ix_event_reminder_logs_scheduled_for"), table_name="event_reminder_logs")
-+
-+    op.alter_column("event_reminder_logs", "sent_at", nullable=False)
-+    op.drop_column("event_reminder_logs", "error_message")
-+    op.drop_column("event_reminder_logs", "last_attempted_at")
-+    op.drop_column("event_reminder_logs", "status")
-+    op.drop_column("event_reminder_logs", "scheduled_for")
+ def test_recipients_use_current_owner_after_transfer(db_session: Session) -> None:
+     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
+     order, buyer, event = _seed_order(db_session, suffix="transfer-owner", event_start_at=now + timedelta(hours=24, minutes=5))
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+ 
+     recipient = User(email="recipient-reminder@example.com", full_name="Recipient")
+     db_session.add(recipient)
+     db_session.commit()
+     db_session.refresh(recipient)
+ 
+     transfer_ticket_to_user(db_session, ticket_id=ticket.id, from_user_id=buyer.id, to_user_id=recipient.id)
+ 
+     recipients = get_eligible_event_reminder_recipients(
+         db_session,
+         event_id=event.id,
+         reminder_type=ReminderType.HOURS_24_BEFORE,
+         now=now,
+     )
+     user_ids = {user.id for user, _ in recipients}
+     assert recipient.id in user_ids
+ 
+ 
+ def test_recipient_eligibility_and_grouping(db_session: Session) -> None:
+-    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
+-    order, buyer, event = _seed_order(db_session, suffix="eligible", event_start_at=now + timedelta(hours=3, minutes=5))
++    now = datetime(2026, 4, 6, 13, 0, tzinfo=timezone.utc)
++    order, buyer, event = _seed_order(db_session, suffix="eligible", event_start_at=now + timedelta(minutes=5))
+     tickets = issue_tickets_for_completed_order(db_session, order)
+ 
+     tickets[0].status = TicketStatus.CHECKED_IN
+     tickets[0].checked_in_at = now
+     db_session.flush()
+ 
+     recipients = get_eligible_event_reminder_recipients(
+         db_session,
+         event_id=event.id,
+         reminder_type=ReminderType.HOURS_3_BEFORE,
+         now=now,
+     )
+     assert recipients == [(buyer, 1)]
+ 
+     tickets[1].status = TicketStatus.VOIDED
+     db_session.flush()
+     recipients = get_eligible_event_reminder_recipients(
+         db_session,
+         event_id=event.id,
+         reminder_type=ReminderType.HOURS_3_BEFORE,
+         now=now,
+     )
+     assert recipients == []
+ 
+     event.status = EventStatus.CANCELLED
  
 EOF
 )

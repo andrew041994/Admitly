@@ -30,7 +30,9 @@ class NotificationEventType(str, Enum):
     TICKET_TRANSFER_RECEIVED = "ticket_transfer_received"
     TICKET_TRANSFER_ACCEPTED = "ticket_transfer_accepted"
     DISPUTE_RESOLVED = "dispute_resolved"
-    EVENT_REMINDER = "event_reminder"
+    EVENT_TOMORROW_REMINDER = "event_tomorrow_reminder"
+    EVENT_TODAY_REMINDER = "event_today_reminder"
+    EVENT_STARTING_SOON_REMINDER = "event_starting_soon_reminder"
 
 
 class NotificationChannel(str, Enum):
@@ -73,7 +75,9 @@ def get_notification_channels(event_type: NotificationEventType) -> tuple[Notifi
     if event_type in {
         NotificationEventType.TICKET_TRANSFER_RECEIVED,
         NotificationEventType.TICKET_TRANSFER_ACCEPTED,
-        NotificationEventType.EVENT_REMINDER,
+        NotificationEventType.EVENT_TOMORROW_REMINDER,
+        NotificationEventType.EVENT_TODAY_REMINDER,
+        NotificationEventType.EVENT_STARTING_SOON_REMINDER,
     }:
         return (NotificationChannel.PUSH,)
     return tuple()
@@ -471,8 +475,16 @@ def _reminder_message(reminder_type: ReminderType) -> tuple[str, str]:
     if reminder_type == ReminderType.HOURS_24_BEFORE:
         return ("Your event is tomorrow", "starts tomorrow")
     if reminder_type == ReminderType.HOURS_3_BEFORE:
-        return ("Your event starts in 3 hours", "starts in about 3 hours")
-    return ("Your event starts soon", "starts in about 30 minutes")
+        return ("Your event is today", "starts today")
+    return ("Your event starts soon", "starts soon")
+
+
+def _notification_event_for_reminder(reminder_type: ReminderType) -> NotificationEventType:
+    if reminder_type == ReminderType.HOURS_24_BEFORE:
+        return NotificationEventType.EVENT_TOMORROW_REMINDER
+    if reminder_type == ReminderType.HOURS_3_BEFORE:
+        return NotificationEventType.EVENT_TODAY_REMINDER
+    return NotificationEventType.EVENT_STARTING_SOON_REMINDER
 
 
 def notify_event_reminder(
@@ -499,7 +511,7 @@ def notify_event_reminder(
     _ = ticket_count
     return dispatch_notification_event(
         db,
-        event_type=NotificationEventType.EVENT_REMINDER,
+        event_type=_notification_event_for_reminder(reminder_type),
         push=push,
     )
 

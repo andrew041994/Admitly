@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
@@ -19,9 +20,9 @@ from app.services.ticket_holds import get_guyana_now
 POLL_WINDOW = timedelta(minutes=10)
 REMINDER_OFFSETS: dict[ReminderType, timedelta] = {
     ReminderType.HOURS_24_BEFORE: timedelta(hours=24),
-    ReminderType.HOURS_3_BEFORE: timedelta(hours=3),
     ReminderType.MINUTES_30_BEFORE: timedelta(minutes=30),
 }
+EVENT_DAY_REMINDER_LOCAL_TIME = time(hour=9)
 
 
 @dataclass(slots=True)
@@ -38,13 +39,33 @@ def _to_aware(dt: datetime) -> datetime:
     return dt
 
 
+def _event_timezone(event: Event) -> ZoneInfo:
+    return ZoneInfo(event.timezone or "America/Guyana")
+
+
+def get_reminder_due_times_for_event(event: Event) -> dict[ReminderType, datetime]:
+    event_start = _to_aware(event.start_at)
+    today_due_local = datetime.combine(
+        event_start.astimezone(_event_timezone(event)).date(),
+        EVENT_DAY_REMINDER_LOCAL_TIME,
+        tzinfo=_event_timezone(event),
+    )
+    today_due = today_due_local.astimezone(timezone.utc)
+    if today_due >= event_start:
+        today_due = event_start - timedelta(hours=3)
+
+    return {
+        ReminderType.HOURS_24_BEFORE: event_start - timedelta(hours=24),
+        ReminderType.HOURS_3_BEFORE: today_due,
+        ReminderType.MINUTES_30_BEFORE: event_start - timedelta(minutes=30),
+    }
+
+
 def get_reminder_windows(now: datetime | None = None) -> dict[ReminderType, tuple[datetime, datetime]]:
     reference_now = _to_aware(now) if now is not None else get_guyana_now()
     windows: dict[ReminderType, tuple[datetime, datetime]] = {}
-    for reminder_type, offset in REMINDER_OFFSETS.items():
-        window_start = reference_now + offset
-        window_end = window_start + POLL_WINDOW
-        windows[reminder_type] = (window_start, window_end)
+    for reminder_type in (ReminderType.HOURS_24_BEFORE, ReminderType.HOURS_3_BEFORE, ReminderType.MINUTES_30_BEFORE):
+        windows[reminder_type] = (reference_now, reference_now + POLL_WINDOW)
     return windows
 
 
@@ -61,18 +82,28 @@ def should_send_reminder_for_event(
         return False
 
     window_start, window_end = get_reminder_windows(reference_now)[reminder_type]
-    return window_start <= event_start < window_end
+    due_at = get_reminder_due_times_for_event(event)[reminder_type]
+    return window_start <= due_at < window_end
 
 
 def _due_events_query(reminder_type: ReminderType, now: datetime) -> Select[tuple[Event]]:
     window_start, window_end = get_reminder_windows(now)[reminder_type]
+    if reminder_type == ReminderType.HOURS_24_BEFORE:
+        earliest_start = window_start + timedelta(hours=24)
+        latest_start = window_end + timedelta(hours=24)
+    elif reminder_type == ReminderType.MINUTES_30_BEFORE:
+        earliest_start = window_start + timedelta(minutes=30)
+        latest_start = window_end + timedelta(minutes=30)
+    else:
+        earliest_start = window_start
+        latest_start = window_end + timedelta(days=1)
     return (
         select(Event)
         .where(
             Event.status != EventStatus.CANCELLED,
             Event.start_at > now,
-            Event.start_at >= window_start,
-            Event.start_at < window_end,
+            Event.start_at >= earliest_start,
+            Event.start_at < latest_start,
         )
         .order_by(Event.id.asc())
     )

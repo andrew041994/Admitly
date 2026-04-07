@@ -215,7 +215,9 @@ def test_notification_channel_routing_policy_excludes_sms() -> None:
         NotificationChannel.EMAIL,
         NotificationChannel.PUSH,
     )
-    assert get_notification_channels(NotificationEventType.EVENT_REMINDER) == (NotificationChannel.PUSH,)
+    assert get_notification_channels(NotificationEventType.EVENT_TOMORROW_REMINDER) == (NotificationChannel.PUSH,)
+    assert get_notification_channels(NotificationEventType.EVENT_TODAY_REMINDER) == (NotificationChannel.PUSH,)
+    assert get_notification_channels(NotificationEventType.EVENT_STARTING_SOON_REMINDER) == (NotificationChannel.PUSH,)
     assert get_notification_channels(NotificationEventType.TICKET_TRANSFER_RECEIVED) == (NotificationChannel.PUSH,)
     assert get_notification_channels(NotificationEventType.TICKET_TRANSFER_ACCEPTED) == (NotificationChannel.PUSH,)
     assert "sms" not in {channel.value for event in NotificationEventType for channel in get_notification_channels(event)}
@@ -253,6 +255,42 @@ def test_event_reminder_routes_push_only_and_graceful_without_tokens(
     assert result.success is True
     assert result.channel_results["push"] == "skipped_no_tokens"
     assert sent == {"email": 0, "push": 1}
+
+
+@pytest.mark.parametrize(
+    ("reminder_type", "expected_event_type"),
+    [
+        (ReminderType.HOURS_24_BEFORE, NotificationEventType.EVENT_TOMORROW_REMINDER),
+        (ReminderType.HOURS_3_BEFORE, NotificationEventType.EVENT_TODAY_REMINDER),
+        (ReminderType.MINUTES_30_BEFORE, NotificationEventType.EVENT_STARTING_SOON_REMINDER),
+    ],
+)
+def test_event_reminder_uses_centralized_event_taxonomy(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    reminder_type: ReminderType,
+    expected_event_type: NotificationEventType,
+) -> None:
+    order, buyer, event = _seed_order(db_session, suffix=f"taxonomy-{reminder_type.value}")
+    issue_tickets_for_completed_order(db_session, order)
+    captured: list[NotificationEventType] = []
+
+    original_dispatch = notification_service.dispatch_notification_event
+
+    def _capture_dispatch(db, *, event_type, email=None, push=None):
+        captured.append(event_type)
+        return original_dispatch(db, event_type=event_type, email=email, push=push)
+
+    monkeypatch.setattr("app.services.notifications.dispatch_notification_event", _capture_dispatch)
+    notify_event_reminder(
+        db_session,
+        event=event,
+        user=buyer,
+        reminder_type=reminder_type,
+        ticket_count=1,
+    )
+
+    assert captured == [expected_event_type]
 
 
 def test_ticket_issue_email_includes_ticket_specific_qr_links(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:

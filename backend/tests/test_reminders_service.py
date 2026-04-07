@@ -20,6 +20,7 @@ from app.models.enums import (
 from app.services.reminders import (
     dispatch_due_event_reminders,
     get_eligible_event_reminder_recipients,
+    get_reminder_due_times_for_event,
     should_send_reminder_for_event,
 )
 from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
@@ -101,13 +102,13 @@ def _seed_order(db: Session, *, suffix: str, event_start_at: datetime) -> tuple[
 
 
 def test_should_send_window_logic() -> None:
-    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 4, 6, 13, 0, tzinfo=timezone.utc)
     event_24 = Event(start_at=now + timedelta(hours=24), end_at=now + timedelta(hours=25), organizer_id=1, venue_id=None,
                      title="E1", slug="e1", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
                      approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
-    event_3 = Event(start_at=now + timedelta(hours=3), end_at=now + timedelta(hours=4), organizer_id=1, venue_id=None,
+    event_today = Event(start_at=now + timedelta(minutes=5), end_at=now + timedelta(hours=1), organizer_id=1, venue_id=None,
                     title="E2", slug="e2", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
-                    approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
+                     approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
     event_30 = Event(start_at=now + timedelta(minutes=30), end_at=now + timedelta(hours=1), organizer_id=1, venue_id=None,
                      title="E3", slug="e3", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
                      approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
@@ -116,9 +117,27 @@ def test_should_send_window_logic() -> None:
                     approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
 
     assert should_send_reminder_for_event(event_24, ReminderType.HOURS_24_BEFORE, now=now)
-    assert should_send_reminder_for_event(event_3, ReminderType.HOURS_3_BEFORE, now=now)
+    assert should_send_reminder_for_event(event_today, ReminderType.HOURS_3_BEFORE, now=now)
     assert should_send_reminder_for_event(event_30, ReminderType.MINUTES_30_BEFORE, now=now)
     assert not should_send_reminder_for_event(outside, ReminderType.HOURS_24_BEFORE, now=now)
+
+
+def test_today_reminder_due_time_uses_event_timezone_local_morning() -> None:
+    event = Event(
+        start_at=datetime(2026, 4, 7, 14, 0, tzinfo=timezone.utc),
+        end_at=datetime(2026, 4, 7, 16, 0, tzinfo=timezone.utc),
+        organizer_id=1,
+        venue_id=None,
+        title="Timezone Event",
+        slug="tz-event",
+        status=EventStatus.PUBLISHED,
+        visibility=EventVisibility.PUBLIC,
+        approval_status=EventApprovalStatus.APPROVED,
+        timezone="America/Guyana",
+        is_location_pinned=False,
+    )
+    due_times = get_reminder_due_times_for_event(event)
+    assert due_times[ReminderType.HOURS_3_BEFORE] == datetime(2026, 4, 7, 13, 0, tzinfo=timezone.utc)
 
 
 def test_recipients_use_current_owner_after_transfer(db_session: Session) -> None:
@@ -144,8 +163,8 @@ def test_recipients_use_current_owner_after_transfer(db_session: Session) -> Non
 
 
 def test_recipient_eligibility_and_grouping(db_session: Session) -> None:
-    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-    order, buyer, event = _seed_order(db_session, suffix="eligible", event_start_at=now + timedelta(hours=3, minutes=5))
+    now = datetime(2026, 4, 6, 13, 0, tzinfo=timezone.utc)
+    order, buyer, event = _seed_order(db_session, suffix="eligible", event_start_at=now + timedelta(minutes=5))
     tickets = issue_tickets_for_completed_order(db_session, order)
 
     tickets[0].status = TicketStatus.CHECKED_IN
