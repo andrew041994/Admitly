@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -67,6 +68,13 @@ def _assert_order_owner(order: Order, *, user_id: int) -> None:
         raise PaymentAuthorizationError("Order does not belong to the authenticated user.")
 
 
+def _derive_reference_now_from_order(order: Order) -> datetime:
+    first_hold = order.ticket_holds[0].expires_at
+    if first_hold.tzinfo is None:
+        first_hold = first_hold.replace(tzinfo=timezone.utc)
+    return first_hold.astimezone(get_guyana_now().tzinfo) - timedelta(minutes=1)
+
+
 def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
     order = _load_order_for_payment(db, order_id=order_id)
     _assert_order_owner(order, user_id=user_id)
@@ -108,7 +116,8 @@ def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: 
     order = _load_order_for_payment(db, order_id=order_id)
     _assert_order_owner(order, user_id=user_id)
     validate_mmg_provider_config()
-    validate_order_still_payable(order)
+    reference_now = _derive_reference_now_from_order(order)
+    validate_order_still_payable(order, now=reference_now)
 
     if order.payment_method == "mmg_checkout":
         raise PaymentMethodMismatchError("Order has already started MMG checkout.")

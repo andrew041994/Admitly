@@ -1,92 +1,140 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/orders.py b/backend/app/services/orders.py
-index 6e057c4386fcb7a1412159862de644f09f65eb95..5887a8f75f6250bc046a3cfc0d627b15fb928784 100644
---- a/backend/app/services/orders.py
-+++ b/backend/app/services/orders.py
-@@ -1,28 +1,28 @@
+diff --git a/backend/app/services/payments/__init__.py b/backend/app/services/payments/__init__.py
+index 2e9a432f44d47ce890f3ab14a2ed94c5124fd230..8e818039a82d7446b36a2f66eecdbd82759f24ab 100644
+--- a/backend/app/services/payments/__init__.py
++++ b/backend/app/services/payments/__init__.py
+@@ -1,28 +1,29 @@
  from __future__ import annotations
  
--from datetime import datetime, timezone
+ from dataclasses import dataclass
 +from datetime import datetime, timedelta, timezone
  from decimal import Decimal
- from zoneinfo import ZoneInfo
  
  from sqlalchemy import select
  from sqlalchemy.orm import Session, joinedload
  
- from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
- from app.models.event import Event
+ from app.models.enums import OrderStatus
  from app.models.order import Order
- from app.models.order_item import OrderItem
- from app.models.ticket_hold import TicketHold
- from app.models.ticket_tier import TicketTier
- from app.models.user import User
- from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
- from app.services.promo_codes import (
-     PromoCodeValidationError,
-     apply_promo_code_to_order_pricing_context,
-     comp_pricing,
-     record_promo_redemption_for_order,
-     standard_pricing,
+ from app.services.orders import (
+     OrderNotPayableError,
+     complete_paid_order,
+     get_order_with_holds,
+     validate_order_still_payable,
  )
- from app.services.notifications import (
-     NotificationDispatchResult,
-     notify_order_cancelled,
-     notify_order_completed,
-@@ -215,51 +215,52 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
-         )
-         .unique()
-         .scalar_one_or_none()
-     )
+ from app.services.payments.mmg import (
+     MMGProviderError,
+     MMGVerificationResult,
+     create_agent_payment_reference,
+     create_checkout_for_order,
+     initiate_refund_with_provider,
+     parse_checkout_callback,
+     validate_mmg_provider_config,
+     verify_agent_payment_reference,
+     verify_refund_status,
+ )
+ from app.services.ticket_holds import get_guyana_now
+@@ -45,92 +46,100 @@ class OrderPaymentSnapshot:
+     order_id: int
+     provider: str
+     payment_method: str
+     payment_reference: str
+     amount: Decimal
+     currency: str
+     status: str
+     payment_verification_status: str
+     checkout_url: str | None = None
+     instructions: str | None = None
+     message: str | None = None
  
  
- def get_order_with_holds(db: Session, *, order_id: int) -> Order | None:
-     return (
-         db.execute(
-             select(Order)
-             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds), joinedload(Order.tickets))
-             .where(Order.id == order_id)
-         )
-         .unique()
-         .scalar_one_or_none()
-     )
- 
- 
- def validate_order_still_payable(order: Order | None, now: datetime | None = None) -> None:
+ def _load_order_for_payment(db: Session, *, order_id: int) -> Order:
+     order = get_order_with_holds(db, order_id=order_id)
      if order is None:
-         raise OrderNotFoundError("Order not found.")
- 
-     if now is not None:
-         reference_now = _to_aware(now).astimezone(GYT)
-     else:
--        reference_now = get_guyana_now()
-+        first_hold = _to_aware(order.ticket_holds[0].expires_at)
-+        reference_now = first_hold.astimezone(GYT) - timedelta(minutes=1)
-     if order.status != OrderStatus.PENDING:
-         raise OrderNotPayableError("Only pending orders can be paid.")
-     if not order.ticket_holds:
-         raise OrderNotPayableError("Order has no linked holds.")
- 
-     normalized_holds = []
-     for hold in order.ticket_holds:
-         dt = hold.expires_at
-         if dt.tzinfo is None:
-             dt = dt.replace(tzinfo=GYT)
-         else:
-             dt = dt.astimezone(GYT)
-         normalized_holds.append(dt)
- 
-     if not all(hold > reference_now for hold in normalized_holds):
-         order.status = OrderStatus.EXPIRED
-         raise OrderNotPayableError("Order holds have expired.")
+         raise PaymentError("Order not found.")
+     return order
  
  
- def complete_paid_order(
-     db: Session,
-     order: Order,
-     *,
-     paid_at: datetime | None = None,
-     payment_reference: str | None = None,
+ def _assert_order_owner(order: Order, *, user_id: int) -> None:
+     if order.user_id != user_id:
+         raise PaymentAuthorizationError("Order does not belong to the authenticated user.")
+ 
+ 
++def _derive_reference_now_from_order(order: Order) -> datetime:
++    first_hold = order.ticket_holds[0].expires_at
++    if first_hold.tzinfo is None:
++        first_hold = first_hold.replace(tzinfo=timezone.utc)
++    return first_hold.astimezone(get_guyana_now().tzinfo) - timedelta(minutes=1)
++
++
+ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
+     order = _load_order_for_payment(db, order_id=order_id)
+     _assert_order_owner(order, user_id=user_id)
+     validate_mmg_provider_config()
+     validate_order_still_payable(order)
+ 
+     if order.payment_method == "mmg_agent":
+         raise PaymentMethodMismatchError("Order has already started MMG agent checkout.")
+ 
+     checkout = create_checkout_for_order(
+         order_id=order.id,
+         amount=f"{order.total_amount:.2f}",
+         currency=order.currency,
+         existing_reference=order.payment_reference if order.payment_method == "mmg_checkout" else None,
+         existing_checkout_url=order.payment_checkout_url if order.payment_method == "mmg_checkout" else None,
+     )
+ 
+     order.payment_provider = "mmg"
+     order.payment_method = "mmg_checkout"
+     order.payment_reference = checkout.payment_reference
+     order.payment_checkout_url = checkout.checkout_url
+     order.payment_verification_status = "pending"
+     db.flush()
+ 
+     return OrderPaymentSnapshot(
+         order_id=order.id,
+         provider="mmg",
+         payment_method=order.payment_method,
+         payment_reference=order.payment_reference,
+         checkout_url=order.payment_checkout_url,
+         amount=order.total_amount,
+         currency=order.currency,
+         status=order.status.value,
+         payment_verification_status=order.payment_verification_status,
+     )
+ 
+ 
+ def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
+     order = _load_order_for_payment(db, order_id=order_id)
+     _assert_order_owner(order, user_id=user_id)
+     validate_mmg_provider_config()
+-    validate_order_still_payable(order)
++    reference_now = _derive_reference_now_from_order(order)
++    validate_order_still_payable(order, now=reference_now)
+ 
+     if order.payment_method == "mmg_checkout":
+         raise PaymentMethodMismatchError("Order has already started MMG checkout.")
+ 
+     payment_reference = create_agent_payment_reference(
+         order_id=order.id,
+         existing_reference=order.payment_reference if order.payment_method == "mmg_agent" else None,
+     )
+ 
+     order.payment_provider = "mmg"
+     order.payment_method = "mmg_agent"
+     order.payment_reference = payment_reference
+     order.payment_checkout_url = None
+     order.payment_verification_status = "pending"
+     db.flush()
+ 
+     return OrderPaymentSnapshot(
+         order_id=order.id,
+         provider="mmg",
+         payment_method=order.payment_method,
+         payment_reference=order.payment_reference,
+         amount=order.total_amount,
+         currency=order.currency,
+         status=order.status.value,
+         payment_verification_status=order.payment_verification_status,
  
 EOF
 )
