@@ -114,3 +114,19 @@ class EventRefundBatchStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class SupportCaseStatus(str, Enum):
+    OPEN = "open"
+    INVESTIGATING = "investigating"
+    WAITING_ON_CUSTOMER = "waiting_on_customer"
+    WAITING_ON_PAYMENT_PROVIDER = "waiting_on_payment_provider"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+
+
+class SupportCasePriority(str, Enum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    URGENT = "urgent"

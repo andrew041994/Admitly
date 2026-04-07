@@ -17,6 +17,9 @@ from app.models.ticket import Ticket
 from app.models.ticket_hold import TicketHold
 from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.ticket_tier import TicketTier
+from app.models.support_case_note import SupportCaseNote
+from app.models.admin_action_audit import AdminActionAudit
+from app.models.support_case import SupportCase
 from app.models.user import User
 from app.models.venue import Venue
 
@@ -42,4 +45,7 @@ __all__ = [
     "Ticket",
     "TicketHold",
     "TicketTransferInvite",
+    "SupportCase",
+    "SupportCaseNote",
+    "AdminActionAudit",
 ]

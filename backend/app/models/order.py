@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from app.models.user import User
     from app.models.promo_code import PromoCode
     from app.models.promo_code_redemption import PromoCodeRedemption
+    from app.models.support_case import SupportCase
 
 
 class Order(TimestampMixin, Base):
@@ -85,3 +86,4 @@ class Order(TimestampMixin, Base):
     ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="order")
     promo_code: Mapped["PromoCode | None"] = relationship(back_populates="orders")
     promo_code_redemption: Mapped["PromoCodeRedemption | None"] = relationship(back_populates="order", uselist=False)
+    support_cases: Mapped[list["SupportCase"]] = relationship(back_populates="order", cascade="all, delete-orphan")
