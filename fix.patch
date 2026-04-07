@@ -1,36 +1,63 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_finance_reporting_api.py b/backend/tests/test_finance_reporting_api.py
-index 114621fd29395eda50b0364600eeb6461fb15928..a4475b0a01c46baa98acf3c9aab83727eb338199 100644
---- a/backend/tests/test_finance_reporting_api.py
-+++ b/backend/tests/test_finance_reporting_api.py
-@@ -1,24 +1,27 @@
- import os
+diff --git a/backend/tests/test_ticket_transfer_invites.py b/backend/tests/test_ticket_transfer_invites.py
+index c29c469aa0c183ba0a0fe261fe176152953ca6b0..6ad1043f9f6d09b54b2c041a6d234c69e0e92b89 100644
+--- a/backend/tests/test_ticket_transfer_invites.py
++++ b/backend/tests/test_ticket_transfer_invites.py
+@@ -114,52 +114,52 @@ def test_invite_creation_and_acceptance_and_revocation_flow(db_session: Session,
+     assert invite.status == TransferInviteStatus.PENDING
+     assert ticket.owner_user_id == owner.id
+     assert calls == ["created"]
  
- os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+     with pytest.raises(TicketTransferError):
+         create_ticket_transfer_invite(
+             db_session,
+             ticket_id=ticket.id,
+             sender_user_id=owner.id,
+             recipient_email="next@example.com",
+         )
  
- from app.main import app
+     with pytest.raises(TicketAuthorizationError):
+         accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=other.id)
+ 
+     accepted_ticket = accept_ticket_transfer_invite(
+         db_session,
+         invite_token=invite.invite_token,
+         accepting_user_id=recipient.id,
+     )
+     assert accepted_ticket.owner_user_id == recipient.id
+     assert accepted_ticket.purchaser_user_id == owner.id
+     assert accepted_ticket.transfer_count == 1
+     assert calls == ["created", "accepted"]
+ 
+-    with pytest.raises(TicketTransferError):
+-        accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=recipient.id)
++    repeated_accept = accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=recipient.id)
++    assert repeated_accept.id == accepted_ticket.id
+ 
+     invite_2 = create_ticket_transfer_invite(
+         db_session,
+         ticket_id=ticket.id,
+         sender_user_id=recipient.id,
+         recipient_email="newperson@example.com",
+     )
+     revoked = revoke_ticket_transfer_invite(db_session, invite_token=invite_2.invite_token, actor_user_id=recipient.id)
+     assert revoked.status == TransferInviteStatus.REVOKED
+     assert calls == ["created", "accepted", "created", "revoked"]
+     with pytest.raises(TicketTransferError):
+         accept_ticket_transfer_invite(db_session, invite_token=invite_2.invite_token, accepting_user_id=other.id)
  
  
- def test_finance_reporting_routes_registered() -> None:
-     route_paths = {route.path for route in app.routes}
+ def test_invite_rejects_checked_in_voided_and_expired_and_self(db_session: Session) -> None:
+     order, owner, event = _seed_order(db_session, suffix="02")
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
  
-     assert "/organizer/events/{event_id}/finance-summary" in route_paths
-     assert "/organizer/events/{event_id}/finance-orders" in route_paths
-     assert "/organizer/events/payout-summary" in route_paths
-     assert "/internal/orders/{order_id}/reconcile" in route_paths
-     assert "/internal/orders/{order_id}/payout-status" in route_paths
-     assert "/refunds/request" in route_paths
-     assert "/refunds/my" in route_paths
-     assert "/disputes" in route_paths
-     assert "/admin/refunds" in route_paths
-     assert "/admin/refunds/{refund_id}/approve" in route_paths
-     assert "/admin/refunds/{refund_id}/reject" in route_paths
-     assert "/admin/disputes" in route_paths
-     assert "/admin/disputes/{dispute_id}/resolve" in route_paths
-     assert "/admin/disputes/{dispute_id}/reject" in route_paths
-+    assert "/admin/finance/summary" in route_paths
-+    assert "/admin/finance/orders" in route_paths
-+    assert "/admin/finance/orders/export.csv" in route_paths
+     with pytest.raises(TicketTransferError):
+         create_ticket_transfer_invite(db_session, ticket_id=ticket.id, sender_user_id=owner.id, recipient_user_id=owner.id)
+ 
+     checked_in_ticket = ticket
+     checked_in_ticket.status = TicketStatus.CHECKED_IN
+     db_session.commit()
+     with pytest.raises(TicketTransferError):
  
 EOF
 )

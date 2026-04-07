@@ -688,6 +688,12 @@ def mark_order_reconciled(
     if actor is None or not actor.is_admin:
         raise FinanceReportingAuthorizationError("Only admins can mark orders reconciled.")
 
+    if order.reconciliation_status == ReconciliationStatus.RECONCILED:
+        if note:
+            order.reconciliation_note = note.strip()
+        db.flush()
+        return order
+
     order.reconciliation_status = ReconciliationStatus.RECONCILED
     order.reconciled_at = get_guyana_now()
     order.reconciled_by_user_id = actor_user_id
@@ -713,6 +719,12 @@ def mark_order_payout_status(
         raise FinanceReportingAuthorizationError("Only admins can update payout status.")
 
     now = get_guyana_now()
+    if order.payout_status == payout_status:
+        if note:
+            order.payout_note = note.strip()
+        db.flush()
+        return order
+
     order.payout_status = payout_status
     order.payout_note = note.strip() if note else None
     if payout_status == PayoutStatus.INCLUDED:

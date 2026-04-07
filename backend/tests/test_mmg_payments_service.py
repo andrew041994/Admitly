@@ -245,6 +245,44 @@ def test_paid_callback_is_idempotent_and_does_not_double_issue_tickets(db_sessio
     assert len(checkout_order.tickets) == 2
 
 
+def test_unpaid_callback_after_completion_is_ignored(db_session: Session) -> None:
+    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email="outoforder@example.com")
+    create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
+    handle_mmg_callback(
+        db_session,
+        payload={"payment_reference": checkout_order.payment_reference, "status": "paid"},
+    )
+    replay = handle_mmg_callback(
+        db_session,
+        payload={"payment_reference": checkout_order.payment_reference, "status": "failed"},
+    )
+    db_session.refresh(checkout_order)
+    assert replay.payment_verification_status == "verified"
+    assert replay.status == "completed"
+    assert len(checkout_order.tickets) == 2
+
+
+def test_duplicate_agent_submit_after_completion_is_safe(db_session: Session) -> None:
+    order, _, user = _seed_order_with_hold(db_session, user_email="dup-agent@example.com")
+    initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+    first = submit_mmg_agent_payment(
+        db_session,
+        order_id=order.id,
+        user_id=user.id,
+        submitted_reference_code=initiated.payment_reference,
+    )
+    second = submit_mmg_agent_payment(
+        db_session,
+        order_id=order.id,
+        user_id=user.id,
+        submitted_reference_code=initiated.payment_reference,
+    )
+    db_session.refresh(order)
+    assert first.status == "completed"
+    assert second.status == "completed"
+    assert len(order.tickets) == 2
+
+
 def test_callback_cannot_complete_order_after_hold_expiration(db_session: Session) -> None:
     checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email="expired-callback@example.com")
     create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)

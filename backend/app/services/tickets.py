@@ -515,6 +515,12 @@ def accept_ticket_transfer_invite(
         )
         if invite is None:
             raise TicketNotFoundError("Transfer invite not found.")
+        if (
+            invite.status == TransferInviteStatus.ACCEPTED
+            and invite.recipient_user_id == accepting_user_id
+            and invite.ticket.owner_user_id == accepting_user_id
+        ):
+            return invite.ticket
         if invite.status != TransferInviteStatus.PENDING:
             raise TicketTransferError("Transfer invite is no longer pending.")
 

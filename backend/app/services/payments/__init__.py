@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import logging
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -26,6 +27,8 @@ from app.services.payments.mmg import (
     verify_refund_status,
 )
 from app.services.ticket_holds import get_guyana_now
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentError(ValueError):
@@ -170,6 +173,20 @@ def submit_mmg_agent_payment(
     with tx_ctx:
         order = _load_order_for_payment(db, order_id=order_id)
         _assert_order_owner(order, user_id=user_id)
+        if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
+            logger.info("Ignoring duplicate MMG agent submit for finalized order", extra={"order_id": order.id})
+            return OrderPaymentSnapshot(
+                order_id=order.id,
+                provider="mmg",
+                payment_method=order.payment_method or "mmg_agent",
+                payment_reference=order.payment_reference or "",
+                amount=order.total_amount,
+                currency=order.currency,
+                status=order.status.value,
+                payment_verification_status=order.payment_verification_status,
+                message="Payment already verified.",
+            )
+
         validate_order_still_payable(order)
 
         if order.payment_method != "mmg_agent" or not order.payment_reference:
@@ -235,10 +252,16 @@ def handle_mmg_callback(db: Session, *, payload: dict) -> OrderPaymentSnapshot:
             raise PaymentError("Order not found for payment reference.")
 
         if parsed.paid:
-            order.payment_verification_status = "verified"
-            complete_paid_order(db, order, paid_at=get_guyana_now(), payment_reference=parsed.payment_reference)
+            if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
+                logger.info("Duplicate paid callback ignored for finalized order", extra={"order_id": order.id})
+            else:
+                order.payment_verification_status = "verified"
+                complete_paid_order(db, order, paid_at=get_guyana_now(), payment_reference=parsed.payment_reference)
         else:
-            order.payment_verification_status = "pending_verification"
+            if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
+                logger.info("Out-of-order unpaid callback ignored for finalized order", extra={"order_id": order.id})
+            else:
+                order.payment_verification_status = "pending_verification"
 
         db.flush()
         return OrderPaymentSnapshot(

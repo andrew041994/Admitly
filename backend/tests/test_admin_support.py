@@ -253,6 +253,26 @@ def test_blank_note_and_sensitive_reason_validation(db_session: Session) -> None
     with pytest.raises(Exception):
         run_admin_support_action(db_session, order_id=order.id, actor_user_id=admin.id, action_type="flag_for_fraud_review", reason="  ")
 
+def test_flag_for_fraud_review_replay_is_noop(db_session: Session) -> None:
+    order, admin, _ = _seed(db_session, suffix="fraud-noop")
+    first = run_admin_support_action(
+        db_session,
+        order_id=order.id,
+        actor_user_id=admin.id,
+        action_type="flag_for_fraud_review",
+        reason="suspicious retries",
+    )
+    second = run_admin_support_action(
+        db_session,
+        order_id=order.id,
+        actor_user_id=admin.id,
+        action_type="flag_for_fraud_review",
+        reason="duplicate click",
+    )
+    assert first.success is True
+    assert second.success is True
+    assert "No-op" in second.message
+
 
 def test_admin_support_routes_registered() -> None:
     route_paths = {route.path for route in app.routes}

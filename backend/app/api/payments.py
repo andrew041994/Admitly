@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.rate_limit import apply_rate_limit, request_client_ip
+from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.mmg import MMGCallbackResponse
 from app.services.orders import OrderNotPayableError
@@ -10,7 +12,18 @@ router = APIRouter(prefix="/payments", tags=["payments"])
 
 
 @router.post("/mmg/callback", response_model=MMGCallbackResponse)
-def mmg_callback(payload: dict, db: Session = Depends(get_db)) -> MMGCallbackResponse:
+def mmg_callback(
+    payload: dict,
+    db: Session = Depends(get_db),
+    client_ip: str = Depends(request_client_ip),
+) -> MMGCallbackResponse:
+    reference = str(payload.get("payment_reference") or payload.get("reference") or "unknown")
+    apply_rate_limit(
+        scope="mmg_callback",
+        key=f"{reference}:{client_ip}",
+        limit=settings.rate_limit_callback_count,
+        window_seconds=settings.rate_limit_callback_window_seconds,
+    )
     try:
         snapshot = handle_mmg_callback(db, payload=payload)
     except MMGProviderError as exc:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
+import logging
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -43,6 +44,7 @@ ACTIVE_CASE_STATUSES = {
 
 
 SENSITIVE_ACTIONS = {"reopen_refund_review", "flag_for_fraud_review", "remove_promo_application"}
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -329,42 +331,61 @@ def run_admin_support_action(
         result = SupportActionResult(action_type=normalized_action, success=True, message="Transfer invite resent.")
 
     elif normalized_action == "reopen_refund_review":
-        patch_support_case(
-            db,
-            order_id=order_id,
-            actor_user_id=actor_user_id,
-            status=SupportCaseStatus.INVESTIGATING,
-            priority=None,
-            assigned_to_user_id=None,
-            category="refund_issue",
-        )
-        add_support_case_note(
-            db,
-            order_id=order_id,
-            author_user_id=actor_user_id,
-            body="System: refund review reopened by admin action.",
-            is_system_note=True,
-        )
-        result = SupportActionResult(action_type=normalized_action, success=True, message="Refund review reopened.")
+        existing_case = get_relevant_support_case_for_order(db, order_id=order_id)
+        if (
+            existing_case is not None
+            and existing_case.status == SupportCaseStatus.INVESTIGATING
+            and existing_case.category == "refund_issue"
+        ):
+            result = SupportActionResult(action_type=normalized_action, success=True, message="No-op: refund review already open.")
+            logger.info("Support action no-op", extra={"action": normalized_action, "order_id": order_id})
+        else:
+            patch_support_case(
+                db,
+                order_id=order_id,
+                actor_user_id=actor_user_id,
+                status=SupportCaseStatus.INVESTIGATING,
+                priority=None,
+                assigned_to_user_id=None,
+                category="refund_issue",
+            )
+            add_support_case_note(
+                db,
+                order_id=order_id,
+                author_user_id=actor_user_id,
+                body="System: refund review reopened by admin action.",
+                is_system_note=True,
+            )
+            result = SupportActionResult(action_type=normalized_action, success=True, message="Refund review reopened.")
 
     elif normalized_action == "flag_for_fraud_review":
-        patch_support_case(
-            db,
-            order_id=order_id,
-            actor_user_id=actor_user_id,
-            status=SupportCaseStatus.INVESTIGATING,
-            priority=SupportCasePriority.HIGH,
-            assigned_to_user_id=None,
-            category="fraud_review",
-        )
-        add_support_case_note(
-            db,
-            order_id=order_id,
-            author_user_id=actor_user_id,
-            body="System: order flagged for fraud review.",
-            is_system_note=True,
-        )
-        result = SupportActionResult(action_type=normalized_action, success=True, message="Order flagged for fraud review.")
+        existing_case = get_relevant_support_case_for_order(db, order_id=order_id)
+        if (
+            existing_case is not None
+            and existing_case.status == SupportCaseStatus.INVESTIGATING
+            and existing_case.priority == SupportCasePriority.HIGH
+            and existing_case.category == "fraud_review"
+        ):
+            result = SupportActionResult(action_type=normalized_action, success=True, message="No-op: order already flagged for fraud review.")
+            logger.info("Support action no-op", extra={"action": normalized_action, "order_id": order_id})
+        else:
+            patch_support_case(
+                db,
+                order_id=order_id,
+                actor_user_id=actor_user_id,
+                status=SupportCaseStatus.INVESTIGATING,
+                priority=SupportCasePriority.HIGH,
+                assigned_to_user_id=None,
+                category="fraud_review",
+            )
+            add_support_case_note(
+                db,
+                order_id=order_id,
+                author_user_id=actor_user_id,
+                body="System: order flagged for fraud review.",
+                is_system_note=True,
+            )
+            result = SupportActionResult(action_type=normalized_action, success=True, message="Order flagged for fraud review.")
 
     elif normalized_action == "remove_promo_application":
         if order.status != OrderStatus.PENDING:

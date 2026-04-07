@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
+import logging
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,7 @@ from app.models.user import User
 from app.services.notifications import notify_event_reminder
 from app.services.ticket_holds import get_guyana_now
 
+logger = logging.getLogger(__name__)
 
 POLL_WINDOW = timedelta(minutes=10)
 REMINDER_OFFSETS: dict[ReminderType, timedelta] = {
@@ -181,8 +183,13 @@ def dispatch_due_event_reminders(
                     ticket_count=ticket_count,
                 )
                 if not result.success:
+                    logger.warning(
+                        "Reminder dispatch failed",
+                        extra={"event_id": event.id, "user_id": user.id, "reminder_type": reminder_type.value},
+                    )
                     summary.reminders_skipped += 1
                     continue
+                
 
                 log = EventReminderLog(
                     event_id=event.id,
@@ -195,6 +202,10 @@ def dispatch_due_event_reminders(
                         db.add(log)
                         db.flush()
                 except IntegrityError:
+                    logger.info(
+                        "Duplicate reminder log detected",
+                        extra={"event_id": event.id, "user_id": user.id, "reminder_type": reminder_type.value},
+                    )
                     summary.reminders_skipped += 1
                     continue
 

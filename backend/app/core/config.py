@@ -33,6 +33,20 @@ class Settings(BaseSettings):
 
     ticket_public_base_url: str = Field(default="https://admitly.app", alias="TICKET_PUBLIC_BASE_URL")
 
+
+    rate_limit_order_create_count: int = Field(default=8, alias="RATE_LIMIT_ORDER_CREATE_COUNT")
+    rate_limit_order_create_window_seconds: int = Field(default=60, alias="RATE_LIMIT_ORDER_CREATE_WINDOW_SECONDS")
+    rate_limit_payment_initiate_count: int = Field(default=6, alias="RATE_LIMIT_PAYMENT_INITIATE_COUNT")
+    rate_limit_payment_initiate_window_seconds: int = Field(default=60, alias="RATE_LIMIT_PAYMENT_INITIATE_WINDOW_SECONDS")
+    rate_limit_payment_submit_count: int = Field(default=6, alias="RATE_LIMIT_PAYMENT_SUBMIT_COUNT")
+    rate_limit_payment_submit_window_seconds: int = Field(default=300, alias="RATE_LIMIT_PAYMENT_SUBMIT_WINDOW_SECONDS")
+    rate_limit_transfer_invite_count: int = Field(default=10, alias="RATE_LIMIT_TRANSFER_INVITE_COUNT")
+    rate_limit_transfer_invite_window_seconds: int = Field(default=300, alias="RATE_LIMIT_TRANSFER_INVITE_WINDOW_SECONDS")
+    rate_limit_admin_action_count: int = Field(default=20, alias="RATE_LIMIT_ADMIN_ACTION_COUNT")
+    rate_limit_admin_action_window_seconds: int = Field(default=60, alias="RATE_LIMIT_ADMIN_ACTION_WINDOW_SECONDS")
+    rate_limit_callback_count: int = Field(default=120, alias="RATE_LIMIT_CALLBACK_COUNT")
+    rate_limit_callback_window_seconds: int = Field(default=60, alias="RATE_LIMIT_CALLBACK_WINDOW_SECONDS")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

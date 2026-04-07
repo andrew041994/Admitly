@@ -136,8 +136,8 @@ def test_invite_creation_and_acceptance_and_revocation_flow(db_session: Session,
     assert accepted_ticket.transfer_count == 1
     assert calls == ["created", "accepted"]
 
-    with pytest.raises(TicketTransferError):
-        accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=recipient.id)
+    repeated_accept = accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=recipient.id)
+    assert repeated_accept.id == accepted_ticket.id
 
     invite_2 = create_ticket_transfer_invite(
         db_session,

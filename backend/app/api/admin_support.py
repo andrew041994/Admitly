@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.api.rate_limit import apply_rate_limit, request_client_ip
 from app.api.ticket_holds import get_current_user_id
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.admin_action_audit import AdminActionAudit
 from app.models.dispute import Dispute
@@ -215,8 +217,15 @@ def run_support_action(
     payload: SupportActionRequest,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+    client_ip: str = Depends(request_client_ip),
 ) -> SupportActionResponse:
     _require_admin(db, user_id=user_id)
+    apply_rate_limit(
+        scope="admin_support_action",
+        key=f"{user_id}:{order_id}:{payload.action_type}:{client_ip}",
+        limit=settings.rate_limit_admin_action_count,
+        window_seconds=settings.rate_limit_admin_action_window_seconds,
+    )
     try:
         result = run_admin_support_action(
             db,

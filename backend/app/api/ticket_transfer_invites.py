@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.rate_limit import apply_rate_limit, request_client_ip
 from app.api.ticket_holds import get_current_user_id
+from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.ticket_transfer_invite import (
     AcceptTicketTransferInviteResponse,
@@ -47,7 +49,14 @@ def create_transfer_invite(
     payload: CreateTicketTransferInviteRequest,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+    client_ip: str = Depends(request_client_ip),
 ) -> TicketTransferInviteResponse:
+    apply_rate_limit(
+        scope="transfer_invite_create",
+        key=f"{user_id}:{ticket_id}:{client_ip}",
+        limit=settings.rate_limit_transfer_invite_count,
+        window_seconds=settings.rate_limit_transfer_invite_window_seconds,
+    )
     try:
         invite = create_ticket_transfer_invite(
             db,
@@ -72,7 +81,14 @@ def accept_transfer_invite(
     invite_token: str,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+    client_ip: str = Depends(request_client_ip),
 ) -> AcceptTicketTransferInviteResponse:
+    apply_rate_limit(
+        scope="transfer_invite_accept",
+        key=f"{user_id}:{invite_token}:{client_ip}",
+        limit=settings.rate_limit_payment_submit_count,
+        window_seconds=settings.rate_limit_payment_submit_window_seconds,
+    )
     try:
         ticket = accept_ticket_transfer_invite(db, invite_token=invite_token, accepting_user_id=user_id)
     except TicketAuthorizationError as exc:

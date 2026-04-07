@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.rate_limit import apply_rate_limit, request_client_ip
 from app.api.ticket_holds import get_current_user_id
 from app.core.config import settings
 from app.db.session import get_db
@@ -98,7 +99,14 @@ def create_order_from_holds(
     payload: CreatePendingOrderFromHoldsRequest,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+    client_ip: str = Depends(request_client_ip),
 ) -> OrderResponse:
+    apply_rate_limit(
+        scope="order_create",
+        key=f"{user_id}:{client_ip}",
+        limit=settings.rate_limit_order_create_count,
+        window_seconds=settings.rate_limit_order_create_window_seconds,
+    )
     try:
         order = create_pending_order_from_holds(
             db,
@@ -191,8 +199,15 @@ def initiate_mmg_checkout(
     order_id: int,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+    client_ip: str = Depends(request_client_ip),
 ) -> CreateOrderMMGCheckoutResponse:
     _require_mmg_enabled()
+    apply_rate_limit(
+        scope="payment_initiate",
+        key=f"{user_id}:{order_id}:{client_ip}",
+        limit=settings.rate_limit_payment_initiate_count,
+        window_seconds=settings.rate_limit_payment_initiate_window_seconds,
+    )
     try:
         snapshot = create_mmg_checkout_for_order(db, order_id=order_id, user_id=user_id)
     except PaymentAuthorizationError as exc:
@@ -222,8 +237,15 @@ def initiate_mmg_agent_checkout(
     order_id: int,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+    client_ip: str = Depends(request_client_ip),
 ) -> CreateOrderMMGAgentResponse:
     _require_mmg_enabled()
+    apply_rate_limit(
+        scope="payment_initiate",
+        key=f"{user_id}:{order_id}:{client_ip}",
+        limit=settings.rate_limit_payment_initiate_count,
+        window_seconds=settings.rate_limit_payment_initiate_window_seconds,
+    )
     try:
         snapshot = create_mmg_agent_checkout_for_order(db, order_id=order_id, user_id=user_id)
     except PaymentAuthorizationError as exc:
@@ -252,8 +274,15 @@ def submit_agent_payment(
     payload: SubmitMMGAgentPaymentRequest,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+    client_ip: str = Depends(request_client_ip),
 ) -> SubmitMMGAgentPaymentResponse:
     _require_mmg_enabled()
+    apply_rate_limit(
+        scope="payment_submit",
+        key=f"{user_id}:{order_id}:{client_ip}",
+        limit=settings.rate_limit_payment_submit_count,
+        window_seconds=settings.rate_limit_payment_submit_window_seconds,
+    )
     try:
         snapshot = submit_mmg_agent_payment(
             db,
@@ -284,7 +313,14 @@ def resend_order_confirmation_notification(
     order_id: int,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+    client_ip: str = Depends(request_client_ip),
 ) -> NotificationDispatchResponse:
+    apply_rate_limit(
+        scope="resend_confirmation",
+        key=f"{user_id}:{order_id}:{client_ip}",
+        limit=settings.rate_limit_payment_submit_count,
+        window_seconds=settings.rate_limit_payment_submit_window_seconds,
+    )
     try:
         result = resend_order_confirmation(db, order_id=order_id, actor_user_id=user_id)
     except OrderNotFoundError as exc:
