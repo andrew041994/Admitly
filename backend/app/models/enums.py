@@ -44,3 +44,9 @@ class TransferInviteStatus(str, Enum):
     ACCEPTED = "accepted"
     REVOKED = "revoked"
     EXPIRED = "expired"
+
+
+class ReminderType(str, Enum):
+    HOURS_24_BEFORE = "24_hours_before"
+    HOURS_3_BEFORE = "3_hours_before"
+    MINUTES_30_BEFORE = "30_minutes_before"

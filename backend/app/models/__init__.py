@@ -1,4 +1,5 @@
 from app.models.event import Event
+from app.models.event_reminder_log import EventReminderLog
 from app.models.event_staff import EventStaff
 from app.models.order import Order
 from app.models.order_item import OrderItem
@@ -16,6 +17,7 @@ __all__ = [
     "OrganizerProfile",
     "Venue",
     "Event",
+    "EventReminderLog",
     "EventStaff",
     "TicketTier",
     "Order",

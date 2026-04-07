@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import logging
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass
+from datetime import timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
 from app.models.event import Event
+from app.models.enums import ReminderType
 from app.models.order import Order
 from app.models.push_token import PushToken
 from app.models.ticket import Ticket
@@ -395,3 +398,53 @@ def deactivate_push_token(db: Session, *, user_id: int, token: str) -> bool:
     push_token.is_active = False
     db.flush()
     return True
+
+
+def _to_aware(dt):
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _format_event_start_for_message(event: Event) -> str:
+    return _to_aware(event.start_at).astimezone(ZoneInfo("America/Guyana")).strftime("%Y-%m-%d %H:%M %Z")
+
+
+def _reminder_message(reminder_type: ReminderType) -> tuple[str, str]:
+    if reminder_type == ReminderType.HOURS_24_BEFORE:
+        return ("Your event is tomorrow", "starts tomorrow")
+    if reminder_type == ReminderType.HOURS_3_BEFORE:
+        return ("Your event starts in 3 hours", "starts in about 3 hours")
+    return ("Your event starts soon", "starts in about 30 minutes")
+
+
+def notify_event_reminder(
+    db: Session,
+    *,
+    event: Event,
+    user: User,
+    reminder_type: ReminderType,
+    ticket_count: int,
+) -> NotificationDispatchResult:
+    subject_prefix, body_phrase = _reminder_message(reminder_type)
+    local_start = _format_event_start_for_message(event)
+    email = EmailMessage(
+        to_email=user.email,
+        subject=f"{subject_prefix}: {event.title}",
+        body=(
+            f"{event.title} {body_phrase}. Start time: {local_start}. "
+            f"You currently have {ticket_count} valid ticket(s)."
+        ),
+    ) if user.email else None
+
+    push = PushMessage(
+        user_id=user.id,
+        title=subject_prefix,
+        body=f"{event.title} starts at {local_start}.",
+        data={
+            "type": "event_reminder",
+            "event_id": str(event.id),
+            "reminder_type": reminder_type.value,
+        },
+    )
+    return _dispatch(db, email=email, push=push)

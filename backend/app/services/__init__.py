@@ -13,6 +13,11 @@ from app.services.orders import (
     get_order_for_user,
     validate_order_still_payable,
 )
+from app.services.reminders import (
+    ReminderDispatchSummary,
+    dispatch_due_event_reminders,
+    run_event_reminder_dispatch_job,
+)
 from app.services.ticket_holds import (
     HoldCreationResult,
     InsufficientAvailabilityError,
@@ -25,6 +30,9 @@ from app.services.ticket_holds import (
 )
 
 __all__ = [
+    "ReminderDispatchSummary",
+    "dispatch_due_event_reminders",
+    "run_event_reminder_dispatch_job",
     "HoldCreationResult",
     "InsufficientAvailabilityError",
     "TicketHoldError",
