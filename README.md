@@ -7,6 +7,7 @@ Premium event ticketing platform for Guyana.
 - ORM: SQLAlchemy
 - Migrations: Alembic
 - Database: PostgreSQL
+- Admin frontend foundation: React + TypeScript + Vite (`admin/`)
 
 ## Planned apps
 - Backend API
