@@ -13,6 +13,8 @@ from app.models.promo_code import PromoCode
 from app.models.promo_code_redemption import PromoCodeRedemption
 from app.models.promo_code_ticket_tier import PromoCodeTicketTier
 from app.models.push_token import PushToken
+from app.models.verification_token import EmailVerificationToken
+from app.models.password_reset_token import PasswordResetToken
 from app.models.ticket import Ticket
 from app.models.ticket_check_in_attempt import TicketCheckInAttempt
 from app.models.ticket_hold import TicketHold
@@ -47,6 +49,8 @@ __all__ = [
     "PromoCodeRedemption",
     "PromoCodeTicketTier",
     "PushToken",
+    "EmailVerificationToken",
+    "PasswordResetToken",
     "Ticket",
     "TicketCheckInAttempt",
     "TicketHold",

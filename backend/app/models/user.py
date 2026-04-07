@@ -1,6 +1,9 @@
+from __future__ import annotations
+
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -10,10 +13,12 @@ if TYPE_CHECKING:
     from app.models.event_staff import EventStaff
     from app.models.event_reminder_log import EventReminderLog
     from app.models.organizer_profile import OrganizerProfile
-    from app.models.ticket import Ticket
+    from app.models.password_reset_token import PasswordResetToken
     from app.models.push_token import PushToken
+    from app.models.ticket import Ticket
     from app.models.ticket_hold import TicketHold
     from app.models.ticket_transfer_invite import TicketTransferInvite
+    from app.models.verification_token import EmailVerificationToken
 
 
 class User(TimestampMixin, Base):
@@ -25,7 +30,10 @@ class User(TimestampMixin, Base):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    auth_provider: Mapped[str] = mapped_column(String(32), default="local", nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     organizer_profile: Mapped["OrganizerProfile | None"] = relationship(
         back_populates="user", uselist=False
@@ -66,4 +74,10 @@ class User(TimestampMixin, Base):
     )
     revoked_transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
         back_populates="revoked_by", foreign_keys="TicketTransferInvite.revoked_by_user_id"
+    )
+    email_verification_tokens: Mapped[list["EmailVerificationToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    password_reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
     )

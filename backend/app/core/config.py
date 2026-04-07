@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     ticket_public_base_url: str = Field(default="https://admitly.app", alias="TICKET_PUBLIC_BASE_URL")
 
 
+
+    jwt_secret: str = Field(default="dev-change-me", alias="JWT_SECRET")
+    jwt_access_token_exp_minutes: int = Field(default=15, alias="JWT_ACCESS_TOKEN_EXP_MINUTES")
+    jwt_refresh_token_exp_days: int = Field(default=30, alias="JWT_REFRESH_TOKEN_EXP_DAYS")
+    verification_token_exp_hours: int = Field(default=24, alias="VERIFICATION_TOKEN_EXP_HOURS")
+    password_reset_token_exp_minutes: int = Field(default=60, alias="PASSWORD_RESET_TOKEN_EXP_MINUTES")
     rate_limit_order_create_count: int = Field(default=8, alias="RATE_LIMIT_ORDER_CREATE_COUNT")
     rate_limit_order_create_window_seconds: int = Field(default=60, alias="RATE_LIMIT_ORDER_CREATE_WINDOW_SECONDS")
     rate_limit_payment_initiate_count: int = Field(default=6, alias="RATE_LIMIT_PAYMENT_INITIATE_COUNT")
