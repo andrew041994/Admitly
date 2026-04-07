@@ -84,8 +84,8 @@ def get_ticket_type_availability(db: Session, ticket_tier_id: int, now: datetime
             .outerjoin(Order, Order.id == TicketHold.order_id)
             .where(
                 TicketHold.ticket_tier_id == ticket_tier_id,
-                TicketHold.expires_at > reference_now,
-                (TicketHold.order_id.is_(None)) | (Order.status == OrderStatus.PENDING),
+                ((TicketHold.order_id.is_(None)) & (TicketHold.expires_at > reference_now))
+                | ((TicketHold.order_id.is_not(None)) & (Order.status == OrderStatus.PENDING)),
             )
         ).scalar_one()
         or 0

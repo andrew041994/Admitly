@@ -1,140 +1,63 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/payments/__init__.py b/backend/app/services/payments/__init__.py
-index 2e9a432f44d47ce890f3ab14a2ed94c5124fd230..8e818039a82d7446b36a2f66eecdbd82759f24ab 100644
---- a/backend/app/services/payments/__init__.py
-+++ b/backend/app/services/payments/__init__.py
-@@ -1,28 +1,29 @@
- from __future__ import annotations
+diff --git a/backend/app/services/ticket_holds.py b/backend/app/services/ticket_holds.py
+index 06d14df365a74b98d0a946b064923cf8e84bb7cf..8f307f95fc2dbc8c2893d83f331c4a90d8fd4a48 100644
+--- a/backend/app/services/ticket_holds.py
++++ b/backend/app/services/ticket_holds.py
+@@ -62,52 +62,52 @@ def get_ticket_type_availability(db: Session, ticket_tier_id: int, now: datetime
+     if now is None:
+         reference_now = datetime.combine(reference_now.date(), time.min, tzinfo=reference_now.tzinfo)
  
- from dataclasses import dataclass
-+from datetime import datetime, timedelta, timezone
- from decimal import Decimal
+     ticket_tier = db.execute(
+         select(TicketTier).where(TicketTier.id == ticket_tier_id)
+     ).scalar_one_or_none()
+     if ticket_tier is None:
+         raise TicketHoldError("Ticket tier not found.")
  
- from sqlalchemy import select
- from sqlalchemy.orm import Session, joinedload
- 
- from app.models.enums import OrderStatus
- from app.models.order import Order
- from app.services.orders import (
-     OrderNotPayableError,
-     complete_paid_order,
-     get_order_with_holds,
-     validate_order_still_payable,
- )
- from app.services.payments.mmg import (
-     MMGProviderError,
-     MMGVerificationResult,
-     create_agent_payment_reference,
-     create_checkout_for_order,
-     initiate_refund_with_provider,
-     parse_checkout_callback,
-     validate_mmg_provider_config,
-     verify_agent_payment_reference,
-     verify_refund_status,
- )
- from app.services.ticket_holds import get_guyana_now
-@@ -45,92 +46,100 @@ class OrderPaymentSnapshot:
-     order_id: int
-     provider: str
-     payment_method: str
-     payment_reference: str
-     amount: Decimal
-     currency: str
-     status: str
-     payment_verification_status: str
-     checkout_url: str | None = None
-     instructions: str | None = None
-     message: str | None = None
- 
- 
- def _load_order_for_payment(db: Session, *, order_id: int) -> Order:
-     order = get_order_with_holds(db, order_id=order_id)
-     if order is None:
-         raise PaymentError("Order not found.")
-     return order
- 
- 
- def _assert_order_owner(order: Order, *, user_id: int) -> None:
-     if order.user_id != user_id:
-         raise PaymentAuthorizationError("Order does not belong to the authenticated user.")
- 
- 
-+def _derive_reference_now_from_order(order: Order) -> datetime:
-+    first_hold = order.ticket_holds[0].expires_at
-+    if first_hold.tzinfo is None:
-+        first_hold = first_hold.replace(tzinfo=timezone.utc)
-+    return first_hold.astimezone(get_guyana_now().tzinfo) - timedelta(minutes=1)
-+
-+
- def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
-     order = _load_order_for_payment(db, order_id=order_id)
-     _assert_order_owner(order, user_id=user_id)
-     validate_mmg_provider_config()
-     validate_order_still_payable(order)
- 
-     if order.payment_method == "mmg_agent":
-         raise PaymentMethodMismatchError("Order has already started MMG agent checkout.")
- 
-     checkout = create_checkout_for_order(
-         order_id=order.id,
-         amount=f"{order.total_amount:.2f}",
-         currency=order.currency,
-         existing_reference=order.payment_reference if order.payment_method == "mmg_checkout" else None,
-         existing_checkout_url=order.payment_checkout_url if order.payment_method == "mmg_checkout" else None,
+     completed_sold = (
+         db.execute(
+             select(func.coalesce(func.sum(OrderItem.quantity), 0))
+             .join(Order, Order.id == OrderItem.order_id)
+             .where(OrderItem.ticket_tier_id == ticket_tier_id, Order.status == OrderStatus.COMPLETED)
+         ).scalar_one()
+         or 0
      )
  
-     order.payment_provider = "mmg"
-     order.payment_method = "mmg_checkout"
-     order.payment_reference = checkout.payment_reference
-     order.payment_checkout_url = checkout.checkout_url
-     order.payment_verification_status = "pending"
-     db.flush()
- 
-     return OrderPaymentSnapshot(
-         order_id=order.id,
-         provider="mmg",
-         payment_method=order.payment_method,
-         payment_reference=order.payment_reference,
-         checkout_url=order.payment_checkout_url,
-         amount=order.total_amount,
-         currency=order.currency,
-         status=order.status.value,
-         payment_verification_status=order.payment_verification_status,
+     active_holds = (
+         db.execute(
+             select(func.coalesce(func.sum(TicketHold.quantity), 0))
+             .select_from(TicketHold)
+             .outerjoin(Order, Order.id == TicketHold.order_id)
+             .where(
+                 TicketHold.ticket_tier_id == ticket_tier_id,
+-                TicketHold.expires_at > reference_now,
+-                (TicketHold.order_id.is_(None)) | (Order.status == OrderStatus.PENDING),
++                ((TicketHold.order_id.is_(None)) & (TicketHold.expires_at > reference_now))
++                | ((TicketHold.order_id.is_not(None)) & (Order.status == OrderStatus.PENDING)),
+             )
+         ).scalar_one()
+         or 0
      )
  
+     return max(ticket_tier.quantity_total - int(completed_sold) - int(active_holds), 0)
  
- def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
-     order = _load_order_for_payment(db, order_id=order_id)
-     _assert_order_owner(order, user_id=user_id)
-     validate_mmg_provider_config()
--    validate_order_still_payable(order)
-+    reference_now = _derive_reference_now_from_order(order)
-+    validate_order_still_payable(order, now=reference_now)
  
-     if order.payment_method == "mmg_checkout":
-         raise PaymentMethodMismatchError("Order has already started MMG checkout.")
+ def create_ticket_hold(
+     db: Session,
+     *,
+     user_id: int,
+     ticket_tier_id: int,
+     quantity: int,
+     now: datetime | None = None,
+ ) -> HoldCreationResult:
+     if quantity <= 0:
+         raise TicketHoldError("Quantity must be greater than 0.")
  
-     payment_reference = create_agent_payment_reference(
-         order_id=order.id,
-         existing_reference=order.payment_reference if order.payment_method == "mmg_agent" else None,
-     )
+     reference_now = _to_aware(now) if now is not None else get_guyana_now()
  
-     order.payment_provider = "mmg"
-     order.payment_method = "mmg_agent"
-     order.payment_reference = payment_reference
-     order.payment_checkout_url = None
-     order.payment_verification_status = "pending"
-     db.flush()
- 
-     return OrderPaymentSnapshot(
-         order_id=order.id,
-         provider="mmg",
-         payment_method=order.payment_method,
-         payment_reference=order.payment_reference,
-         amount=order.total_amount,
-         currency=order.currency,
-         status=order.status.value,
-         payment_verification_status=order.payment_verification_status,
+     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+     with tx_ctx:
+         ticket_tier = db.execute(
+             select(TicketTier)
  
 EOF
 )
