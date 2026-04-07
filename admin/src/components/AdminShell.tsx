@@ -25,6 +25,12 @@ export function AdminShell() {
             Finance
           </NavLink>
           <NavLink
+            to="/messaging"
+            className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+          >
+            Messaging
+          </NavLink>
+          <NavLink
             to="/check-in"
             className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
           >

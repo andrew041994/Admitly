@@ -69,6 +69,20 @@ class AdminAuditResponse(BaseModel):
     created_at: datetime
 
 
+
+
+class SupportMessageLogResponse(BaseModel):
+    id: int
+    template_type: str
+    channel: str
+    status: str
+    provider_status: str | None
+    is_manual_resend: bool
+    resend_of_message_id: int | None
+    actor_user_id: int | None
+    created_at: datetime
+
+
 class SupportSnapshotResponse(BaseModel):
     order_id: int
     event_id: int
@@ -95,3 +109,4 @@ class SupportSnapshotResponse(BaseModel):
     support_notes: list[SupportCaseNoteResponse]
     timeline: list[SupportTimelineItemResponse]
     admin_audits: list[AdminAuditResponse]
+    message_history: list[SupportMessageLogResponse]

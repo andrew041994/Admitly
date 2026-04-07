@@ -42,6 +42,18 @@ export interface AdminAuditItem {
   created_at: string;
 }
 
+export interface SupportMessageLog {
+  id: number;
+  template_type: string;
+  channel: string;
+  status: string;
+  provider_status: string | null;
+  is_manual_resend: boolean;
+  resend_of_message_id: number | null;
+  actor_user_id: number | null;
+  created_at: string;
+}
+
 export interface SupportSnapshot {
   order_id: number;
   event_id: number;
@@ -68,6 +80,7 @@ export interface SupportSnapshot {
   support_notes: SupportNote[];
   timeline: SupportTimelineItem[];
   admin_audits: AdminAuditItem[];
+  message_history: SupportMessageLog[];
 }
 
 export interface SupportCasePatchPayload {

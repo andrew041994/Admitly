@@ -130,3 +130,25 @@ class SupportCasePriority(str, Enum):
     NORMAL = "normal"
     HIGH = "high"
     URGENT = "urgent"
+
+
+class MessageTemplateType(str, Enum):
+    ORDER_CONFIRMATION = "order_confirmation"
+    TICKET_ISSUED = "ticket_issued"
+    TRANSFER_INVITE = "transfer_invite"
+    TRANSFER_ACCEPTED = "transfer_accepted"
+    REFUND_PROCESSED = "refund_processed"
+    REMINDER = "reminder"
+    EVENT_DAY_UPDATE = "event_day_update"
+    ORGANIZER_BROADCAST = "organizer_broadcast"
+
+
+class MessageChannel(str, Enum):
+    EMAIL = "email"
+    PUSH = "push"
+
+
+class MessageDeliveryStatus(str, Enum):
+    SENT = "sent"
+    FAILED = "failed"
+    SKIPPED = "skipped"

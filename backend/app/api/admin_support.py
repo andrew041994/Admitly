@@ -22,10 +22,12 @@ from app.schemas.support import (
     SupportCaseNoteResponse,
     SupportCasePatchRequest,
     SupportCaseResponse,
+    SupportMessageLogResponse,
     SupportNoteCreateRequest,
     SupportSnapshotResponse,
     SupportTimelineItemResponse,
 )
+from app.services.messaging import list_message_history
 from app.services.support import (
     SupportConflictError,
     SupportError,
@@ -108,6 +110,7 @@ def get_support_snapshot(
         .join(Ticket, Ticket.id == TicketTransferInvite.ticket_id)
         .where(Ticket.order_id == order_id)
     ).scalars().all()
+    message_history = list_message_history(db, related_entity_type="order", related_entity_id=order_id)
 
     return SupportSnapshotResponse(
         order_id=order.id,
@@ -146,6 +149,20 @@ def get_support_snapshot(
                 created_at=a.created_at,
             )
             for a in audits
+        ],
+        message_history=[
+            SupportMessageLogResponse(
+                id=item.id,
+                template_type=item.template_type.value,
+                channel=item.channel.value,
+                status=item.status.value,
+                provider_status=item.provider_status,
+                is_manual_resend=item.is_manual_resend,
+                resend_of_message_id=item.resend_of_message_id,
+                actor_user_id=item.actor_user_id,
+                created_at=item.created_at,
+            )
+            for item in message_history
         ],
     )
 

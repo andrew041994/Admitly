@@ -4,6 +4,7 @@ from app.api.admin_support import router as admin_support_router
 from app.api.admin_finance import router as admin_finance_router
 from app.api.events import router as events_router
 from app.api.health import router as health_router
+from app.api.messaging import router as messaging_router
 from app.api.internal_finance import router as internal_finance_router
 from app.api.notifications import router as notifications_router
 from app.api.organizer_reporting import router as organizer_reporting_router
@@ -22,6 +23,7 @@ app.include_router(events_router)
 app.include_router(ticket_holds_router)
 app.include_router(orders_router)
 app.include_router(notifications_router)
+app.include_router(messaging_router)
 app.include_router(payments_router)
 app.include_router(refunds_router)
 app.include_router(tickets_router)

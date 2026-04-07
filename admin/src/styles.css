@@ -268,3 +268,5 @@ button:disabled {
 .section-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 .timeline-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
 .timeline-list li { border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 0.6rem; }
+.simple-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.simple-table th, .simple-table td { border-bottom: 1px solid #e5e7eb; padding: 0.4rem; text-align: left; }

@@ -12,12 +12,13 @@ from sqlalchemy.orm import Session, object_session
 from app.core.config import settings
 from app.models.event import Event
 from app.models.dispute import Dispute
-from app.models.enums import ReminderType
+from app.models.enums import MessageChannel, MessageTemplateType, ReminderType
 from app.models.order import Order
 from app.models.push_token import PushToken
 from app.models.ticket import Ticket
 from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.user import User
+from app.services.messaging import dispatch_templated_message
 from app.services.ticket_qr import get_ticket_public_url
 
 logger = logging.getLogger(__name__)
@@ -198,21 +199,17 @@ def dispatch_notification_event(
 def notify_order_completed(db: Session, order: Order) -> NotificationDispatchResult:
     email = _user_email(db, order.user_id)
     event_label = _order_event_label(order)
-    return dispatch_notification_event(
+    result = dispatch_templated_message(
         db,
-        event_type=NotificationEventType.ORDER_COMPLETED,
-        email=EmailMessage(
-            to_email=email,
-            subject=f"Order #{order.id} confirmed",
-            body=f"Your order #{order.id} for {event_label} has been confirmed.",
-        ) if email else None,
-        push=PushMessage(
-            user_id=order.user_id,
-            title="Order confirmed",
-            body=f"Order #{order.id} is complete.",
-            data={"type": "order_completed", "order_id": str(order.id), "event_id": str(order.event_id)},
-        ),
+        template_type=MessageTemplateType.ORDER_CONFIRMATION,
+        channels=(MessageChannel.EMAIL, MessageChannel.PUSH),
+        recipient_user_id=order.user_id,
+        recipient_email=email,
+        related_entity_type="order",
+        related_entity_id=order.id,
+        context={"order_id": str(order.id), "event_id": str(order.event_id), "event_title": event_label},
     )
+    return NotificationDispatchResult(success=result.success, channel_results=result.channel_results)
 
 
 def notify_tickets_issued(db: Session, order: Order, tickets: list[Ticket]) -> NotificationDispatchResult:
@@ -221,33 +218,26 @@ def notify_tickets_issued(db: Session, order: Order, tickets: list[Ticket]) -> N
 
     email = _user_email(db, order.user_id)
     quantity = len(tickets)
-    first_ticket = tickets[0]
-    ticket_lines = "\n".join(
-        f"- Ticket #{ticket.id}: {get_ticket_public_url(ticket)}"
-        for ticket in tickets
-    )
-    return _dispatch(
+    ticket_lines = "\n".join(f"- Ticket #{ticket.id}: {get_ticket_public_url(ticket)}" for ticket in tickets)
+    result = dispatch_templated_message(
         db,
-        email=EmailMessage(
-            to_email=email,
-            subject=f"{quantity} ticket(s) issued for order #{order.id}",
-            body=(
+        template_type=MessageTemplateType.TICKET_ISSUED,
+        channels=(MessageChannel.EMAIL, MessageChannel.PUSH),
+        recipient_user_id=order.user_id,
+        recipient_email=email,
+        related_entity_type="order",
+        related_entity_id=order.id,
+        context={
+            "quantity": str(quantity),
+            "order_id": str(order.id),
+            "event_id": str(order.event_id),
+            "email_body": (
                 f"{quantity} ticket(s) are now available for your order #{order.id}.\n\n"
                 f"Ticket access links:\n{ticket_lines}"
             ),
-        ) if email else None,
-        push=PushMessage(
-            user_id=order.user_id,
-            title="Tickets issued",
-            body=f"{quantity} ticket(s) are ready.",
-            data={
-                "type": "tickets_issued",
-                "order_id": str(order.id),
-                "event_id": str(order.event_id),
-                "ticket_id": str(first_ticket.id),
-            },
-        ),
+        },
     )
+    return NotificationDispatchResult(success=result.success, channel_results=result.channel_results)
 
 
 def notify_ticket_transferred(db: Session, ticket: Ticket, *, from_user_id: int, to_user_id: int) -> dict[str, NotificationDispatchResult]:
@@ -307,17 +297,17 @@ def notify_ticket_transfer_invite_created(db: Session, invite: TicketTransferInv
     recipient_email = invite.recipient_email
     if not recipient_email and invite.recipient_user_id:
         recipient_email = _user_email(db, invite.recipient_user_id)
-    _ = recipient_email
-    return dispatch_notification_event(
+    result = dispatch_templated_message(
         db,
-        event_type=NotificationEventType.TICKET_TRANSFER_RECEIVED,
-        push=PushMessage(
-            user_id=invite.recipient_user_id,
-            title="Ticket transfer invite",
-            body=f"You have been invited to claim ticket #{invite.ticket_id}.",
-            data={"type": "ticket_transfer_invite_created", "ticket_id": str(invite.ticket_id), "invite_token": invite.invite_token},
-        ) if invite.recipient_user_id else None,
+        template_type=MessageTemplateType.TRANSFER_INVITE,
+        channels=(MessageChannel.EMAIL, MessageChannel.PUSH),
+        recipient_user_id=invite.recipient_user_id,
+        recipient_email=recipient_email,
+        related_entity_type="transfer_invite",
+        related_entity_id=invite.id,
+        context={"ticket_id": str(invite.ticket_id), "invite_token": invite.invite_token},
     )
+    return NotificationDispatchResult(success=result.success, channel_results=result.channel_results)
 
 
 def notify_ticket_transfer_invite_accepted(
@@ -387,21 +377,17 @@ def notify_order_refunded(order: Order, *, actor_user_id: int) -> NotificationDi
 
     email = _user_email(db, order.user_id)
     _ = actor_user_id
-    return dispatch_notification_event(
+    result = dispatch_templated_message(
         db,
-        event_type=NotificationEventType.REFUND_PROCESSED,
-        email=EmailMessage(
-            to_email=email,
-            subject=f"Order #{order.id} refunded",
-            body=f"Your order #{order.id} has been refunded.",
-        ) if email else None,
-        push=PushMessage(
-            user_id=order.user_id,
-            title="Order refunded",
-            body=f"Order #{order.id} has been refunded.",
-            data={"type": "order_refunded", "order_id": str(order.id), "event_id": str(order.event_id)},
-        ),
+        template_type=MessageTemplateType.REFUND_PROCESSED,
+        channels=(MessageChannel.EMAIL, MessageChannel.PUSH),
+        recipient_user_id=order.user_id,
+        recipient_email=email,
+        related_entity_type="order",
+        related_entity_id=order.id,
+        context={"order_id": str(order.id), "event_id": str(order.event_id)},
     )
+    return NotificationDispatchResult(success=result.success, channel_results=result.channel_results)
 
 
 def notify_event_cancelled(event: Event, *, actor_user_id: int) -> NotificationDispatchResult:
