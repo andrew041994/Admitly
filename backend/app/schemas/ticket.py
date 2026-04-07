@@ -18,6 +18,7 @@ class TicketResponse(BaseModel):
     qr_payload: str
     issued_at: datetime
     checked_in_at: datetime | None
+    check_in_method: str | None = None
     transferred_at: datetime | None
     voided_at: datetime | None
     voided_by_user_id: int | None
@@ -36,12 +37,41 @@ class TicketCheckInRequest(BaseModel):
 
 class TicketCheckInResponse(BaseModel):
     success: bool
+    code: str | None = None
     ticket_id: int | None
     event_id: int
     status: str | None
     checked_in_at: datetime | None
     checked_in_by_user_id: int | None
     message: str
+
+
+class TicketCheckInValidateRequest(BaseModel):
+    qr_payload: str | None = None
+    ticket_code: str | None = None
+
+
+class TicketCheckInValidateResponse(BaseModel):
+    valid: bool
+    code: str
+    message: str
+    ticket_id: int | None
+    ticket_code: str | None
+    event_id: int
+    checked_in_at: datetime | None
+
+
+class TicketCheckInConfirmRequest(BaseModel):
+    qr_payload: str | None = None
+    ticket_code: str | None = None
+    method: str | None = None
+
+
+class TicketCheckInSummaryResponse(BaseModel):
+    event_id: int
+    total_admittable_tickets: int
+    checked_in_tickets: int
+    remaining_tickets: int
 
 
 class TicketVoidRequest(BaseModel):

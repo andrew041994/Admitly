@@ -5,23 +5,32 @@ from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
 from app.schemas.notification import NotificationDispatchResponse
 from app.schemas.ticket import (
+    TicketCheckInConfirmRequest,
     TicketCheckInRequest,
     TicketCheckInResponse,
+    TicketCheckInSummaryResponse,
+    TicketCheckInValidateRequest,
+    TicketCheckInValidateResponse,
     TicketResponse,
     TicketTransferRequest,
     TicketVoidRequest,
 )
 from app.services.tickets import (
+    CHECK_IN_METHOD_MANUAL,
+    CHECK_IN_METHOD_QR,
     TicketAuthorizationError,
     TicketCheckInConflictError,
     TicketCrossEventError,
     TicketNotFoundError,
     TicketTransferError,
     TicketVoidError,
+    check_in_ticket,
     check_in_ticket_for_event,
+    get_event_check_in_summary,
     list_tickets_for_order_owner,
     list_tickets_for_user,
     transfer_ticket_to_user,
+    validate_ticket_for_check_in,
     void_ticket,
     resend_ticket_notification,
 )
@@ -43,6 +52,7 @@ def _to_ticket_response(ticket) -> TicketResponse:
         qr_payload=ticket.qr_payload,
         issued_at=ticket.issued_at,
         checked_in_at=ticket.checked_in_at,
+        check_in_method=ticket.check_in_method,
         transferred_at=ticket.transferred_at,
         voided_at=ticket.voided_at,
         voided_by_user_id=ticket.voided_by_user_id,
@@ -125,6 +135,105 @@ def void_existing_ticket(
     return _to_ticket_response(ticket)
 
 
+@router.post("/events/{event_id}/check-in/validate", response_model=TicketCheckInValidateResponse)
+def validate_event_ticket(
+    event_id: int,
+    payload: TicketCheckInValidateRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketCheckInValidateResponse:
+    result = validate_ticket_for_check_in(
+        db,
+        actor_user_id=user_id,
+        event_id=event_id,
+        qr_payload=payload.qr_payload,
+        ticket_code=payload.ticket_code,
+    )
+    return TicketCheckInValidateResponse(
+        valid=result.valid,
+        code=result.status,
+        message=result.message,
+        ticket_id=result.ticket.id if result.ticket else None,
+        ticket_code=result.ticket.ticket_code if result.ticket else None,
+        event_id=event_id,
+        checked_in_at=result.checked_in_at,
+    )
+
+
+@router.post("/events/{event_id}/check-in/confirm", response_model=TicketCheckInResponse)
+def confirm_event_ticket_check_in(
+    event_id: int,
+    payload: TicketCheckInConfirmRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketCheckInResponse:
+    method = payload.method or CHECK_IN_METHOD_QR
+    result = check_in_ticket(
+        db,
+        scanner_user_id=user_id,
+        event_id=event_id,
+        qr_payload=payload.qr_payload,
+        ticket_code=payload.ticket_code,
+        method=method,
+    )
+    return TicketCheckInResponse(
+        success=result.valid,
+        code=result.status,
+        ticket_id=result.ticket.id if result.ticket else None,
+        event_id=event_id,
+        status=result.ticket.status.value if result.ticket else None,
+        checked_in_at=result.checked_in_at,
+        checked_in_by_user_id=result.ticket.checked_in_by_user_id if result.ticket else None,
+        message=result.message,
+    )
+
+
+@router.post("/events/{event_id}/check-in/manual", response_model=TicketCheckInResponse)
+def manual_event_ticket_check_in(
+    event_id: int,
+    payload: TicketCheckInValidateRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketCheckInResponse:
+    result = check_in_ticket(
+        db,
+        scanner_user_id=user_id,
+        event_id=event_id,
+        qr_payload=payload.qr_payload,
+        ticket_code=payload.ticket_code,
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+    return TicketCheckInResponse(
+        success=result.valid,
+        code=result.status,
+        ticket_id=result.ticket.id if result.ticket else None,
+        event_id=event_id,
+        status=result.ticket.status.value if result.ticket else None,
+        checked_in_at=result.checked_in_at,
+        checked_in_by_user_id=result.ticket.checked_in_by_user_id if result.ticket else None,
+        message=result.message,
+    )
+
+
+@router.get("/events/{event_id}/check-in/summary", response_model=TicketCheckInSummaryResponse)
+def get_event_ticket_check_in_summary(
+    event_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketCheckInSummaryResponse:
+    try:
+        summary = get_event_check_in_summary(db, actor_user_id=user_id, event_id=event_id)
+    except TicketAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    return TicketCheckInSummaryResponse(
+        event_id=summary.event_id,
+        total_admittable_tickets=summary.total_admittable_tickets,
+        checked_in_tickets=summary.checked_in_tickets,
+        remaining_tickets=summary.remaining_tickets,
+    )
+
+
 @router.post("/events/{event_id}/tickets/check-in", response_model=TicketCheckInResponse)
 def check_in_event_ticket(
     event_id: int,
@@ -154,6 +263,7 @@ def check_in_event_ticket(
 
     return TicketCheckInResponse(
         success=True,
+        code="valid",
         ticket_id=ticket.id,
         event_id=ticket.event_id,
         status=ticket.status.value,

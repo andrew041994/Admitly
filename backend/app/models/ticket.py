@@ -55,6 +55,7 @@ class Ticket(TimestampMixin, Base):
     checked_in_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True, index=True
     )
+    check_in_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
     voided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     void_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 

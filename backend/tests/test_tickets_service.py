@@ -22,6 +22,13 @@ from app.models.enums import (
 )
 from app.services.orders import complete_paid_order
 from app.services.tickets import (
+    CHECK_IN_METHOD_MANUAL,
+    CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+    CHECK_IN_STATUS_CANCELED_EVENT,
+    CHECK_IN_STATUS_NOT_FOUND,
+    CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
+    CHECK_IN_STATUS_VALID,
+    CHECK_IN_STATUS_WRONG_EVENT,
     TicketAuthorizationError,
     TicketCheckInConflictError,
     TicketCrossEventError,
@@ -29,13 +36,16 @@ from app.services.tickets import (
     TicketNotFoundError,
     TicketTransferError,
     TicketVoidError,
+    check_in_ticket,
     can_check_in_event_tickets,
     can_void_event_ticket,
     check_in_ticket_for_event,
+    get_event_check_in_summary,
     issue_tickets_for_completed_order,
     list_tickets_for_order_owner,
     list_tickets_for_user,
     transfer_ticket_to_user,
+    validate_ticket_for_check_in,
     void_ticket,
 )
 
@@ -387,6 +397,29 @@ def test_checkin_success_and_second_scan_rejected(db_session: Session) -> None:
         )
 
 
+def test_validate_ticket_statuses_for_qr_flow(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    valid = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=ticket.qr_payload,
+    )
+    assert valid.valid
+    assert valid.status == CHECK_IN_STATUS_VALID
+
+    unknown = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload="missing-ticket",
+    )
+    assert not unknown.valid
+    assert unknown.status == CHECK_IN_STATUS_NOT_FOUND
+
+
 def test_transferred_ticket_can_still_be_checked_in(db_session: Session) -> None:
     order, _, _, buyer, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
@@ -430,6 +463,15 @@ def test_ticket_for_different_event_is_rejected(db_session: Session) -> None:
 
     assert event_1.id != event_2.id
 
+    wrong_event = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event_2.organizer.user_id,
+        event_id=event_2.id,
+        qr_payload=ticket_1.qr_payload,
+    )
+    assert not wrong_event.valid
+    assert wrong_event.status == CHECK_IN_STATUS_WRONG_EVENT
+
 
 def test_voided_ticket_and_unknown_payload_are_rejected(db_session: Session) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
@@ -454,6 +496,68 @@ def test_voided_ticket_and_unknown_payload_are_rejected(db_session: Session) -> 
             qr_payload="unknown-payload",
             ticket_code=None,
         )
+
+
+def test_refunded_and_cancelled_event_tickets_are_not_admittable(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    order.refund_status = "refunded"
+    db_session.commit()
+
+    refunded = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=ticket.qr_payload,
+    )
+    assert not refunded.valid
+    assert refunded.status == CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE
+
+    order_2, _, _, _, event_2 = _seed_order(db_session, user_email="cancelled-event@example.com", quantity=1)
+    ticket_2 = issue_tickets_for_completed_order(db_session, order_2)[0]
+    event_2.status = EventStatus.CANCELLED
+    db_session.commit()
+
+    cancelled = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event_2.organizer.user_id,
+        event_id=event_2.id,
+        qr_payload=ticket_2.qr_payload,
+    )
+    assert not cancelled.valid
+    assert cancelled.status == CHECK_IN_STATUS_CANCELED_EVENT
+
+
+def test_manual_checkin_and_summary_are_ticket_level(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=3)
+    tickets = issue_tickets_for_completed_order(db_session, order)
+    scanner_id = event.organizer.user_id
+
+    first = check_in_ticket(
+        db_session,
+        scanner_user_id=scanner_id,
+        event_id=event.id,
+        ticket_code=tickets[0].ticket_code,
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+    assert first.valid
+    assert first.ticket is not None
+    assert first.ticket.check_in_method == CHECK_IN_METHOD_MANUAL
+
+    duplicate = check_in_ticket(
+        db_session,
+        scanner_user_id=scanner_id,
+        event_id=event.id,
+        ticket_code=tickets[0].ticket_code,
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+    assert not duplicate.valid
+    assert duplicate.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN
+
+    summary = get_event_check_in_summary(db_session, actor_user_id=scanner_id, event_id=event.id)
+    assert summary.total_admittable_tickets == 3
+    assert summary.checked_in_tickets == 1
+    assert summary.remaining_tickets == 2
 
 
 def test_concurrent_duplicate_scan_only_one_succeeds(tmp_path: Path) -> None:
