@@ -1,63 +1,226 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_ticket_transfer_invites.py b/backend/tests/test_ticket_transfer_invites.py
-index c29c469aa0c183ba0a0fe261fe176152953ca6b0..6ad1043f9f6d09b54b2c041a6d234c69e0e92b89 100644
---- a/backend/tests/test_ticket_transfer_invites.py
-+++ b/backend/tests/test_ticket_transfer_invites.py
-@@ -114,52 +114,52 @@ def test_invite_creation_and_acceptance_and_revocation_flow(db_session: Session,
-     assert invite.status == TransferInviteStatus.PENDING
-     assert ticket.owner_user_id == owner.id
-     assert calls == ["created"]
+diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
+index 1adfb2cd81fb3711b202f9ba30eff62e8ec921dd..f0379c52c4c07d63e47a5a4e5a7157752ee2d2a0 100644
+--- a/backend/tests/test_tickets_service.py
++++ b/backend/tests/test_tickets_service.py
+@@ -5,71 +5,74 @@ from concurrent.futures import ThreadPoolExecutor
+ from fastapi import HTTPException
+ from datetime import datetime, timedelta, timezone
+ from decimal import Decimal
+ from pathlib import Path
  
-     with pytest.raises(TicketTransferError):
-         create_ticket_transfer_invite(
-             db_session,
-             ticket_id=ticket.id,
-             sender_user_id=owner.id,
-             recipient_email="next@example.com",
-         )
+ import pytest
+ from sqlalchemy import create_engine, select
+ from sqlalchemy.exc import OperationalError
+ from sqlalchemy.orm import Session, sessionmaker
  
-     with pytest.raises(TicketAuthorizationError):
-         accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=other.id)
+ from app.db.base import Base
+ from app.models import Event, EventStaff, OrganizerProfile, Order, OrderItem, Ticket, TicketTier, User, Venue
+ from app.models.enums import (
+     EventApprovalStatus,
+     EventStaffRole,
+     EventStatus,
+     EventVisibility,
+     OrderStatus,
+     TicketStatus,
+ )
+ from app.api.tickets import get_ticket_qr_by_ticket_id
+ from app.services.orders import complete_paid_order
+ from app.services.ticket_qr import build_ticket_qr_payload, generate_qr_png_bytes, get_ticket_public_url
+ from app.services.tickets import (
+     CHECK_IN_METHOD_MANUAL,
++    CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
+     CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+     CHECK_IN_STATUS_CANCELED_EVENT,
+     CHECK_IN_STATUS_NOT_FOUND,
+     CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
+     CHECK_IN_STATUS_VALID,
+     CHECK_IN_STATUS_WRONG_EVENT,
+     TicketAuthorizationError,
+     TicketCheckInConflictError,
+     TicketCrossEventError,
+     TicketIssuanceError,
+     TicketNotFoundError,
+     TicketTransferError,
+     TicketVoidError,
+     check_in_ticket,
+     can_check_in_event_tickets,
+     can_void_event_ticket,
+     check_in_ticket_for_event,
+     get_event_check_in_summary,
+     issue_tickets_for_completed_order,
++    list_recent_check_in_attempts,
+     list_tickets_for_order_owner,
+     list_tickets_for_user,
++    override_ticket_check_in,
+     transfer_ticket_to_user,
+     validate_ticket_for_check_in,
+     void_ticket,
+ )
  
-     accepted_ticket = accept_ticket_transfer_invite(
-         db_session,
-         invite_token=invite.invite_token,
-         accepting_user_id=recipient.id,
-     )
-     assert accepted_ticket.owner_user_id == recipient.id
-     assert accepted_ticket.purchaser_user_id == owner.id
-     assert accepted_ticket.transfer_count == 1
-     assert calls == ["created", "accepted"]
  
--    with pytest.raises(TicketTransferError):
--        accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=recipient.id)
-+    repeated_accept = accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=recipient.id)
-+    assert repeated_accept.id == accepted_ticket.id
- 
-     invite_2 = create_ticket_transfer_invite(
-         db_session,
-         ticket_id=ticket.id,
-         sender_user_id=recipient.id,
-         recipient_email="newperson@example.com",
-     )
-     revoked = revoke_ticket_transfer_invite(db_session, invite_token=invite_2.invite_token, actor_user_id=recipient.id)
-     assert revoked.status == TransferInviteStatus.REVOKED
-     assert calls == ["created", "accepted", "created", "revoked"]
-     with pytest.raises(TicketTransferError):
-         accept_ticket_transfer_invite(db_session, invite_token=invite_2.invite_token, accepting_user_id=other.id)
+ @pytest.fixture
+ def db_session() -> Session:
+     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+     Base.metadata.create_all(engine)
+     SessionLocal = sessionmaker(bind=engine, future=True)
+     with SessionLocal() as session:
+         yield session
  
  
- def test_invite_rejects_checked_in_voided_and_expired_and_self(db_session: Session) -> None:
-     order, owner, event = _seed_order(db_session, suffix="02")
+ def _seed_order(
+     db: Session,
+     *,
+     user_email: str = "buyer@example.com",
+     quantity: int = 3,
+     status: OrderStatus = OrderStatus.COMPLETED,
+     payment_verification_status: str = "verified",
+ ) -> tuple[Order, OrderItem, TicketTier, User, Event]:
+     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
+     user = User(email=user_email, full_name="Buyer")
+@@ -794,42 +797,142 @@ def test_checkin_accepts_ticket_url_payload_and_reuses_phase17_validation(db_ses
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
      ticket = issue_tickets_for_completed_order(db_session, order)[0]
  
-     with pytest.raises(TicketTransferError):
-         create_ticket_transfer_invite(db_session, ticket_id=ticket.id, sender_user_id=owner.id, recipient_user_id=owner.id)
+     url_payload = build_ticket_qr_payload(ticket)
+     valid = validate_ticket_for_check_in(
+         db_session,
+         actor_user_id=event.organizer.user_id,
+         event_id=event.id,
+         qr_payload=url_payload,
+     )
+     assert valid.valid is True
  
-     checked_in_ticket = ticket
-     checked_in_ticket.status = TicketStatus.CHECKED_IN
+     ticket.status = TicketStatus.VOIDED
      db_session.commit()
-     with pytest.raises(TicketTransferError):
+ 
+     rejected = validate_ticket_for_check_in(
+         db_session,
+         actor_user_id=event.organizer.user_id,
+         event_id=event.id,
+         qr_payload=url_payload,
+     )
+     assert rejected.valid is False
+     assert rejected.status == "refunded_or_invalidated"
+ 
+ 
++def test_checkin_attempts_are_audited_for_validate_and_duplicate(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++
++    validated = validate_ticket_for_check_in(
++        db_session,
++        actor_user_id=event.organizer.user_id,
++        event_id=event.id,
++        ticket_code=ticket.ticket_code,
++    )
++    assert validated.valid is True
++
++    admitted = check_in_ticket(
++        db_session,
++        scanner_user_id=event.organizer.user_id,
++        event_id=event.id,
++        ticket_code=ticket.ticket_code,
++        method=CHECK_IN_METHOD_MANUAL,
++    )
++    assert admitted.valid is True
++
++    duplicate = check_in_ticket(
++        db_session,
++        scanner_user_id=event.organizer.user_id,
++        event_id=event.id,
++        ticket_code=ticket.ticket_code,
++        method=CHECK_IN_METHOD_MANUAL,
++    )
++    assert duplicate.valid is False
++    assert duplicate.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN
++
++    rows = list_recent_check_in_attempts(
++        db_session,
++        actor_user_id=event.organizer.user_id,
++        event_id=event.id,
++        limit=10,
++    )
++    assert len(rows) >= 3
++    assert rows[0].result_code in {CHECK_IN_STATUS_ALREADY_CHECKED_IN, CHECK_IN_STATUS_VALID}
++
++
++def test_manual_override_requires_manager_and_notes(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    support_user = User(email="support-override@example.com", full_name="Support")
++    manager_user = User(email="manager-override@example.com", full_name="Manager")
++    db_session.add_all([support_user, manager_user])
++    db_session.flush()
++    db_session.add_all(
++        [
++            EventStaff(
++                event_id=event.id,
++                user_id=support_user.id,
++                role=EventStaffRole.SUPPORT,
++                is_active=True,
++                invited_by_user_id=event.organizer.user_id,
++            ),
++            EventStaff(
++                event_id=event.id,
++                user_id=manager_user.id,
++                role=EventStaffRole.MANAGER,
++                is_active=True,
++                invited_by_user_id=event.organizer.user_id,
++            ),
++        ]
++    )
++    db_session.commit()
++
++    with pytest.raises(TicketAuthorizationError):
++        override_ticket_check_in(
++            db_session,
++            actor_user_id=support_user.id,
++            event_id=event.id,
++            ticket_code=ticket.ticket_code,
++            admit=True,
++            notes="allow",
++        )
++
++    with pytest.raises(TicketCheckInConflictError):
++        override_ticket_check_in(
++            db_session,
++            actor_user_id=manager_user.id,
++            event_id=event.id,
++            ticket_code=ticket.ticket_code,
++            admit=True,
++            notes="   ",
++        )
++
++    result = override_ticket_check_in(
++        db_session,
++        actor_user_id=manager_user.id,
++        event_id=event.id,
++        ticket_code=ticket.ticket_code,
++        admit=True,
++        notes="badge mismatch verified at gate",
++    )
++    assert result.valid is True
++    assert result.status == CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED
++
++
+ def test_ticket_qr_endpoint_requires_ticket_ownership(db_session: Session) -> None:
+     pytest.importorskip("qrcode")
+     order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+ 
+     owner_view = get_ticket_qr_by_ticket_id(ticket.id, db=db_session, user_id=buyer.id)
+     assert owner_view.ticket_public_token == ticket.qr_payload
+     assert owner_view.qr_data_uri.startswith("data:image/png;base64,")
+ 
+     outsider = User(email="qr-outsider@example.com", full_name="Outsider")
+     db_session.add(outsider)
+     db_session.commit()
+     db_session.refresh(outsider)
+ 
+     with pytest.raises(HTTPException) as exc:
+         get_ticket_qr_by_ticket_id(ticket.id, db=db_session, user_id=outsider.id)
+     assert exc.value.status_code == 404
  
 EOF
 )

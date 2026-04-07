@@ -5,7 +5,9 @@ from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
 from app.schemas.notification import NotificationDispatchResponse
 from app.schemas.ticket import (
+    TicketCheckInAttemptResponse,
     TicketCheckInConfirmRequest,
+    TicketCheckInOverrideRequest,
     TicketCheckInRequest,
     TicketCheckInResponse,
     TicketCheckInSummaryResponse,
@@ -32,6 +34,8 @@ from app.services.tickets import (
     get_ticket_for_owner,
     list_tickets_for_order_owner,
     list_tickets_for_user,
+    list_recent_check_in_attempts,
+    override_ticket_check_in,
     transfer_ticket_to_user,
     validate_ticket_for_check_in,
     void_ticket,
@@ -243,6 +247,73 @@ def get_event_ticket_check_in_summary(
         total_admittable_tickets=summary.total_admittable_tickets,
         checked_in_tickets=summary.checked_in_tickets,
         remaining_tickets=summary.remaining_tickets,
+    )
+
+
+@router.get("/events/{event_id}/check-in/activity", response_model=list[TicketCheckInAttemptResponse])
+def get_event_ticket_check_in_activity(
+    event_id: int,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[TicketCheckInAttemptResponse]:
+    try:
+        rows = list_recent_check_in_attempts(db, actor_user_id=user_id, event_id=event_id, limit=limit)
+    except TicketAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return [
+        TicketCheckInAttemptResponse(
+            id=row.id,
+            ticket_id=row.ticket_id,
+            event_id=row.event_id,
+            actor_user_id=row.actor_user_id,
+            attempted_at=row.attempted_at,
+            result_code=row.result_code,
+            reason_code=row.reason_code,
+            reason_message=row.reason_message,
+            method=row.method,
+            source=row.source,
+            notes=row.notes,
+        )
+        for row in rows
+    ]
+
+
+@router.post("/events/{event_id}/check-in/override", response_model=TicketCheckInResponse)
+def override_event_ticket_check_in(
+    event_id: int,
+    payload: TicketCheckInOverrideRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketCheckInResponse:
+    try:
+        result = override_ticket_check_in(
+            db,
+            actor_user_id=user_id,
+            event_id=event_id,
+            qr_payload=payload.qr_payload,
+            ticket_code=payload.ticket_code,
+            admit=payload.admit,
+            notes=payload.notes,
+        )
+    except TicketAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except TicketNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TicketCrossEventError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except TicketCheckInConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return TicketCheckInResponse(
+        success=result.valid,
+        code=result.status,
+        ticket_id=result.ticket.id if result.ticket else None,
+        event_id=event_id,
+        status=result.ticket.status.value if result.ticket else None,
+        checked_in_at=result.checked_in_at,
+        checked_in_by_user_id=result.ticket.checked_in_by_user_id if result.ticket else None,
+        message=result.message,
     )
 
 

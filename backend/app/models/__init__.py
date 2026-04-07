@@ -14,6 +14,7 @@ from app.models.promo_code_redemption import PromoCodeRedemption
 from app.models.promo_code_ticket_tier import PromoCodeTicketTier
 from app.models.push_token import PushToken
 from app.models.ticket import Ticket
+from app.models.ticket_check_in_attempt import TicketCheckInAttempt
 from app.models.ticket_hold import TicketHold
 from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.ticket_tier import TicketTier
@@ -43,6 +44,7 @@ __all__ = [
     "PromoCodeTicketTier",
     "PushToken",
     "Ticket",
+    "TicketCheckInAttempt",
     "TicketHold",
     "TicketTransferInvite",
     "SupportCase",

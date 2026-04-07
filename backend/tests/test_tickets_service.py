@@ -27,6 +27,7 @@ from app.services.orders import complete_paid_order
 from app.services.ticket_qr import build_ticket_qr_payload, generate_qr_png_bytes, get_ticket_public_url
 from app.services.tickets import (
     CHECK_IN_METHOD_MANUAL,
+    CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
     CHECK_IN_STATUS_ALREADY_CHECKED_IN,
     CHECK_IN_STATUS_CANCELED_EVENT,
     CHECK_IN_STATUS_NOT_FOUND,
@@ -46,8 +47,10 @@ from app.services.tickets import (
     check_in_ticket_for_event,
     get_event_check_in_summary,
     issue_tickets_for_completed_order,
+    list_recent_check_in_attempts,
     list_tickets_for_order_owner,
     list_tickets_for_user,
+    override_ticket_check_in,
     transfer_ticket_to_user,
     validate_ticket_for_check_in,
     void_ticket,
@@ -814,6 +817,106 @@ def test_checkin_accepts_ticket_url_payload_and_reuses_phase17_validation(db_ses
     )
     assert rejected.valid is False
     assert rejected.status == "refunded_or_invalidated"
+
+
+def test_checkin_attempts_are_audited_for_validate_and_duplicate(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    validated = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event.organizer.user_id,
+        event_id=event.id,
+        ticket_code=ticket.ticket_code,
+    )
+    assert validated.valid is True
+
+    admitted = check_in_ticket(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        ticket_code=ticket.ticket_code,
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+    assert admitted.valid is True
+
+    duplicate = check_in_ticket(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        ticket_code=ticket.ticket_code,
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+    assert duplicate.valid is False
+    assert duplicate.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN
+
+    rows = list_recent_check_in_attempts(
+        db_session,
+        actor_user_id=event.organizer.user_id,
+        event_id=event.id,
+        limit=10,
+    )
+    assert len(rows) >= 3
+    assert rows[0].result_code in {CHECK_IN_STATUS_ALREADY_CHECKED_IN, CHECK_IN_STATUS_VALID}
+
+
+def test_manual_override_requires_manager_and_notes(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    support_user = User(email="support-override@example.com", full_name="Support")
+    manager_user = User(email="manager-override@example.com", full_name="Manager")
+    db_session.add_all([support_user, manager_user])
+    db_session.flush()
+    db_session.add_all(
+        [
+            EventStaff(
+                event_id=event.id,
+                user_id=support_user.id,
+                role=EventStaffRole.SUPPORT,
+                is_active=True,
+                invited_by_user_id=event.organizer.user_id,
+            ),
+            EventStaff(
+                event_id=event.id,
+                user_id=manager_user.id,
+                role=EventStaffRole.MANAGER,
+                is_active=True,
+                invited_by_user_id=event.organizer.user_id,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    with pytest.raises(TicketAuthorizationError):
+        override_ticket_check_in(
+            db_session,
+            actor_user_id=support_user.id,
+            event_id=event.id,
+            ticket_code=ticket.ticket_code,
+            admit=True,
+            notes="allow",
+        )
+
+    with pytest.raises(TicketCheckInConflictError):
+        override_ticket_check_in(
+            db_session,
+            actor_user_id=manager_user.id,
+            event_id=event.id,
+            ticket_code=ticket.ticket_code,
+            admit=True,
+            notes="   ",
+        )
+
+    result = override_ticket_check_in(
+        db_session,
+        actor_user_id=manager_user.id,
+        event_id=event.id,
+        ticket_code=ticket.ticket_code,
+        admit=True,
+        notes="badge mismatch verified at gate",
+    )
+    assert result.valid is True
+    assert result.status == CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED
 
 
 def test_ticket_qr_endpoint_requires_ticket_ownership(db_session: Session) -> None:

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from app.models.event import Event
     from app.models.order import Order
     from app.models.order_item import OrderItem
+    from app.models.ticket_check_in_attempt import TicketCheckInAttempt
     from app.models.ticket_tier import TicketTier
     from app.models.ticket_transfer_invite import TicketTransferInvite
     from app.models.user import User
@@ -71,6 +72,10 @@ class Ticket(TimestampMixin, Base):
     )
     voided_by: Mapped["User | None"] = relationship(back_populates="voided_tickets", foreign_keys=[voided_by_user_id])
     transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+    )
+    check_in_attempts: Mapped[list["TicketCheckInAttempt"]] = relationship(
         back_populates="ticket",
         cascade="all, delete-orphan",
     )

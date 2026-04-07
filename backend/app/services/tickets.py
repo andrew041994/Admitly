@@ -11,6 +11,7 @@ from app.models.event import Event
 from app.models.enums import EventStatus, OrderStatus, TicketStatus, TransferInviteStatus
 from app.models.order import Order
 from app.models.ticket import Ticket
+from app.models.ticket_check_in_attempt import TicketCheckInAttempt
 from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.user import User
 from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
@@ -71,6 +72,10 @@ CHECK_IN_STATUS_NOT_FOUND = "not_found"
 CHECK_IN_STATUS_UNAUTHORIZED = "unauthorized"
 CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE = "order_not_admittable"
 CHECK_IN_STATUS_INVALID = "invalid"
+CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED = "manual_override_admitted"
+CHECK_IN_STATUS_MANUAL_OVERRIDE_DENIED = "manual_override_denied"
+
+CHECK_IN_METHOD_OVERRIDE = "override"
 
 
 @dataclass
@@ -81,6 +86,7 @@ class TicketCheckInValidationResult:
     event_id: int
     ticket: Ticket | None = None
     checked_in_at: datetime | None = None
+    reason_code: str | None = None
 
 
 @dataclass
@@ -89,6 +95,21 @@ class TicketCheckInSummaryResult:
     total_admittable_tickets: int
     checked_in_tickets: int
     remaining_tickets: int
+
+
+@dataclass
+class TicketCheckInAttemptRow:
+    id: int
+    ticket_id: int | None
+    event_id: int
+    actor_user_id: int | None
+    attempted_at: datetime
+    result_code: str
+    reason_code: str | None
+    reason_message: str | None
+    method: str | None
+    source: str | None
+    notes: str | None
 
 
 def _generate_ticket_code() -> str:
@@ -639,6 +660,15 @@ def can_actor_check_in_event(db: Session, *, user_id: int, event_id: int) -> boo
     )
 
 
+def can_actor_override_check_in(db: Session, *, user_id: int, event_id: int) -> bool:
+    return has_event_permission_by_id(
+        db,
+        user_id=user_id,
+        event_id=event_id,
+        action=EventPermissionAction.CHECKIN_OVERRIDE,
+    )
+
+
 def can_check_in_event_tickets(db: Session, *, user_id: int, event_id: int) -> bool:
     return can_actor_check_in_event(db, user_id=user_id, event_id=event_id)
 
@@ -670,6 +700,92 @@ def _is_order_admittable(order: Order | None) -> bool:
     )
 
 
+def _record_check_in_attempt(
+    db: Session,
+    *,
+    event_id: int,
+    actor_user_id: int | None,
+    ticket: Ticket | None,
+    result_code: str,
+    reason_code: str | None,
+    reason_message: str,
+    method: str | None,
+    source: str | None = None,
+    notes: str | None = None,
+) -> None:
+    db.add(
+        TicketCheckInAttempt(
+            ticket_id=ticket.id if ticket else None,
+            event_id=event_id,
+            actor_user_id=actor_user_id,
+            attempted_at=get_guyana_now(),
+            result_code=result_code,
+            reason_code=reason_code,
+            reason_message=reason_message,
+            method=method,
+            source=source,
+            notes=_normalize_optional(notes),
+        )
+    )
+
+
+def _evaluate_ticket_for_entry(*, ticket: Ticket, event_id: int) -> TicketCheckInValidationResult:
+    if ticket.event_id != event_id:
+        return TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_WRONG_EVENT,
+            message="Ticket does not belong to this event.",
+            event_id=event_id,
+            ticket=ticket,
+            reason_code=CHECK_IN_STATUS_WRONG_EVENT,
+        )
+    if not _is_event_admittable(ticket.event):
+        return TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_CANCELED_EVENT,
+            message="Event is cancelled and not admittable.",
+            event_id=event_id,
+            ticket=ticket,
+            reason_code=CHECK_IN_STATUS_CANCELED_EVENT,
+        )
+    if ticket.status == TicketStatus.CHECKED_IN:
+        return TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+            message="Ticket has already been checked in.",
+            event_id=event_id,
+            ticket=ticket,
+            checked_in_at=ticket.checked_in_at,
+            reason_code=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+        )
+    if ticket.status != TicketStatus.ISSUED:
+        return TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_REFUNDED_OR_INVALIDATED,
+            message="Ticket is refunded or invalidated.",
+            event_id=event_id,
+            ticket=ticket,
+            reason_code=CHECK_IN_STATUS_REFUNDED_OR_INVALIDATED,
+        )
+    if not _is_order_admittable(ticket.order):
+        return TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
+            message="Order is not in an admittable payment state.",
+            event_id=event_id,
+            ticket=ticket,
+            reason_code=CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
+        )
+    return TicketCheckInValidationResult(
+        valid=True,
+        status=CHECK_IN_STATUS_VALID,
+        message="Ticket is valid for check-in.",
+        event_id=event_id,
+        ticket=ticket,
+        reason_code=CHECK_IN_STATUS_VALID,
+    )
+
+
 def validate_ticket_for_check_in(
     db: Session,
     *,
@@ -679,21 +795,47 @@ def validate_ticket_for_check_in(
     ticket_code: str | None = None,
 ) -> TicketCheckInValidationResult:
     if not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
-        return TicketCheckInValidationResult(
+        result = TicketCheckInValidationResult(
             valid=False,
             status=CHECK_IN_STATUS_UNAUTHORIZED,
             message="Not authorized to check in tickets for this event.",
             event_id=event_id,
+            reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
         )
+        _record_check_in_attempt(
+            db,
+            event_id=event_id,
+            actor_user_id=actor_user_id,
+            ticket=None,
+            result_code=result.status,
+            reason_code=result.reason_code,
+            reason_message=result.message,
+            method="validate",
+        )
+        db.flush()
+        return result
 
     lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
     if not lookup:
-        return TicketCheckInValidationResult(
+        result = TicketCheckInValidationResult(
             valid=False,
             status=CHECK_IN_STATUS_INVALID,
             message="A ticket code or QR payload is required.",
             event_id=event_id,
+            reason_code=CHECK_IN_STATUS_INVALID,
         )
+        _record_check_in_attempt(
+            db,
+            event_id=event_id,
+            actor_user_id=actor_user_id,
+            ticket=None,
+            result_code=result.status,
+            reason_code=result.reason_code,
+            reason_message=result.message,
+            method="validate",
+        )
+        db.flush()
+        return result
 
     ticket = (
         db.execute(
@@ -706,60 +848,27 @@ def validate_ticket_for_check_in(
         .first()
     )
     if ticket is None:
-        return TicketCheckInValidationResult(
+        result = TicketCheckInValidationResult(
             valid=False,
             status=CHECK_IN_STATUS_NOT_FOUND,
             message="Ticket not found.",
             event_id=event_id,
+            reason_code=CHECK_IN_STATUS_NOT_FOUND,
         )
-    if ticket.event_id != event_id:
-        return TicketCheckInValidationResult(
-            valid=False,
-            status=CHECK_IN_STATUS_WRONG_EVENT,
-            message="Ticket does not belong to this event.",
-            event_id=event_id,
-            ticket=ticket,
-        )
-    if not _is_event_admittable(ticket.event):
-        return TicketCheckInValidationResult(
-            valid=False,
-            status=CHECK_IN_STATUS_CANCELED_EVENT,
-            message="Event is cancelled and not admittable.",
-            event_id=event_id,
-            ticket=ticket,
-        )
-    if ticket.status == TicketStatus.CHECKED_IN:
-        return TicketCheckInValidationResult(
-            valid=False,
-            status=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
-            message="Ticket has already been checked in.",
-            event_id=event_id,
-            ticket=ticket,
-            checked_in_at=ticket.checked_in_at,
-        )
-    if ticket.status != TicketStatus.ISSUED:
-        return TicketCheckInValidationResult(
-            valid=False,
-            status=CHECK_IN_STATUS_REFUNDED_OR_INVALIDATED,
-            message="Ticket is refunded or invalidated.",
-            event_id=event_id,
-            ticket=ticket,
-        )
-    if not _is_order_admittable(ticket.order):
-        return TicketCheckInValidationResult(
-            valid=False,
-            status=CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
-            message="Order is not in an admittable payment state.",
-            event_id=event_id,
-            ticket=ticket,
-        )
-    return TicketCheckInValidationResult(
-        valid=True,
-        status=CHECK_IN_STATUS_VALID,
-        message="Ticket is valid for check-in.",
+    else:
+        result = _evaluate_ticket_for_entry(ticket=ticket, event_id=event_id)
+    _record_check_in_attempt(
+        db,
         event_id=event_id,
+        actor_user_id=actor_user_id,
         ticket=ticket,
+        result_code=result.status,
+        reason_code=result.reason_code,
+        reason_message=result.message,
+        method="validate",
     )
+    db.flush()
+    return result
 
 
 def check_in_ticket(
@@ -774,21 +883,47 @@ def check_in_ticket(
     if method not in {CHECK_IN_METHOD_QR, CHECK_IN_METHOD_MANUAL}:
         method = CHECK_IN_METHOD_QR
     if not can_actor_check_in_event(db, user_id=scanner_user_id, event_id=event_id):
-        return TicketCheckInValidationResult(
+        result = TicketCheckInValidationResult(
             valid=False,
             status=CHECK_IN_STATUS_UNAUTHORIZED,
             message="Not authorized to check in tickets for this event.",
             event_id=event_id,
+            reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
         )
+        _record_check_in_attempt(
+            db,
+            event_id=event_id,
+            actor_user_id=scanner_user_id,
+            ticket=None,
+            result_code=result.status,
+            reason_code=result.reason_code,
+            reason_message=result.message,
+            method=method,
+        )
+        db.flush()
+        return result
 
     lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
     if not lookup:
-        return TicketCheckInValidationResult(
+        result = TicketCheckInValidationResult(
             valid=False,
             status=CHECK_IN_STATUS_INVALID,
             message="A ticket code or QR payload is required.",
             event_id=event_id,
+            reason_code=CHECK_IN_STATUS_INVALID,
         )
+        _record_check_in_attempt(
+            db,
+            event_id=event_id,
+            actor_user_id=scanner_user_id,
+            ticket=None,
+            result_code=result.status,
+            reason_code=result.reason_code,
+            reason_message=result.message,
+            method=method,
+        )
+        db.flush()
+        return result
 
     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
     with tx_ctx:
@@ -804,53 +939,39 @@ def check_in_ticket(
             .first()
         )
         if ticket is None:
-            return TicketCheckInValidationResult(
+            result = TicketCheckInValidationResult(
                 valid=False,
                 status=CHECK_IN_STATUS_NOT_FOUND,
                 message="Ticket not found.",
                 event_id=event_id,
+                reason_code=CHECK_IN_STATUS_NOT_FOUND,
             )
-        if ticket.event_id != event_id:
-            return TicketCheckInValidationResult(
-                valid=False,
-                status=CHECK_IN_STATUS_WRONG_EVENT,
-                message="Ticket does not belong to this event.",
+            _record_check_in_attempt(
+                db,
                 event_id=event_id,
-                ticket=ticket,
+                actor_user_id=scanner_user_id,
+                ticket=None,
+                result_code=result.status,
+                reason_code=result.reason_code,
+                reason_message=result.message,
+                method=method,
             )
-        if not _is_event_admittable(ticket.event):
-            return TicketCheckInValidationResult(
-                valid=False,
-                status=CHECK_IN_STATUS_CANCELED_EVENT,
-                message="Event is cancelled and not admittable.",
+            db.flush()
+            return result
+        result = _evaluate_ticket_for_entry(ticket=ticket, event_id=event_id)
+        if not result.valid:
+            _record_check_in_attempt(
+                db,
                 event_id=event_id,
+                actor_user_id=scanner_user_id,
                 ticket=ticket,
+                result_code=result.status,
+                reason_code=result.reason_code,
+                reason_message=result.message,
+                method=method,
             )
-        if ticket.status == TicketStatus.CHECKED_IN:
-            return TicketCheckInValidationResult(
-                valid=False,
-                status=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
-                message="Ticket has already been checked in.",
-                event_id=event_id,
-                ticket=ticket,
-                checked_in_at=ticket.checked_in_at,
-            )
-        if ticket.status != TicketStatus.ISSUED:
-            return TicketCheckInValidationResult(
-                valid=False,
-                status=CHECK_IN_STATUS_REFUNDED_OR_INVALIDATED,
-                message="Ticket is refunded or invalidated.",
-                event_id=event_id,
-                ticket=ticket,
-            )
-        if not _is_order_admittable(ticket.order):
-            return TicketCheckInValidationResult(
-                valid=False,
-                status=CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
-                message="Order is not in an admittable payment state.",
-                event_id=event_id,
-                ticket=ticket,
-            )
+            db.flush()
+            return result
 
         now = get_guyana_now()
         ticket.status = TicketStatus.CHECKED_IN
@@ -858,6 +979,16 @@ def check_in_ticket(
         ticket.checked_in_by_user_id = scanner_user_id
         ticket.check_in_method = method
         ticket.updated_at = now
+        _record_check_in_attempt(
+            db,
+            event_id=event_id,
+            actor_user_id=scanner_user_id,
+            ticket=ticket,
+            result_code=CHECK_IN_STATUS_VALID,
+            reason_code=CHECK_IN_STATUS_VALID,
+            reason_message="Ticket checked in successfully.",
+            method=method,
+        )
         db.flush()
         return TicketCheckInValidationResult(
             valid=True,
@@ -866,6 +997,7 @@ def check_in_ticket(
             event_id=event_id,
             ticket=ticket,
             checked_in_at=ticket.checked_in_at,
+            reason_code=CHECK_IN_STATUS_VALID,
         )
 
 
@@ -896,6 +1028,145 @@ def get_event_check_in_summary(
         checked_in_tickets=checked_in_count,
         remaining_tickets=max(0, len(admittable) - checked_in_count),
     )
+
+
+def override_ticket_check_in(
+    db: Session,
+    *,
+    actor_user_id: int,
+    event_id: int,
+    qr_payload: str | None = None,
+    ticket_code: str | None = None,
+    admit: bool,
+    notes: str,
+) -> TicketCheckInValidationResult:
+    if not can_actor_override_check_in(db, user_id=actor_user_id, event_id=event_id):
+        raise TicketAuthorizationError("Not authorized to override ticket check-in for this event.")
+    if not _normalize_optional(notes):
+        raise TicketCheckInConflictError("Manual override notes are required.")
+
+    lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
+    if not lookup:
+        raise TicketNotFoundError("A ticket code or QR payload is required.")
+
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        ticket = (
+            db.execute(
+                select(Ticket)
+                .options(joinedload(Ticket.event), joinedload(Ticket.order))
+                .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup))
+                .with_for_update()
+            )
+            .unique()
+            .scalars()
+            .first()
+        )
+        if ticket is None:
+            _record_check_in_attempt(
+                db,
+                event_id=event_id,
+                actor_user_id=actor_user_id,
+                ticket=None,
+                result_code=CHECK_IN_STATUS_NOT_FOUND,
+                reason_code=CHECK_IN_STATUS_NOT_FOUND,
+                reason_message="Ticket not found for override.",
+                method=CHECK_IN_METHOD_OVERRIDE,
+                notes=notes,
+            )
+            db.flush()
+            raise TicketNotFoundError("Ticket not found.")
+        if ticket.event_id != event_id:
+            raise TicketCrossEventError("Ticket does not belong to this event.")
+
+        now = get_guyana_now()
+        if admit:
+            if ticket.status == TicketStatus.CHECKED_IN:
+                result = TicketCheckInValidationResult(
+                    valid=False,
+                    status=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+                    message="Ticket has already been checked in.",
+                    event_id=event_id,
+                    ticket=ticket,
+                    checked_in_at=ticket.checked_in_at,
+                    reason_code=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+                )
+            else:
+                ticket.status = TicketStatus.CHECKED_IN
+                ticket.checked_in_at = now
+                ticket.checked_in_by_user_id = actor_user_id
+                ticket.check_in_method = CHECK_IN_METHOD_OVERRIDE
+                ticket.updated_at = now
+                result = TicketCheckInValidationResult(
+                    valid=True,
+                    status=CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
+                    message="Ticket admitted by manual override.",
+                    event_id=event_id,
+                    ticket=ticket,
+                    checked_in_at=ticket.checked_in_at,
+                    reason_code=CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
+                )
+        else:
+            result = TicketCheckInValidationResult(
+                valid=False,
+                status=CHECK_IN_STATUS_MANUAL_OVERRIDE_DENIED,
+                message="Ticket denied by manual override.",
+                event_id=event_id,
+                ticket=ticket,
+                reason_code=CHECK_IN_STATUS_MANUAL_OVERRIDE_DENIED,
+            )
+
+        _record_check_in_attempt(
+            db,
+            event_id=event_id,
+            actor_user_id=actor_user_id,
+            ticket=ticket,
+            result_code=result.status,
+            reason_code=result.reason_code,
+            reason_message=result.message,
+            method=CHECK_IN_METHOD_OVERRIDE,
+            notes=notes,
+        )
+        db.flush()
+        return result
+
+
+def list_recent_check_in_attempts(
+    db: Session,
+    *,
+    actor_user_id: int,
+    event_id: int,
+    limit: int = 50,
+) -> list[TicketCheckInAttemptRow]:
+    if not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
+        raise TicketAuthorizationError("Not authorized to view check-in activity for this event.")
+
+    rows = (
+        db.execute(
+            select(TicketCheckInAttempt)
+            .where(TicketCheckInAttempt.event_id == event_id)
+            .order_by(TicketCheckInAttempt.attempted_at.desc(), TicketCheckInAttempt.id.desc())
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        TicketCheckInAttemptRow(
+            id=row.id,
+            ticket_id=row.ticket_id,
+            event_id=row.event_id,
+            actor_user_id=row.actor_user_id,
+            attempted_at=row.attempted_at,
+            result_code=row.result_code,
+            reason_code=row.reason_code,
+            reason_message=row.reason_message,
+            method=row.method,
+            source=row.source,
+            notes=row.notes,
+        )
+        for row in rows
+    ]
 
 
 def check_in_ticket_for_event(

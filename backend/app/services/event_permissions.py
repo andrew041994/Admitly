@@ -21,6 +21,7 @@ class EventPermissionAction(str, Enum):
     MANAGE_REFUNDS = "manage_refunds"
     CHECKIN_TICKETS = "checkin_tickets"
     VIEW_CHECKIN_SUMMARY = "view_checkin_summary"
+    CHECKIN_OVERRIDE = "checkin_override"
 
 
 class EventPermissionError(ValueError):
@@ -62,6 +63,7 @@ def _role_permissions(role: EventStaffRole) -> set[EventPermissionAction]:
             EventPermissionAction.MANAGE_REFUNDS,
             EventPermissionAction.CHECKIN_TICKETS,
             EventPermissionAction.VIEW_CHECKIN_SUMMARY,
+            EventPermissionAction.CHECKIN_OVERRIDE,
         }
     if role == EventStaffRole.CHECKIN:
         return {

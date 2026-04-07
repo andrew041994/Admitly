@@ -76,6 +76,27 @@ class TicketCheckInSummaryResponse(BaseModel):
     remaining_tickets: int
 
 
+class TicketCheckInOverrideRequest(BaseModel):
+    qr_payload: str | None = None
+    ticket_code: str | None = None
+    admit: bool
+    notes: str
+
+
+class TicketCheckInAttemptResponse(BaseModel):
+    id: int
+    ticket_id: int | None
+    event_id: int
+    actor_user_id: int | None
+    attempted_at: datetime
+    result_code: str
+    reason_code: str | None
+    reason_message: str | None
+    method: str | None
+    source: str | None
+    notes: str | None
+
+
 class TicketVoidRequest(BaseModel):
     reason: str | None = None
 
