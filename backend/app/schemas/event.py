@@ -32,3 +32,21 @@ class EventRefundBatchResponse(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     last_error: str | None
+
+
+class EventStaffResponse(BaseModel):
+    id: int
+    event_id: int
+    user_id: int
+    role: str
+    created_at: datetime
+    invited_by_user_id: int | None
+
+
+class EventStaffCreateRequest(BaseModel):
+    user_id: int
+    role: str
+
+
+class EventStaffUpdateRequest(BaseModel):
+    role: str

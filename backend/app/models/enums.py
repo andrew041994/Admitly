@@ -23,7 +23,8 @@ class EventApprovalStatus(str, Enum):
 class EventStaffRole(str, Enum):
     OWNER = "owner"
     MANAGER = "manager"
-    SCANNER = "scanner"
+    CHECKIN = "checkin"
+    SUPPORT = "support"
 
 
 class OrderStatus(str, Enum):

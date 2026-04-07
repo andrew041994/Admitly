@@ -8,12 +8,12 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload, object_session
 
 from app.models.event import Event
-from app.models.event_staff import EventStaff
-from app.models.enums import EventStaffRole, EventStatus, OrderStatus, TicketStatus, TransferInviteStatus
+from app.models.enums import EventStatus, OrderStatus, TicketStatus, TransferInviteStatus
 from app.models.order import Order
 from app.models.ticket import Ticket
 from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.user import User
+from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
 from app.services.notifications import (
     notify_ticket_transfer_invite_accepted as _notify_ticket_transfer_invite_accepted,
     notify_ticket_transfer_invite_created as _notify_ticket_transfer_invite_created,
@@ -219,14 +219,12 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
 
 
 def can_void_event_ticket(db: Session, *, user_id: int, event_id: int) -> bool:
-    event = (
-        db.execute(select(Event).options(joinedload(Event.organizer)).where(Event.id == event_id))
-        .unique()
-        .scalar_one_or_none()
+    return has_event_permission_by_id(
+        db,
+        user_id=user_id,
+        event_id=event_id,
+        action=EventPermissionAction.CANCEL_EVENT,
     )
-    if event is None:
-        return False
-    return event.organizer is not None and event.organizer.user_id == user_id
 
 
 def validate_ticket_voidable(ticket: Ticket) -> None:
@@ -627,31 +625,12 @@ def void_ticket(
 
 
 def can_actor_check_in_event(db: Session, *, user_id: int, event_id: int) -> bool:
-    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-    if user is None:
-        return False
-    if user.is_admin:
-        return True
-
-    event = (
-        db.execute(select(Event).options(joinedload(Event.organizer)).where(Event.id == event_id))
-        .unique()
-        .scalar_one_or_none()
+    return has_event_permission_by_id(
+        db,
+        user_id=user_id,
+        event_id=event_id,
+        action=EventPermissionAction.CHECKIN_TICKETS,
     )
-    if event is None:
-        return False
-    if event.organizer and event.organizer.user_id == user_id:
-        return True
-
-    staff_assignment = db.execute(
-        select(EventStaff.id).where(
-            EventStaff.event_id == event_id,
-            EventStaff.user_id == user_id,
-            EventStaff.is_active.is_(True),
-            EventStaff.role.in_([EventStaffRole.OWNER, EventStaffRole.MANAGER, EventStaffRole.SCANNER]),
-        )
-    ).scalar_one_or_none()
-    return staff_assignment is not None
 
 
 def can_check_in_event_tickets(db: Session, *, user_id: int, event_id: int) -> bool:

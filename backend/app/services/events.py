@@ -9,8 +9,8 @@ from app.models.event import Event
 from app.models.event_refund_batch import EventRefundBatch
 from app.models.enums import EventRefundBatchStatus, EventStatus, OrderStatus, RefundReason
 from app.models.order import Order
-from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
+from app.services.event_permissions import EventPermissionAction, has_event_permission
 from app.services.notifications import notify_event_cancelled
 from app.services.refunds import (
     RefundValidationError,
@@ -37,19 +37,6 @@ class EventAuthorizationError(EventFlowError):
 
 class EventCancellationError(EventFlowError):
     """Raised when event cancellation request is invalid."""
-
-
-def _is_event_organizer_or_admin(db: Session, *, event: Event, user_id: int) -> bool:
-    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-    if user is None:
-        return False
-    if user.is_admin:
-        return True
-
-    organizer_user_id = db.execute(
-        select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
-    ).scalar_one_or_none()
-    return organizer_user_id == user_id
 
 
 def enqueue_event_refund_batch(
@@ -201,7 +188,12 @@ def cancel_event(
         )
         if event is None:
             raise EventNotFoundError("Event not found.")
-        if not _is_event_organizer_or_admin(db, event=event, user_id=actor_user_id):
+        if not has_event_permission(
+            db,
+            user_id=actor_user_id,
+            event=event,
+            action=EventPermissionAction.CANCEL_EVENT,
+        ):
             raise EventAuthorizationError("Not authorized to cancel this event.")
         if event.status == EventStatus.CANCELLED:
             raise EventCancellationError("Event is already cancelled.")

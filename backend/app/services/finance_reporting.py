@@ -13,8 +13,8 @@ from app.models.order import Order
 from app.models.organizer_balance_adjustment import OrganizerBalanceAdjustment
 from app.models.refund import Refund
 from app.models.order_item import OrderItem
-from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
+from app.services.event_permissions import EventPermissionAction, has_event_permission
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -99,17 +99,12 @@ def validate_event_finance_access(db: Session, *, user_id: int, event_id: int) -
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
         raise FinanceReportingNotFoundError("Event not found.")
-
-    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-    if user is None:
-        raise FinanceReportingAuthorizationError("Not authorized to view event finance reporting.")
-    if user.is_admin:
-        return event
-
-    organizer_user_id = db.execute(
-        select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
-    ).scalar_one_or_none()
-    if organizer_user_id != user_id:
+    if not has_event_permission(
+        db,
+        user_id=user_id,
+        event=event,
+        action=EventPermissionAction.VIEW_ORDERS,
+    ):
         raise FinanceReportingAuthorizationError("Not authorized to view event finance reporting.")
     return event
 

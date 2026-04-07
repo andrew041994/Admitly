@@ -16,7 +16,7 @@ class EventStaff(TimestampMixin, Base):
     role: Mapped[EventStaffRole] = mapped_column(
         Enum(EventStaffRole, name="event_staff_role"),
         nullable=False,
-        default=EventStaffRole.SCANNER,
+        default=EventStaffRole.CHECKIN,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     invited_by_user_id: Mapped[int | None] = mapped_column(

@@ -4,9 +4,26 @@ from sqlalchemy.orm import Session
 
 from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
-from app.models.enums import EventRefundBatchStatus
+from app.models.enums import EventRefundBatchStatus, EventStaffRole
 from app.models.user import User
-from app.schemas.event import EventCancelRequest, EventRefundBatchResponse, EventResponse
+from app.schemas.event import (
+    EventCancelRequest,
+    EventRefundBatchResponse,
+    EventResponse,
+    EventStaffCreateRequest,
+    EventStaffResponse,
+    EventStaffUpdateRequest,
+)
+from app.services.event_permissions import EventPermissionDeniedError, EventPermissionNotFoundError
+from app.services.event_staff import (
+    EventStaffConflictError,
+    EventStaffNotFoundError,
+    EventStaffValidationError,
+    add_event_staff,
+    list_event_staff,
+    remove_event_staff,
+    update_event_staff_role,
+)
 from app.services.events import (
     EventAuthorizationError,
     EventCancellationError,
@@ -75,6 +92,113 @@ def cancel_existing_event(
         refund_batch_id=batch.id,
         refund_batch_status=batch.status.value,
     )
+
+
+
+
+def _to_event_staff_response(staff) -> EventStaffResponse:  # noqa: ANN001
+    return EventStaffResponse(
+        id=staff.id,
+        event_id=staff.event_id,
+        user_id=staff.user_id,
+        role=staff.role.value,
+        created_at=staff.created_at,
+        invited_by_user_id=staff.invited_by_user_id,
+    )
+
+
+@router.get("/{event_id}/staff", response_model=list[EventStaffResponse])
+def get_event_staff_assignments(
+    event_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[EventStaffResponse]:
+    try:
+        staff = list_event_staff(db, actor_user_id=user_id, event_id=event_id)
+    except EventPermissionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EventPermissionDeniedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return [_to_event_staff_response(row) for row in staff]
+
+
+@router.post("/{event_id}/staff", response_model=EventStaffResponse, status_code=status.HTTP_201_CREATED)
+def create_event_staff_assignment(
+    event_id: int,
+    payload: EventStaffCreateRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> EventStaffResponse:
+    try:
+        role = EventStaffRole(payload.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid role.") from exc
+
+    try:
+        staff = add_event_staff(db, actor_user_id=user_id, event_id=event_id, user_id=payload.user_id, role=role)
+        db.commit()
+    except EventPermissionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EventPermissionDeniedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except EventStaffConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except EventStaffValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return _to_event_staff_response(staff)
+
+
+@router.patch("/{event_id}/staff/{staff_id}", response_model=EventStaffResponse)
+def patch_event_staff_assignment(
+    event_id: int,
+    staff_id: int,
+    payload: EventStaffUpdateRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> EventStaffResponse:
+    try:
+        role = EventStaffRole(payload.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid role.") from exc
+
+    try:
+        staff = update_event_staff_role(
+            db,
+            actor_user_id=user_id,
+            event_id=event_id,
+            staff_id=staff_id,
+            role=role,
+        )
+        db.commit()
+    except EventPermissionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EventPermissionDeniedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except EventStaffNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EventStaffValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return _to_event_staff_response(staff)
+
+
+@router.delete("/{event_id}/staff/{staff_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_event_staff_assignment(
+    event_id: int,
+    staff_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> None:
+    try:
+        remove_event_staff(db, actor_user_id=user_id, event_id=event_id, staff_id=staff_id)
+        db.commit()
+    except EventPermissionNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EventPermissionDeniedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except EventStaffNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get("/admin/event-refund-batches", response_model=list[EventRefundBatchResponse])

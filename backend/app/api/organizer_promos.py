@@ -26,17 +26,27 @@ from app.services.promo_codes import (
     apply_promo_code_to_order_pricing_context,
     normalize_promo_code,
 )
-from app.services.reporting import EventReportingAuthorizationError, EventReportingNotFoundError, validate_event_reporting_access
+from app.services.event_permissions import (
+    EventPermissionAction,
+    EventPermissionDeniedError,
+    EventPermissionNotFoundError,
+    require_event_permission,
+)
 
 router = APIRouter(prefix="/organizer/events", tags=["organizer-promos"])
 
 
 def _authorize(db: Session, *, user_id: int, event_id: int) -> None:
     try:
-        validate_event_reporting_access(db, user_id=user_id, event_id=event_id)
-    except EventReportingNotFoundError as exc:
+        require_event_permission(
+            db,
+            user_id=user_id,
+            event_id=event_id,
+            action=EventPermissionAction.EDIT_EVENT,
+        )
+    except EventPermissionNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except EventReportingAuthorizationError as exc:
+    except EventPermissionDeniedError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
 

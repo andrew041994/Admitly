@@ -9,11 +9,11 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
 from app.models.event import Event
 from app.models.order import Order
-from app.models.organizer_profile import OrganizerProfile
 from app.models.order_item import OrderItem
 from app.models.ticket_hold import TicketHold
 from app.models.ticket_tier import TicketTier
 from app.models.user import User
+from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
 from app.services.promo_codes import (
     PromoCodeValidationError,
     apply_promo_code_to_order_pricing_context,
@@ -88,21 +88,6 @@ def _to_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-def _is_event_organizer_or_admin(db: Session, *, event_id: int, user_id: int) -> bool:
-    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-    if user is None:
-        return False
-    if user.is_admin:
-        return True
-
-    organizer_user_id = db.execute(
-        select(OrganizerProfile.user_id)
-        .join(Event, Event.organizer_id == OrganizerProfile.id)
-        .where(Event.id == event_id)
-    ).scalar_one_or_none()
-    return organizer_user_id == user_id
 
 
 def create_pending_order_from_holds(
@@ -304,7 +289,12 @@ def create_comp_order_for_user(
     ticket_requests: list[dict[str, int]],
     reason: str | None = None,
 ) -> Order:
-    if not _is_event_organizer_or_admin(db, event_id=event_id, user_id=actor_user_id):
+    if not has_event_permission_by_id(
+        db,
+        user_id=actor_user_id,
+        event_id=event_id,
+        action=EventPermissionAction.EDIT_EVENT,
+    ):
         raise OrderAuthorizationError("Not authorized to comp tickets for this event.")
     if not ticket_requests:
         raise OrderFlowError("At least one ticket request is required.")
@@ -424,7 +414,12 @@ def refund_completed_order(
         )
         if order is None:
             raise OrderNotFoundError("Order not found.")
-        if not _is_event_organizer_or_admin(db, event_id=order.event_id, user_id=actor_user_id):
+        if not has_event_permission_by_id(
+            db,
+            user_id=actor_user_id,
+            event_id=order.event_id,
+            action=EventPermissionAction.MANAGE_REFUNDS,
+        ):
             raise OrderAuthorizationError("Not authorized to refund this order.")
         if order.status != OrderStatus.COMPLETED:
             raise OrderRefundError("Only completed orders can be refunded.")

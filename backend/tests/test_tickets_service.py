@@ -343,7 +343,7 @@ def test_organizer_and_staff_authz_for_checkin(db_session: Session) -> None:
         EventStaff(
             event_id=event.id,
             user_id=staff_user.id,
-            role=EventStaffRole.SCANNER,
+            role=EventStaffRole.CHECKIN,
             is_active=True,
             invited_by_user_id=organizer_user_id,
         )

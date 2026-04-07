@@ -11,11 +11,10 @@ from app.models.enums import OrderStatus, TicketStatus
 from app.models.event import Event
 from app.models.order import Order
 from app.models.order_item import OrderItem
-from app.models.organizer_profile import OrganizerProfile
 from app.models.ticket import Ticket
 from app.models.ticket_hold import TicketHold
 from app.models.ticket_tier import TicketTier
-from app.models.user import User
+from app.services.event_permissions import EventPermissionAction, has_event_permission
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -131,16 +130,19 @@ def validate_event_reporting_access(db: Session, *, user_id: int, event_id: int)
     if event is None:
         raise EventReportingNotFoundError("Event not found.")
 
-    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-    if user is None:
-        raise EventReportingAuthorizationError("Not authorized to view event reporting.")
-    if user.is_admin:
-        return event
-
-    organizer_user_id = db.execute(
-        select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
-    ).scalar_one_or_none()
-    if organizer_user_id != user_id:
+    can_view_orders = has_event_permission(
+        db,
+        user_id=user_id,
+        event=event,
+        action=EventPermissionAction.VIEW_ORDERS,
+    )
+    can_view_checkins = has_event_permission(
+        db,
+        user_id=user_id,
+        event=event,
+        action=EventPermissionAction.VIEW_CHECKIN_SUMMARY,
+    )
+    if not can_view_orders and not can_view_checkins:
         raise EventReportingAuthorizationError("Not authorized to view event reporting.")
     return event
 

@@ -20,9 +20,12 @@ from app.schemas.reporting import (
     OrganizerTierSummaryRowResponse,
 )
 from app.services.finance_reporting import (
+    FinanceReportingAuthorizationError,
+    FinanceReportingNotFoundError,
     get_event_finance_summary,
     get_organizer_payout_summary,
     list_event_finance_orders,
+    validate_event_finance_access,
     validate_organizer_finance_access,
 )
 from app.services.reporting import (
@@ -157,7 +160,12 @@ def get_organizer_event_finance_summary(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> EventFinanceSummaryResponse:
-    _authorize(db, user_id=user_id, event_id=event_id)
+    try:
+        validate_event_finance_access(db, user_id=user_id, event_id=event_id)
+    except FinanceReportingNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except FinanceReportingAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     summary = get_event_finance_summary(db, event_id=event_id)
     return EventFinanceSummaryResponse(
         event_id=summary.event_id,
@@ -198,7 +206,12 @@ def get_organizer_event_finance_orders(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> list[EventFinanceOrderRowResponse]:
-    _authorize(db, user_id=user_id, event_id=event_id)
+    try:
+        validate_event_finance_access(db, user_id=user_id, event_id=event_id)
+    except FinanceReportingNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except FinanceReportingAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     rows = list_event_finance_orders(
         db,
         event_id=event_id,
