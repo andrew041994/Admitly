@@ -1,9 +1,9 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/app/services/orders.py b/backend/app/services/orders.py
-index 79450be05c782486cea3d4ab4edf42562bf395bf..4d71c44b697d185313f77065c4b78e3ee75153c5 100644
+index 4d71c44b697d185313f77065c4b78e3ee75153c5..07c4effd27bdafd3f8f67fbd918fa200ce5c323b 100644
 --- a/backend/app/services/orders.py
 +++ b/backend/app/services/orders.py
-@@ -215,53 +215,60 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
+@@ -215,60 +215,53 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
      )
  
  
@@ -29,18 +29,18 @@ index 79450be05c782486cea3d4ab4edf42562bf395bf..4d71c44b697d185313f77065c4b78e3e
      if not order.ticket_holds:
          raise OrderNotPayableError("Order has no linked holds.")
  
--    normalized_holds = [_to_aware(hold.expires_at) for hold in order.ticket_holds]
-     effective_now = reference_now
--    if not all(hold > effective_now for hold in normalized_holds):
-+
-+    normalized_holds: list[datetime] = []
-+    for hold in order.ticket_holds:
-+        hold_expires_at = hold.expires_at
-+        if hold_expires_at.tzinfo is None:
-+            hold_expires_at = hold_expires_at.replace(tzinfo=effective_now.tzinfo or timezone.utc)
-+        normalized_holds.append(hold_expires_at)
-+
-+    if not all(hold > effective_now.astimezone(hold.tzinfo) for hold in normalized_holds):
+-    effective_now = reference_now
++    normalized_holds = [_to_aware(hold.expires_at) for hold in order.ticket_holds]
+ 
+-    normalized_holds: list[datetime] = []
+-    for hold in order.ticket_holds:
+-        hold_expires_at = hold.expires_at
+-        if hold_expires_at.tzinfo is None:
+-            hold_expires_at = hold_expires_at.replace(tzinfo=effective_now.tzinfo or timezone.utc)
+-        normalized_holds.append(hold_expires_at)
+-
+-    if not all(hold > effective_now.astimezone(hold.tzinfo) for hold in normalized_holds):
++    if not all(hold > reference_now for hold in normalized_holds):
          order.status = OrderStatus.EXPIRED
          raise OrderNotPayableError("Order holds have expired.")
  

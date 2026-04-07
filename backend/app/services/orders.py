@@ -237,16 +237,9 @@ def validate_order_still_payable(order: Order | None, now: datetime | None = Non
     if not order.ticket_holds:
         raise OrderNotPayableError("Order has no linked holds.")
 
-    effective_now = reference_now
+    normalized_holds = [_to_aware(hold.expires_at) for hold in order.ticket_holds]
 
-    normalized_holds: list[datetime] = []
-    for hold in order.ticket_holds:
-        hold_expires_at = hold.expires_at
-        if hold_expires_at.tzinfo is None:
-            hold_expires_at = hold_expires_at.replace(tzinfo=effective_now.tzinfo or timezone.utc)
-        normalized_holds.append(hold_expires_at)
-
-    if not all(hold > effective_now.astimezone(hold.tzinfo) for hold in normalized_holds):
+    if not all(hold > reference_now for hold in normalized_holds):
         order.status = OrderStatus.EXPIRED
         raise OrderNotPayableError("Order holds have expired.")
 
