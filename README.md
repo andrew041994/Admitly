@@ -8,6 +8,7 @@ Premium event ticketing platform for Guyana.
 - Migrations: Alembic
 - Database: PostgreSQL
 - Admin frontend foundation: React + TypeScript + Vite (`admin/`)
+- Mobile app foundation: Expo + React Native (`mobile/`)
 
 ## Planned apps
 - Backend API

@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Admitly",
+    "slug": "admitly-mobile",
+    "scheme": "admitly",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.admitly.mobile"
+    },
+    "android": {
+      "package": "com.admitly.mobile"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "extra": {
+      "apiBaseUrl": "http://localhost:8000"
+    }
+  }
+}
