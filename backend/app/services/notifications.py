@@ -4,12 +4,14 @@ import logging
 from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from datetime import timezone
+from enum import Enum
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
 from app.models.event import Event
+from app.models.dispute import Dispute
 from app.models.enums import ReminderType
 from app.models.order import Order
 from app.models.push_token import PushToken
@@ -18,6 +20,21 @@ from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
+
+
+class NotificationEventType(str, Enum):
+    ORDER_COMPLETED = "order_completed"
+    REFUND_PROCESSED = "refund_processed"
+    EVENT_CANCELLED = "event_cancelled"
+    TICKET_TRANSFER_RECEIVED = "ticket_transfer_received"
+    TICKET_TRANSFER_ACCEPTED = "ticket_transfer_accepted"
+    DISPUTE_RESOLVED = "dispute_resolved"
+    EVENT_REMINDER = "event_reminder"
+
+
+class NotificationChannel(str, Enum):
+    EMAIL = "email"
+    PUSH = "push"
 
 
 @dataclass(slots=True)
@@ -39,6 +56,34 @@ class PushMessage:
     title: str
     body: str
     data: dict[str, str]
+
+
+def get_notification_channels(event_type: NotificationEventType) -> tuple[NotificationChannel, ...]:
+    if event_type in {
+        NotificationEventType.ORDER_COMPLETED,
+        NotificationEventType.REFUND_PROCESSED,
+    }:
+        return (NotificationChannel.EMAIL, NotificationChannel.PUSH)
+    if event_type in {
+        NotificationEventType.EVENT_CANCELLED,
+        NotificationEventType.DISPUTE_RESOLVED,
+    }:
+        return (NotificationChannel.EMAIL, NotificationChannel.PUSH)
+    if event_type in {
+        NotificationEventType.TICKET_TRANSFER_RECEIVED,
+        NotificationEventType.TICKET_TRANSFER_ACCEPTED,
+        NotificationEventType.EVENT_REMINDER,
+    }:
+        return (NotificationChannel.PUSH,)
+    return tuple()
+
+
+def should_send_email(event_type: NotificationEventType) -> bool:
+    return NotificationChannel.EMAIL in get_notification_channels(event_type)
+
+
+def should_send_push(event_type: NotificationEventType) -> bool:
+    return NotificationChannel.PUSH in get_notification_channels(event_type)
 
 
 def _send_email(message: EmailMessage) -> str:
@@ -131,11 +176,26 @@ def _order_event_label(order: Order) -> str:
     return event_title or f"Event #{order.event_id}"
 
 
+def dispatch_notification_event(
+    db: Session,
+    *,
+    event_type: NotificationEventType,
+    email: EmailMessage | None = None,
+    push: PushMessage | None = None,
+) -> NotificationDispatchResult:
+    return _dispatch(
+        db,
+        email=email if should_send_email(event_type) else None,
+        push=push if should_send_push(event_type) else None,
+    )
+
+
 def notify_order_completed(db: Session, order: Order) -> NotificationDispatchResult:
     email = _user_email(db, order.user_id)
     event_label = _order_event_label(order)
-    return _dispatch(
+    return dispatch_notification_event(
         db,
+        event_type=NotificationEventType.ORDER_COMPLETED,
         email=EmailMessage(
             to_email=email,
             subject=f"Order #{order.id} confirmed",
@@ -235,13 +295,10 @@ def notify_ticket_transfer_invite_created(db: Session, invite: TicketTransferInv
     recipient_email = invite.recipient_email
     if not recipient_email and invite.recipient_user_id:
         recipient_email = _user_email(db, invite.recipient_user_id)
-    return _dispatch(
+    _ = recipient_email
+    return dispatch_notification_event(
         db,
-        email=EmailMessage(
-            to_email=recipient_email,
-            subject=f"Ticket transfer invite for ticket #{invite.ticket_id}",
-            body=f"You have a pending invite for ticket #{invite.ticket_id}.",
-        ) if recipient_email else None,
+        event_type=NotificationEventType.TICKET_TRANSFER_RECEIVED,
         push=PushMessage(
             user_id=invite.recipient_user_id,
             title="Ticket transfer invite",
@@ -256,15 +313,9 @@ def notify_ticket_transfer_invite_accepted(
     invite: TicketTransferInvite,
     ticket: Ticket,
 ) -> dict[str, NotificationDispatchResult]:
-    sender_email = _user_email(db, invite.sender_user_id)
-    recipient_email = _user_email(db, ticket.owner_user_id)
-    sender = _dispatch(
+    sender = dispatch_notification_event(
         db,
-        email=EmailMessage(
-            to_email=sender_email,
-            subject=f"Transfer invite accepted for ticket #{ticket.id}",
-            body=f"Your transfer invite for ticket #{ticket.id} was accepted.",
-        ) if sender_email else None,
+        event_type=NotificationEventType.TICKET_TRANSFER_ACCEPTED,
         push=PushMessage(
             user_id=invite.sender_user_id,
             title="Transfer accepted",
@@ -272,13 +323,9 @@ def notify_ticket_transfer_invite_accepted(
             data={"type": "ticket_transfer_invite_accepted", "ticket_id": str(ticket.id), "invite_id": str(invite.id)},
         ),
     )
-    recipient = _dispatch(
+    recipient = dispatch_notification_event(
         db,
-        email=EmailMessage(
-            to_email=recipient_email,
-            subject=f"You now own ticket #{ticket.id}",
-            body=f"Ticket #{ticket.id} transfer is complete.",
-        ) if recipient_email else None,
+        event_type=NotificationEventType.TICKET_TRANSFER_ACCEPTED,
         push=PushMessage(
             user_id=ticket.owner_user_id,
             title="Ticket received",
@@ -328,8 +375,9 @@ def notify_order_refunded(order: Order, *, actor_user_id: int) -> NotificationDi
 
     email = _user_email(db, order.user_id)
     _ = actor_user_id
-    return _dispatch(
+    return dispatch_notification_event(
         db,
+        event_type=NotificationEventType.REFUND_PROCESSED,
         email=EmailMessage(
             to_email=email,
             subject=f"Order #{order.id} refunded",
@@ -355,8 +403,9 @@ def notify_event_cancelled(event: Event, *, actor_user_id: int) -> NotificationD
     last = NotificationDispatchResult(success=True, channel_results={})
     for user_id in unique_user_ids:
         email = _user_email(db, user_id)
-        last = _dispatch(
+        last = dispatch_notification_event(
             db,
+            event_type=NotificationEventType.EVENT_CANCELLED,
             email=EmailMessage(
                 to_email=email,
                 subject=f"Event cancelled: {event.title}",
@@ -428,15 +477,6 @@ def notify_event_reminder(
 ) -> NotificationDispatchResult:
     subject_prefix, body_phrase = _reminder_message(reminder_type)
     local_start = _format_event_start_for_message(event)
-    email = EmailMessage(
-        to_email=user.email,
-        subject=f"{subject_prefix}: {event.title}",
-        body=(
-            f"{event.title} {body_phrase}. Start time: {local_start}. "
-            f"You currently have {ticket_count} valid ticket(s)."
-        ),
-    ) if user.email else None
-
     push = PushMessage(
         user_id=user.id,
         title=subject_prefix,
@@ -447,4 +487,39 @@ def notify_event_reminder(
             "reminder_type": reminder_type.value,
         },
     )
-    return _dispatch(db, email=email, push=push)
+    _ = body_phrase
+    _ = ticket_count
+    return dispatch_notification_event(
+        db,
+        event_type=NotificationEventType.EVENT_REMINDER,
+        push=push,
+    )
+
+
+def notify_dispute_resolved(
+    db: Session,
+    *,
+    dispute: Dispute,
+    order: Order | None,
+) -> NotificationDispatchResult:
+    email = _user_email(db, dispute.user_id)
+    order_ref = order.id if order is not None else dispute.order_id
+    return dispatch_notification_event(
+        db,
+        event_type=NotificationEventType.DISPUTE_RESOLVED,
+        email=EmailMessage(
+            to_email=email,
+            subject=f"Dispute #{dispute.id} resolved",
+            body=f"Dispute #{dispute.id} for order #{order_ref} has been resolved.",
+        ) if email else None,
+        push=PushMessage(
+            user_id=dispute.user_id,
+            title="Dispute resolved",
+            body=f"Dispute #{dispute.id} has been resolved.",
+            data={
+                "type": NotificationEventType.DISPUTE_RESOLVED.value,
+                "dispute_id": str(dispute.id),
+                "order_id": str(order_ref),
+            },
+        ),
+    )

@@ -239,7 +239,7 @@ def test_dispatch_uses_email_and_push_paths(db_session: Session, monkeypatch: py
 
     dispatch_due_event_reminders(db_session, now=now)
 
-    assert sent["email"] == 1
+    assert sent["email"] == 0
     assert sent["push"] == 1
 
 

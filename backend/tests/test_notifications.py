@@ -12,9 +12,16 @@ from app.api.orders import resend_order_confirmation_notification
 from app.db.base import Base
 from app.api.tickets import resend_ticket
 from app.models import Event, OrganizerProfile, Order, OrderItem, TicketTier, User, Venue
-from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
+from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus, ReminderType
 from app.services.events import cancel_event
-from app.services.notifications import notify_order_completed
+from app.services import notifications as notification_service
+from app.services.notifications import (
+    NotificationChannel,
+    NotificationEventType,
+    get_notification_channels,
+    notify_event_reminder,
+    notify_order_completed,
+)
 from app.services.orders import complete_paid_order, refund_completed_order
 from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
 
@@ -188,3 +195,60 @@ def test_notification_provider_failure_soft_fails(db_session: Session, monkeypat
     result = notify_order_completed(db_session, order)
     assert result.success is False
     assert result.channel_results["email"] == "failed"
+
+
+def test_notification_channel_routing_policy_excludes_sms() -> None:
+    assert get_notification_channels(NotificationEventType.ORDER_COMPLETED) == (
+        NotificationChannel.EMAIL,
+        NotificationChannel.PUSH,
+    )
+    assert get_notification_channels(NotificationEventType.REFUND_PROCESSED) == (
+        NotificationChannel.EMAIL,
+        NotificationChannel.PUSH,
+    )
+    assert get_notification_channels(NotificationEventType.EVENT_CANCELLED) == (
+        NotificationChannel.EMAIL,
+        NotificationChannel.PUSH,
+    )
+    assert get_notification_channels(NotificationEventType.DISPUTE_RESOLVED) == (
+        NotificationChannel.EMAIL,
+        NotificationChannel.PUSH,
+    )
+    assert get_notification_channels(NotificationEventType.EVENT_REMINDER) == (NotificationChannel.PUSH,)
+    assert get_notification_channels(NotificationEventType.TICKET_TRANSFER_RECEIVED) == (NotificationChannel.PUSH,)
+    assert get_notification_channels(NotificationEventType.TICKET_TRANSFER_ACCEPTED) == (NotificationChannel.PUSH,)
+    assert "sms" not in {channel.value for event in NotificationEventType for channel in get_notification_channels(event)}
+
+
+def test_event_reminder_routes_push_only_and_graceful_without_tokens(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order, buyer, event = _seed_order(db_session, suffix="reminder-routing")
+    issue_tickets_for_completed_order(db_session, order)
+
+    sent = {"email": 0, "push": 0}
+    monkeypatch.setattr("app.services.notifications.settings.email_notifications_enabled", True)
+    monkeypatch.setattr("app.services.notifications.settings.email_provider", "mock")
+    monkeypatch.setattr("app.services.notifications.settings.push_notifications_enabled", True)
+    monkeypatch.setattr("app.services.notifications.settings.push_provider", "mock")
+    monkeypatch.setattr(
+        "app.services.notifications._send_email",
+        lambda message: sent.__setitem__("email", sent["email"] + 1),
+    )
+    original_send_push = notification_service._send_push
+
+    def _wrapped_send_push(db, message):
+        sent["push"] += 1
+        return original_send_push(db, message)
+
+    monkeypatch.setattr("app.services.notifications._send_push", _wrapped_send_push)
+    result = notify_event_reminder(
+        db_session,
+        event=event,
+        user=buyer,
+        reminder_type=ReminderType.HOURS_24_BEFORE,
+        ticket_count=2,
+    )
+    assert result.success is True
+    assert result.channel_results["push"] == "skipped_no_tokens"
+    assert sent == {"email": 0, "push": 1}

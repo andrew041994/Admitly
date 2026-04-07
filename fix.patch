@@ -1,48 +1,54 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_reversals_service.py b/backend/tests/test_reversals_service.py
-index b6d784407b51837d39e91d067e10d698814987b5..86ad7daa2fc3a049b54b5ee8257c6be592f7c658 100644
---- a/backend/tests/test_reversals_service.py
-+++ b/backend/tests/test_reversals_service.py
-@@ -257,38 +257,38 @@ def test_refund_rejects_unauthorized_repeat_and_checked_in_ticket(db_session: Se
+diff --git a/backend/tests/test_reminders_service.py b/backend/tests/test_reminders_service.py
+index 626d1af0ef815e1d3cc7fbbcb1a338b5966825ca..d85f534924736ce8a3eff757ab640ac88ebab776 100644
+--- a/backend/tests/test_reminders_service.py
++++ b/backend/tests/test_reminders_service.py
+@@ -217,44 +217,44 @@ def test_dispatch_dedup_and_repeat_runs(db_session: Session, monkeypatch: pytest
+ def test_dispatch_uses_email_and_push_paths(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
+     order, _, _ = _seed_order(db_session, suffix="channels", event_start_at=now + timedelta(hours=24, minutes=1))
+     issue_tickets_for_completed_order(db_session, order)
  
- def test_cancel_event_voids_issued_tickets_and_cancels_pending_orders(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-     organizer_user = User(email="organizer_event_cancel@example.com", full_name="Organizer")
-     buyer = User(email="buyer_event_cancel@example.com", full_name="Buyer")
-     outsider = User(email="outsider_event_cancel@example.com", full_name="Outsider")
-     db_session.add_all([organizer_user, buyer, outsider])
-     db_session.flush()
+     monkeypatch.setattr("app.services.notifications.settings.email_notifications_enabled", True)
+     monkeypatch.setattr("app.services.notifications.settings.email_provider", "mock")
+     monkeypatch.setattr("app.services.notifications.settings.push_notifications_enabled", True)
+     monkeypatch.setattr("app.services.notifications.settings.push_provider", "mock")
  
-     event = _seed_event(db_session, organizer_user=organizer_user, slug="event-cancel")
-     completed = _seed_order(db_session, event=event, buyer=buyer, status=OrderStatus.COMPLETED)
-     pending = _seed_order(db_session, event=event, buyer=buyer, status=OrderStatus.PENDING, with_hold=True)
-     issued = issue_tickets_for_completed_order(db_session, completed)
+     sent = {"email": 0, "push": 0}
  
-     called = {"event": False}
+     def _email(message):
+         sent["email"] += 1
+         return "sent_mock"
  
-     def _notify(event_obj, *, actor_user_id: int) -> None:  # noqa: ANN001
-         assert event_obj.id == event.id
-         assert actor_user_id == organizer_user.id
-         called["event"] = True
+     def _push(db, message):
+         sent["push"] += 1
+         return "sent_mock:1"
  
-     monkeypatch.setattr("app.services.events.notify_event_cancelled", _notify)
+     monkeypatch.setattr("app.services.notifications._send_email", _email)
+     monkeypatch.setattr("app.services.notifications._send_push", _push)
  
-     with pytest.raises(EventAuthorizationError):
-         cancel_event(db_session, event_id=event.id, actor_user_id=outsider.id)
+     dispatch_due_event_reminders(db_session, now=now)
  
--    cancelled_event = cancel_event(db_session, event_id=event.id, actor_user_id=organizer_user.id, reason="weather")
-+    cancelled_event, _ = cancel_event(db_session, event_id=event.id, actor_user_id=organizer_user.id, reason="weather")
-     assert cancelled_event.status == EventStatus.CANCELLED
-     assert cancelled_event.cancelled_by_user_id == organizer_user.id
-     assert cancelled_event.cancellation_reason == "weather"
-     assert called["event"]
+-    assert sent["email"] == 1
++    assert sent["email"] == 0
+     assert sent["push"] == 1
  
-     db_session.refresh(pending)
-     assert pending.status == OrderStatus.CANCELLED
-     assert pending.cancel_reason == "Event cancelled: weather"
  
-     refreshed_tickets = db_session.execute(select(Ticket).where(Ticket.event_id == event.id)).scalars().all()
-     assert len(refreshed_tickets) == len(issued)
-     assert all(ticket.status == TicketStatus.VOIDED for ticket in refreshed_tickets)
+ def test_reminder_dispatch_does_not_mutate_ticket_state(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
+     order, _, _ = _seed_order(db_session, suffix="no-mutate", event_start_at=now + timedelta(hours=3, minutes=1))
+     tickets = issue_tickets_for_completed_order(db_session, order)
+     before = [(t.id, t.owner_user_id, t.status) for t in tickets]
+ 
+     monkeypatch.setattr("app.services.notifications.settings.email_notifications_enabled", False)
+     monkeypatch.setattr("app.services.notifications.settings.push_notifications_enabled", False)
+ 
+     dispatch_due_event_reminders(db_session, now=now)
+ 
+     for ticket_id, owner_id, status in before:
+         ticket = db_session.execute(select(Ticket).where(Ticket.id == ticket_id)).scalar_one()
+         assert ticket.owner_user_id == owner_id
+         assert ticket.status == status
  
 EOF
 )

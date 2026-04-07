@@ -23,6 +23,7 @@ from app.models.order import Order
 from app.models.organizer_balance_adjustment import OrganizerBalanceAdjustment
 from app.models.refund import Refund
 from app.models.user import User
+from app.services.notifications import notify_dispute_resolved, notify_order_refunded
 from app.services.tickets import invalidate_order_tickets
 
 
@@ -219,6 +220,10 @@ def _process_refund_locked(
             )
 
     db.flush()
+    try:
+        notify_order_refunded(order, actor_user_id=actor_user_id)
+    except TypeError:
+        notify_order_refunded(db, order, actor_user_id=actor_user_id)
     return refund
 
 
@@ -389,6 +394,7 @@ def resolve_dispute(
     dispute.resolved_by_user_id = actor_user_id
     dispute.resolved_at = _now()
 
+    order: Order | None = None
     if refund_amount is not None:
         reason = refund_reason or RefundReason.OTHER
         refund = Refund(
@@ -415,6 +421,7 @@ def resolve_dispute(
         _process_refund_locked(db, refund=refund, order=order, actor_user_id=actor_user_id, admin_notes=admin_notes)
 
     db.flush()
+    notify_dispute_resolved(db, dispute=dispute, order=order)
     return dispute
 
 

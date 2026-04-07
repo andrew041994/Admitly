@@ -270,3 +270,29 @@ def test_dispute_creation_uniqueness_and_resolve_with_refund(db_session: Session
     assert resolved.status == DisputeStatus.RESOLVED
     created_refunds = db_session.execute(select(FinancialEntry).join(Dispute, Dispute.order_id == FinancialEntry.order_id).where(Dispute.id == dispute.id)).scalars().all()
     assert created_refunds
+
+
+def test_dispute_resolution_triggers_central_notification(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    data = _seed(db_session)
+    dispute = submit_dispute(
+        db_session,
+        user_id=data["buyer"].id,
+        order_id=data["paid_order"].id,
+        message="Need support",
+    )
+    called = {"count": 0}
+    monkeypatch.setattr(
+        "app.services.refunds.notify_dispute_resolved",
+        lambda db, dispute, order: called.__setitem__("count", called["count"] + 1),
+    )
+
+    resolve_dispute(
+        db_session,
+        dispute_id=dispute.id,
+        actor_user_id=data["admin"].id,
+        resolution="resolved",
+        admin_notes="done",
+        refund_amount=None,
+        refund_reason=None,
+    )
+    assert called["count"] == 1
