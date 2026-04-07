@@ -12,7 +12,15 @@ from app.models.order import Order
 from app.models.organizer_profile import OrganizerProfile
 from app.models.order_item import OrderItem
 from app.models.ticket_hold import TicketHold
+from app.models.ticket_tier import TicketTier
 from app.models.user import User
+from app.services.promo_codes import (
+    PromoCodeValidationError,
+    apply_promo_code_to_order_pricing_context,
+    comp_pricing,
+    record_promo_redemption_for_order,
+    standard_pricing,
+)
 from app.services.notifications import (
     NotificationDispatchResult,
     notify_order_cancelled,
@@ -102,6 +110,7 @@ def create_pending_order_from_holds(
     *,
     user_id: int,
     hold_ids: list[int],
+    promo_code_text: str | None = None,
     now: datetime | None = None,
 ) -> Order:
     if not hold_ids:
@@ -129,7 +138,8 @@ def create_pending_order_from_holds(
 
         event_ids: set[int] = set()
         currencies: set[str] = set()
-        total_amount = Decimal("0.00")
+        subtotal_amount = Decimal("0.00")
+        tier_ids: list[int] = []
 
         for hold in holds:
             if hold.user_id != user_id:
@@ -142,19 +152,40 @@ def create_pending_order_from_holds(
             event_ids.add(hold.event_id)
             tier_currency = hold.ticket_tier.currency
             currencies.add(tier_currency)
-            total_amount += Decimal(hold.quantity) * Decimal(hold.ticket_tier.price_amount)
+            tier_ids.append(hold.ticket_tier_id)
+            subtotal_amount += Decimal(hold.quantity) * Decimal(hold.ticket_tier.price_amount)
 
         if len(event_ids) != 1:
             raise HoldEventMismatchError("All holds must belong to the same event.")
         if len(currencies) != 1:
             raise HoldCurrencyMismatchError("All holds must share the same currency.")
 
+        pricing = standard_pricing(subtotal_amount)
+        if promo_code_text:
+            pricing = apply_promo_code_to_order_pricing_context(
+                db,
+                event_id=next(iter(event_ids)),
+                user_id=user_id,
+                tier_ids=tier_ids,
+                subtotal_amount=subtotal_amount,
+                promo_code_text=promo_code_text,
+                now=reference_now,
+            )
+
         order = Order(
             user_id=user_id,
             event_id=next(iter(event_ids)),
             status=OrderStatus.PENDING,
-            total_amount=total_amount,
+            subtotal_amount=pricing.subtotal_amount,
+            discount_amount=pricing.discount_amount,
+            total_amount=pricing.total_amount,
             currency=next(iter(currencies)),
+            promo_code_id=pricing.promo_code_id,
+            promo_code_text=pricing.promo_code_text,
+            discount_type=pricing.discount_type,
+            discount_value_snapshot=pricing.discount_value_snapshot,
+            pricing_source=pricing.pricing_source,
+            is_comp=False,
         )
         db.add(order)
         db.flush()
@@ -253,9 +284,80 @@ def complete_paid_order(
 
     tickets = issue_tickets_for_completed_order(db, order)
     if became_completed:
+        record_promo_redemption_for_order(db, order=order)
+    if became_completed:
         notify_order_completed(db, order)
         notify_tickets_issued(db, order, tickets)
     return order
+
+
+def create_comp_order_for_user(
+    db: Session,
+    *,
+    event_id: int,
+    purchaser_user_id: int,
+    actor_user_id: int,
+    ticket_requests: list[dict[str, int]],
+    reason: str | None = None,
+) -> Order:
+    if not _is_event_organizer_or_admin(db, event_id=event_id, user_id=actor_user_id):
+        raise OrderAuthorizationError("Not authorized to comp tickets for this event.")
+    if not ticket_requests:
+        raise OrderFlowError("At least one ticket request is required.")
+
+    tier_quantities = {int(item["ticket_tier_id"]): int(item["quantity"]) for item in ticket_requests if int(item["quantity"]) > 0}
+    if not tier_quantities:
+        raise OrderFlowError("Ticket quantities must be greater than zero.")
+
+    tiers = db.execute(
+        select(TicketTier).where(TicketTier.event_id == event_id, TicketTier.id.in_(tier_quantities.keys())).with_for_update()
+    ).scalars().all()
+    if len(tiers) != len(tier_quantities):
+        raise OrderFlowError("One or more ticket tiers were not found for event.")
+
+    subtotal = Decimal("0.00")
+    for tier in tiers:
+        quantity = tier_quantities[tier.id]
+        remaining = int(tier.quantity_total) - int(tier.quantity_sold) - int(tier.quantity_held)
+        if remaining < quantity:
+            raise OrderFlowError(f"Insufficient availability for tier {tier.id}.")
+        subtotal += Decimal(quantity) * Decimal(tier.price_amount)
+
+    pricing = comp_pricing(subtotal)
+    order = Order(
+        user_id=purchaser_user_id,
+        event_id=event_id,
+        status=OrderStatus.COMPLETED,
+        subtotal_amount=pricing.subtotal_amount,
+        discount_amount=pricing.discount_amount,
+        total_amount=pricing.total_amount,
+        currency=tiers[0].currency,
+        payment_provider=None,
+        payment_method=None,
+        payment_verification_status="verified",
+        paid_at=get_guyana_now(),
+        reconciliation_status=ReconciliationStatus.UNRECONCILED,
+        payout_status=PayoutStatus.NOT_READY,
+        pricing_source=pricing.pricing_source,
+        comp_reason=reason.strip() if reason else None,
+        is_comp=True,
+    )
+    db.add(order)
+    db.flush()
+
+    for tier in tiers:
+        db.add(
+            OrderItem(
+                order_id=order.id,
+                ticket_tier_id=tier.id,
+                quantity=tier_quantities[tier.id],
+                unit_price=tier.price_amount,
+            )
+        )
+    db.flush()
+    issue_tickets_for_completed_order(db, order)
+    db.flush()
+    return get_order_with_holds(db, order_id=order.id) or order
 
 
 def cancel_pending_order(

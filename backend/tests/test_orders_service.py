@@ -14,6 +14,8 @@ from app.services.orders import (
     HoldEventMismatchError,
     HoldExpiredError,
     HoldOwnershipError,
+    OrderAuthorizationError,
+    create_comp_order_for_user,
     create_pending_order_from_holds,
 )
 from app.services.ticket_holds import get_ticket_type_availability
@@ -334,3 +336,51 @@ def test_pending_orders_do_not_count_as_sold_and_no_double_count_after_conversio
 
     availability_after = get_ticket_type_availability(db_session, ticket_tier_id=tiers[0].id, now=now)
     assert availability_after == 7
+
+
+def test_create_comp_order_marks_zero_total_and_comp_flags(db_session: Session) -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    user, event, tiers = _seed_event_with_tiers(
+        db_session,
+        owner_email="compowner@example.com",
+        start_at=now + timedelta(days=3),
+        tier_prices=[Decimal("100.00")],
+        quantity_total=10,
+    )
+
+    order = create_comp_order_for_user(
+        db_session,
+        event_id=event.id,
+        purchaser_user_id=user.id,
+        actor_user_id=user.id,
+        ticket_requests=[{"ticket_tier_id": tiers[0].id, "quantity": 2}],
+        reason="VIP guest",
+    )
+
+    assert order.total_amount == Decimal("0.00")
+    assert order.subtotal_amount == Decimal("200.00")
+    assert order.discount_amount == Decimal("200.00")
+    assert order.is_comp is True
+
+
+def test_unrelated_user_cannot_create_comp_order(db_session: Session) -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    user, event, tiers = _seed_event_with_tiers(
+        db_session,
+        owner_email="compowner2@example.com",
+        start_at=now + timedelta(days=3),
+        tier_prices=[Decimal("100.00")],
+        quantity_total=10,
+    )
+    outsider = User(email="outsider@example.com", full_name="Out")
+    db_session.add(outsider)
+    db_session.commit()
+
+    with pytest.raises(OrderAuthorizationError):
+        create_comp_order_for_user(
+            db_session,
+            event_id=event.id,
+            purchaser_user_id=user.id,
+            actor_user_id=outsider.id,
+            ticket_requests=[{"ticket_tier_id": tiers[0].id, "quantity": 1}],
+        )

@@ -4,6 +4,9 @@ from app.models.event_staff import EventStaff
 from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.organizer_profile import OrganizerProfile
+from app.models.promo_code import PromoCode
+from app.models.promo_code_redemption import PromoCodeRedemption
+from app.models.promo_code_ticket_tier import PromoCodeTicketTier
 from app.models.push_token import PushToken
 from app.models.ticket import Ticket
 from app.models.ticket_hold import TicketHold
@@ -22,6 +25,9 @@ __all__ = [
     "TicketTier",
     "Order",
     "OrderItem",
+    "PromoCode",
+    "PromoCodeRedemption",
+    "PromoCodeTicketTier",
     "PushToken",
     "Ticket",
     "TicketHold",

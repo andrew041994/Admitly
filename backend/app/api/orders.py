@@ -30,6 +30,7 @@ from app.services.orders import (
     OrderNotFoundError,
     OrderNotPayableError,
     OrderRefundError,
+    PromoCodeValidationError,
     cancel_pending_order,
     create_pending_order_from_holds,
     get_order_for_user,
@@ -64,7 +65,12 @@ def _to_order_response(order) -> OrderResponse:
         user_id=order.user_id,
         event_id=order.event_id,
         status=order.status.value,
+        subtotal_amount=float(order.subtotal_amount),
+        discount_amount=float(order.discount_amount),
         total_amount=float(order.total_amount),
+        pricing_source=order.pricing_source.value if order.pricing_source else None,
+        is_comp=order.is_comp,
+        promo_code_text=order.promo_code_text,
         currency=order.currency,
         refund_status=order.refund_status,
         cancelled_at=order.cancelled_at,
@@ -94,7 +100,15 @@ def create_order_from_holds(
     user_id: int = Depends(get_current_user_id),
 ) -> OrderResponse:
     try:
-        order = create_pending_order_from_holds(db, user_id=user_id, hold_ids=payload.hold_ids)
+        order = create_pending_order_from_holds(
+            db,
+            user_id=user_id,
+            hold_ids=payload.hold_ids,
+            promo_code_text=payload.promo_code_text,
+        )
+
+    except PromoCodeValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except EmptyHoldSelectionError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except HoldNotFoundError as exc:

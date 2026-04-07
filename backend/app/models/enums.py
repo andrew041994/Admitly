@@ -65,3 +65,14 @@ class ReminderType(str, Enum):
     HOURS_24_BEFORE = "24_hours_before"
     HOURS_3_BEFORE = "3_hours_before"
     MINUTES_30_BEFORE = "30_minutes_before"
+
+
+class PromoCodeDiscountType(str, Enum):
+    PERCENTAGE = "percentage"
+    FIXED_AMOUNT = "fixed_amount"
+
+
+class PricingSource(str, Enum):
+    STANDARD = "standard"
+    PROMO_CODE = "promo_code"
+    COMP = "comp"

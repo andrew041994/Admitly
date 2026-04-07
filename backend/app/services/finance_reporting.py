@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus
 from app.models.event import Event
 from app.models.order import Order
+from app.models.order_item import OrderItem
 from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
 from app.services.ticket_holds import get_guyana_now
@@ -31,6 +32,8 @@ class FinanceReportingAuthorizationError(FinanceReportingError):
 class EventFinanceSummaryData:
     event_id: int
     event_status: str
+    gross_face_value_amount: Decimal
+    total_discount_amount: Decimal
     gross_sales_amount: Decimal
     refunded_amount: Decimal
     net_sales_amount: Decimal
@@ -44,6 +47,9 @@ class EventFinanceSummaryData:
     unreconciled_order_count: int
     payout_included_amount: Decimal
     payout_paid_amount: Decimal
+    comp_order_count: int
+    comp_ticket_count: int
+    comp_face_value: Decimal
     currency: str
     generated_at: datetime
 
@@ -56,7 +62,11 @@ class EventFinanceOrderRow:
     refund_status: str
     reconciliation_status: str
     payout_status: str
+    subtotal_amount: Decimal
+    discount_amount: Decimal
     total_amount: Decimal
+    is_comp: bool
+    pricing_source: str
     refunded_amount: Decimal
     payout_eligible_amount: Decimal
     currency: str
@@ -154,7 +164,21 @@ def get_event_finance_summary(db: Session, *, event_id: int) -> EventFinanceSumm
 
     base_paid = and_(Order.status == OrderStatus.COMPLETED, Order.payment_verification_status == "verified")
     refunded = Order.refund_status == "refunded"
+    effective_subtotal = case((Order.subtotal_amount > 0, Order.subtotal_amount), else_=Order.total_amount)
 
+    gross_face_value_amount = Decimal(
+        db.execute(select(func.coalesce(func.sum(Order.subtotal_amount), 0)).where(Order.event_id == event_id, base_paid)).scalar_one()
+        or 0
+    )
+    total_discount_amount = Decimal(
+        db.execute(select(func.coalesce(func.sum(Order.discount_amount), 0)).where(Order.event_id == event_id, base_paid)).scalar_one()
+        or 0
+    )
+    if gross_face_value_amount == Decimal("0"):
+        gross_face_value_amount = Decimal(
+            db.execute(select(func.coalesce(func.sum(effective_subtotal), 0)).where(Order.event_id == event_id, base_paid)).scalar_one()
+            or 0
+        )
     gross_sales_amount = Decimal(
         db.execute(select(func.coalesce(func.sum(Order.total_amount), 0)).where(Order.event_id == event_id, base_paid)).scalar_one()
         or 0
@@ -221,9 +245,37 @@ def get_event_finance_summary(db: Session, *, event_id: int) -> EventFinanceSumm
     orders = db.execute(_event_order_query(event_id)).scalars().all()
     eligible_payout_amount = sum(get_order_payout_eligible_amount(order) for order in orders)
 
+    comp_order_count = int(
+        db.execute(select(func.count(Order.id)).where(Order.event_id == event_id, Order.is_comp.is_(True))).scalar_one() or 0
+    )
+    comp_ticket_count = int(
+        db.execute(select(func.coalesce(func.sum(OrderItem.quantity), 0)).join(Order, Order.id == OrderItem.order_id).where(
+            Order.event_id == event_id,
+            Order.is_comp.is_(True),
+            Order.status == OrderStatus.COMPLETED,
+        )).scalar_one() or 0
+    )
+    comp_face_value = Decimal(
+        db.execute(select(func.coalesce(func.sum(Order.subtotal_amount), 0)).where(
+            Order.event_id == event_id,
+            Order.is_comp.is_(True),
+            Order.status == OrderStatus.COMPLETED,
+        )).scalar_one() or 0
+    )
+    if comp_face_value == Decimal("0"):
+        comp_face_value = Decimal(
+            db.execute(select(func.coalesce(func.sum(effective_subtotal), 0)).where(
+                Order.event_id == event_id,
+                Order.is_comp.is_(True),
+                Order.status == OrderStatus.COMPLETED,
+            )).scalar_one() or 0
+        )
+
     return EventFinanceSummaryData(
         event_id=event.id,
         event_status=event.status.value,
+        gross_face_value_amount=gross_face_value_amount,
+        total_discount_amount=total_discount_amount,
         gross_sales_amount=gross_sales_amount,
         refunded_amount=refunded_amount,
         net_sales_amount=gross_sales_amount - refunded_amount,
@@ -237,6 +289,9 @@ def get_event_finance_summary(db: Session, *, event_id: int) -> EventFinanceSumm
         unreconciled_order_count=int(counts[4] or 0),
         payout_included_amount=payout_included_amount,
         payout_paid_amount=payout_paid_amount,
+        comp_order_count=comp_order_count,
+        comp_ticket_count=comp_ticket_count,
+        comp_face_value=comp_face_value,
         currency="GYD",
         generated_at=get_guyana_now(),
     )
@@ -276,7 +331,11 @@ def list_event_finance_orders(
             refund_status=order.refund_status,
             reconciliation_status=order.reconciliation_status.value,
             payout_status=order.payout_status.value,
+            subtotal_amount=Decimal(order.subtotal_amount or order.total_amount),
+            discount_amount=Decimal(order.discount_amount),
             total_amount=Decimal(order.total_amount),
+            is_comp=bool(order.is_comp),
+            pricing_source=order.pricing_source.value,
             refunded_amount=get_order_refunded_amount(order),
             payout_eligible_amount=get_order_payout_eligible_amount(order),
             currency=order.currency,
@@ -393,3 +452,6 @@ def mark_order_payout_status(
         order.payout_paid_at = now
     db.flush()
     return order
+    comp_order_count: int
+    comp_ticket_count: int
+    comp_face_value: Decimal

@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class CreatePendingOrderFromHoldsRequest(BaseModel):
     hold_ids: list[int] = Field(min_length=1)
+    promo_code_text: str | None = None
 
 
 class OrderCancelRequest(BaseModel):
@@ -31,7 +32,12 @@ class OrderResponse(BaseModel):
     user_id: int
     event_id: int
     status: str
+    subtotal_amount: float | None = None
+    discount_amount: float | None = None
     total_amount: float
+    pricing_source: str | None = None
+    is_comp: bool | None = None
+    promo_code_text: str | None = None
     currency: str
     refund_status: str | None = None
     cancelled_at: datetime | None = None

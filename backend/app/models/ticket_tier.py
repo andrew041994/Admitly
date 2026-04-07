@@ -20,6 +20,7 @@ from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.order_item import OrderItem
+    from app.models.promo_code_ticket_tier import PromoCodeTicketTier
     from app.models.ticket import Ticket
     from app.models.ticket_hold import TicketHold
 
@@ -50,3 +51,6 @@ class TicketTier(TimestampMixin, Base):
     holds: Mapped[list["TicketHold"]] = relationship(back_populates="ticket_tier")
     order_items: Mapped[list["OrderItem"]] = relationship(back_populates="ticket_tier")
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="ticket_tier")
+    promo_code_scopes: Mapped[list["PromoCodeTicketTier"]] = relationship(
+        back_populates="ticket_tier", cascade="all, delete-orphan"
+    )

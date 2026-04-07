@@ -6,6 +6,8 @@ from pydantic import BaseModel
 class EventFinanceSummaryResponse(BaseModel):
     event_id: int
     event_status: str
+    gross_face_value_amount: float
+    total_discount_amount: float
     gross_sales_amount: float
     refunded_amount: float
     net_sales_amount: float
@@ -19,6 +21,9 @@ class EventFinanceSummaryResponse(BaseModel):
     unreconciled_order_count: int
     payout_included_amount: float
     payout_paid_amount: float
+    comp_order_count: int
+    comp_ticket_count: int
+    comp_face_value: float
     currency: str
     generated_at: datetime
 
@@ -30,7 +35,11 @@ class EventFinanceOrderRowResponse(BaseModel):
     refund_status: str
     reconciliation_status: str
     payout_status: str
+    subtotal_amount: float
+    discount_amount: float
     total_amount: float
+    is_comp: bool
+    pricing_source: str
     refunded_amount: float
     payout_eligible_amount: float
     currency: str

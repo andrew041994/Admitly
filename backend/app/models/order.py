@@ -4,11 +4,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus
+from app.models.enums import OrderStatus, PayoutStatus, PricingSource, ReconciliationStatus
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from app.models.ticket import Ticket
     from app.models.ticket_hold import TicketHold
     from app.models.user import User
+    from app.models.promo_code import PromoCode
+    from app.models.promo_code_redemption import PromoCodeRedemption
 
 
 class Order(TimestampMixin, Base):
@@ -28,7 +30,18 @@ class Order(TimestampMixin, Base):
     status: Mapped[OrderStatus] = mapped_column(
         Enum(OrderStatus, name="order_status"), nullable=False, default=OrderStatus.PENDING
     )
+    subtotal_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0.00"))
+    discount_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0.00"))
     total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    promo_code_id: Mapped[int | None] = mapped_column(ForeignKey("promo_codes.id"), nullable=True, index=True)
+    promo_code_text: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    discount_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    discount_value_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    pricing_source: Mapped[PricingSource] = mapped_column(
+        Enum(PricingSource, name="pricing_source"), nullable=False, default=PricingSource.STANDARD
+    )
+    comp_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_comp: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="GYD")
     payment_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payment_intent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -70,3 +83,5 @@ class Order(TimestampMixin, Base):
     )
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="order")
+    promo_code: Mapped["PromoCode | None"] = relationship(back_populates="orders")
+    promo_code_redemption: Mapped["PromoCodeRedemption | None"] = relationship(back_populates="order", uselist=False)

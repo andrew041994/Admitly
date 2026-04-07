@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from app.models.ticket_hold import TicketHold
     from app.models.ticket_tier import TicketTier
     from app.models.venue import Venue
+    from app.models.promo_code import PromoCode
 
 
 class Event(TimestampMixin, Base):
@@ -85,6 +86,7 @@ class Event(TimestampMixin, Base):
     orders: Mapped[list["Order"]] = relationship(back_populates="event")
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="event")
     ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="event")
+    promo_codes: Mapped[list["PromoCode"]] = relationship(back_populates="event", cascade="all, delete-orphan")
     reminder_logs: Mapped[list["EventReminderLog"]] = relationship(
         back_populates="event", cascade="all, delete-orphan"
     )

@@ -228,3 +228,13 @@ def test_live_mode_missing_config_fails_clearly(db_session: Session) -> None:
     with pytest.raises(Exception) as exc:
         create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     assert "missing required config" in str(exc.value).lower()
+
+def test_mmg_checkout_uses_discounted_total_amount(db_session: Session) -> None:
+    order, _, user = _seed_order_with_hold(db_session, user_email="discounted@example.com")
+    order.subtotal_amount = Decimal("200.00")
+    order.discount_amount = Decimal("50.00")
+    order.total_amount = Decimal("150.00")
+    db_session.commit()
+
+    snapshot = create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+    assert snapshot.amount == Decimal("150.00")

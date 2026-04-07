@@ -97,6 +97,8 @@ def _seed_finance_data(db: Session):
         payment_verification_status="verified",
         reconciliation_status=ReconciliationStatus.UNRECONCILED,
         payout_status=PayoutStatus.ELIGIBLE,
+        subtotal_amount=Decimal("120.00"),
+        discount_amount=Decimal("20.00"),
     )
     completed_reconciled = Order(
         user_id=buyer.id,
@@ -107,6 +109,8 @@ def _seed_finance_data(db: Session):
         payment_verification_status="verified",
         reconciliation_status=ReconciliationStatus.RECONCILED,
         payout_status=PayoutStatus.ELIGIBLE,
+        subtotal_amount=Decimal("50.00"),
+        discount_amount=Decimal("0.00"),
     )
     refunded_order = Order(
         user_id=buyer.id,
@@ -119,6 +123,19 @@ def _seed_finance_data(db: Session):
         refunded_at=now,
         reconciliation_status=ReconciliationStatus.UNRECONCILED,
         payout_status=PayoutStatus.ELIGIBLE,
+        subtotal_amount=Decimal("30.00"),
+        discount_amount=Decimal("0.00"),
+    )
+    comp_order = Order(
+        user_id=buyer.id,
+        event_id=event.id,
+        status=OrderStatus.COMPLETED,
+        subtotal_amount=Decimal("40.00"),
+        discount_amount=Decimal("40.00"),
+        total_amount=Decimal("0.00"),
+        currency="GYD",
+        payment_verification_status="verified",
+        is_comp=True,
     )
     pending_order = Order(
         user_id=buyer.id,
@@ -147,7 +164,7 @@ def _seed_finance_data(db: Session):
         payout_status=PayoutStatus.PAID,
     )
     db.add_all(
-        [completed_eligible, completed_reconciled, refunded_order, pending_order, cancelled_order, other_event_order]
+        [completed_eligible, completed_reconciled, refunded_order, pending_order, cancelled_order, other_event_order, comp_order]
     )
     db.commit()
 
@@ -182,12 +199,16 @@ def test_event_finance_summary_rollups(db_session: Session) -> None:
     summary = get_event_finance_summary(db_session, event_id=data["event"].id)
 
     assert summary.gross_sales_amount == Decimal("180.00")
+    assert summary.gross_face_value_amount == Decimal("240.00")
+    assert summary.total_discount_amount == Decimal("60.00")
     assert summary.refunded_amount == Decimal("30.00")
     assert summary.net_sales_amount == Decimal("150.00")
     assert summary.eligible_payout_amount == Decimal("150.00")
     assert summary.reconciled_amount == Decimal("50.00")
     assert summary.unreconciled_amount == Decimal("130.00")
-    assert summary.completed_order_count == 3
+    assert summary.completed_order_count == 4
+    assert summary.comp_order_count == 1
+    assert summary.comp_face_value == Decimal("40.00")
 
 
 def test_finance_order_list_filters_to_event_and_statuses(db_session: Session) -> None:
