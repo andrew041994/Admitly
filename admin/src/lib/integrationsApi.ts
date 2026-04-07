@@ -25,6 +25,7 @@ export type WebhookEndpointRecord = {
 export type DeliveryRecord = {
   id: number;
   endpoint_id: number;
+  endpoint_url: string;
   event_id: string;
   event_type: string;
   attempt_number: number;
@@ -33,6 +34,8 @@ export type DeliveryRecord = {
   failure_reason: string | null;
   next_retry_at: string | null;
   delivered_at: string | null;
+  delivery_kind: string;
+  redelivery_of_delivery_id: number | null;
 };
 
 export async function listApiKeys(userId: number) {
@@ -66,4 +69,13 @@ export async function createWebhook(userId: number, payload: { name: string; tar
 export async function listDeliveries(userId: number) {
   const res = await apiRequest('/admin/integrations/deliveries', { headers: { 'X-User-Id': String(userId) } });
   return (await res.json()) as DeliveryRecord[];
+}
+
+
+export async function redeliverDelivery(userId: number, deliveryId: number) {
+  const res = await apiRequest(`/admin/integrations/deliveries/${deliveryId}/redeliver`, {
+    method: 'POST',
+    headers: { 'X-User-Id': String(userId) },
+  });
+  return (await res.json()) as DeliveryRecord;
 }

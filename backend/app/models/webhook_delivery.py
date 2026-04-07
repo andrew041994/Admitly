@@ -24,3 +24,5 @@ class WebhookDelivery(TimestampMixin, Base):
     failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     next_retry_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     delivered_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="automatic_initial")
+    redelivery_of_delivery_id: Mapped[int | None] = mapped_column(ForeignKey("webhook_deliveries.id", ondelete="SET NULL"), nullable=True)

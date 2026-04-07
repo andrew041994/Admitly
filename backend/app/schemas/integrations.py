@@ -54,6 +54,7 @@ class WebhookEndpointCreateResponse(WebhookEndpointResponse):
 class WebhookDeliveryResponse(BaseModel):
     id: int
     endpoint_id: int
+    endpoint_url: str
     event_id: str
     event_type: str
     schema_version: str
@@ -64,6 +65,8 @@ class WebhookDeliveryResponse(BaseModel):
     failure_reason: str | None
     next_retry_at: datetime | None
     delivered_at: datetime | None
+    delivery_kind: str
+    redelivery_of_delivery_id: int | None
 
 
 class IntegrationCatalogResponse(BaseModel):

@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -31,8 +31,13 @@ SUPPORTED_WEBHOOK_EVENTS = {
 }
 SCOPE_READ = "integrations:read"
 SCOPE_WRITE = "integrations:write"
+ALLOWED_SCOPES = {SCOPE_READ, SCOPE_WRITE}
 MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = [30, 120, 600, 1800]
+
+DELIVERY_KIND_INITIAL = "automatic_initial"
+DELIVERY_KIND_RETRY = "automatic_retry"
+DELIVERY_KIND_MANUAL_REDELIVERY = "manual_redelivery"
 
 
 @dataclass
@@ -42,17 +47,27 @@ class DeliveryResult:
     error: str | None = None
 
 
+@dataclass
+class DeliveryHistoryRecord:
+    delivery: WebhookDelivery
+    endpoint_url: str
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _normalize_scopes(scopes: list[str]) -> list[str]:
+    normalized = sorted({item.strip() for item in scopes if item.strip() in ALLOWED_SCOPES})
+    return normalized or [SCOPE_READ]
+
+
 def _scopes_to_csv(scopes: list[str]) -> str:
-    normalized = sorted({item.strip() for item in scopes if item.strip()})
-    return ",".join(normalized)
+    return ",".join(_normalize_scopes(scopes))
 
 
 def scopes_from_csv(scopes_csv: str) -> set[str]:
-    return {item.strip() for item in scopes_csv.split(",") if item.strip()}
+    return {item.strip() for item in scopes_csv.split(",") if item.strip() in ALLOWED_SCOPES}
 
 
 def _hash_api_secret(prefix: str, raw_secret: str) -> str:
@@ -164,13 +179,18 @@ def update_webhook_endpoint(
     return endpoint
 
 
+def _normalize_payload(payload: dict) -> dict:
+    # round-trip through json for deterministic representation and to avoid leaking unsupported objects
+    return json.loads(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
 def _event_envelope(*, event_type: str, payload: dict) -> dict:
     return {
         "id": f"evt_{uuid.uuid4().hex}",
         "type": event_type,
         "version": INTEGRATION_API_VERSION,
         "created_at": _utcnow().isoformat(),
-        "data": payload,
+        "data": _normalize_payload(payload),
     }
 
 
@@ -210,6 +230,37 @@ def _next_retry_for_attempt(attempt_number: int) -> datetime | None:
     return _utcnow() + timedelta(seconds=RETRY_BACKOFF_SECONDS[idx])
 
 
+def _create_delivery_attempt(
+    db: Session,
+    *,
+    endpoint_id: int,
+    event_id: str,
+    event_type: str,
+    schema_version: str,
+    payload_json: str,
+    attempt_number: int,
+    status: str,
+    delivery_kind: str,
+    redelivery_of_delivery_id: int | None = None,
+    next_retry_at: datetime | None = None,
+) -> WebhookDelivery:
+    item = WebhookDelivery(
+        endpoint_id=endpoint_id,
+        event_id=event_id,
+        event_type=event_type,
+        schema_version=schema_version,
+        payload_json=payload_json,
+        attempt_number=attempt_number,
+        status=status,
+        requested_at=_utcnow(),
+        next_retry_at=next_retry_at,
+        delivery_kind=delivery_kind,
+        redelivery_of_delivery_id=redelivery_of_delivery_id,
+    )
+    db.add(item)
+    return item
+
+
 def _enqueue_delivery(db: Session, *, endpoint: WebhookEndpoint, envelope: dict) -> None:
     existing = db.execute(
         select(WebhookDelivery).where(
@@ -220,18 +271,17 @@ def _enqueue_delivery(db: Session, *, endpoint: WebhookEndpoint, envelope: dict)
     ).scalar_one_or_none()
     if existing is not None:
         return
-    db.add(
-        WebhookDelivery(
-            endpoint_id=endpoint.id,
-            event_id=envelope["id"],
-            event_type=envelope["type"],
-            schema_version=envelope["version"],
-            payload_json=json.dumps(envelope, sort_keys=True),
-            attempt_number=1,
-            status="pending",
-            requested_at=_utcnow(),
-            next_retry_at=_utcnow(),
-        )
+    _create_delivery_attempt(
+        db,
+        endpoint_id=endpoint.id,
+        event_id=envelope["id"],
+        event_type=envelope["type"],
+        schema_version=envelope["version"],
+        payload_json=json.dumps(envelope, sort_keys=True),
+        attempt_number=1,
+        status="pending",
+        next_retry_at=_utcnow(),
+        delivery_kind=DELIVERY_KIND_INITIAL,
     )
 
 
@@ -279,30 +329,66 @@ def dispatch_pending_webhook_deliveries(db: Session, *, transport=_http_send) ->
                 delivery.next_retry_at = None
             else:
                 delivery.next_retry_at = next_retry
-                db.add(
-                    WebhookDelivery(
-                        endpoint_id=delivery.endpoint_id,
-                        event_id=delivery.event_id,
-                        event_type=delivery.event_type,
-                        schema_version=delivery.schema_version,
-                        payload_json=delivery.payload_json,
-                        attempt_number=delivery.attempt_number + 1,
-                        status="retry_scheduled",
-                        requested_at=_utcnow(),
-                        next_retry_at=next_retry,
-                    )
+                _create_delivery_attempt(
+                    db,
+                    endpoint_id=delivery.endpoint_id,
+                    event_id=delivery.event_id,
+                    event_type=delivery.event_type,
+                    schema_version=delivery.schema_version,
+                    payload_json=delivery.payload_json,
+                    attempt_number=delivery.attempt_number + 1,
+                    status="retry_scheduled",
+                    next_retry_at=next_retry,
+                    delivery_kind=DELIVERY_KIND_RETRY,
                 )
         processed += 1
     db.flush()
     return processed
 
 
-def list_deliveries(db: Session, *, user_id: int, endpoint_id: int | None = None) -> list[WebhookDelivery]:
+def redeliver_webhook_delivery(db: Session, *, delivery_id: int, user_id: int) -> WebhookDelivery | None:
+    source = db.execute(
+        select(WebhookDelivery)
+        .join(WebhookEndpoint, WebhookEndpoint.id == WebhookDelivery.endpoint_id)
+        .where(WebhookDelivery.id == delivery_id, WebhookEndpoint.user_id == user_id)
+    ).scalar_one_or_none()
+    if source is None:
+        return None
+    max_attempt = db.execute(
+        select(func.max(WebhookDelivery.attempt_number)).where(
+            WebhookDelivery.endpoint_id == source.endpoint_id,
+            WebhookDelivery.event_id == source.event_id,
+        )
+    ).scalar_one()
+    next_attempt = int(max_attempt or source.attempt_number) + 1
+    attempt = _create_delivery_attempt(
+        db,
+        endpoint_id=source.endpoint_id,
+        event_id=source.event_id,
+        event_type=source.event_type,
+        schema_version=source.schema_version,
+        payload_json=source.payload_json,
+        attempt_number=next_attempt,
+        status="pending",
+        next_retry_at=_utcnow(),
+        delivery_kind=DELIVERY_KIND_MANUAL_REDELIVERY,
+        redelivery_of_delivery_id=source.id,
+    )
+    db.flush()
+    return attempt
+
+
+def list_deliveries(db: Session, *, user_id: int, endpoint_id: int | None = None) -> list[DeliveryHistoryRecord]:
     endpoint_ids: Select[tuple[int]] = select(WebhookEndpoint.id).where(WebhookEndpoint.user_id == user_id)
-    query = select(WebhookDelivery).where(WebhookDelivery.endpoint_id.in_(endpoint_ids))
+    query = (
+        select(WebhookDelivery, WebhookEndpoint.target_url)
+        .join(WebhookEndpoint, WebhookEndpoint.id == WebhookDelivery.endpoint_id)
+        .where(WebhookDelivery.endpoint_id.in_(endpoint_ids))
+    )
     if endpoint_id is not None:
         query = query.where(WebhookDelivery.endpoint_id == endpoint_id)
-    return db.execute(query.order_by(WebhookDelivery.id.desc()).limit(200)).scalars().all()
+    rows = db.execute(query.order_by(WebhookDelivery.id.desc()).limit(200)).all()
+    return [DeliveryHistoryRecord(delivery=row[0], endpoint_url=row[1]) for row in rows]
 
 
 def build_order_paid_payload(order: Order) -> dict:

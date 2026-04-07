@@ -1,0 +1,52 @@
+{
+  "order.paid": {
+    "id": "evt_example_order_paid",
+    "type": "order.paid",
+    "version": "v1",
+    "created_at": "2026-04-07T10:00:00+00:00",
+    "data": {
+      "order_id": 101,
+      "event_id": 501,
+      "user_id": 7,
+      "total_amount": 30.0,
+      "currency": "USD"
+    }
+  },
+  "order.refunded": {
+    "id": "evt_example_order_refunded",
+    "type": "order.refunded",
+    "version": "v1",
+    "created_at": "2026-04-07T10:00:00+00:00",
+    "data": {
+      "order_id": 101,
+      "refund_id": 801,
+      "event_id": 501,
+      "amount": 10.0,
+      "currency": "USD"
+    }
+  },
+  "transfer.accepted": {
+    "id": "evt_example_transfer_accepted",
+    "type": "transfer.accepted",
+    "version": "v1",
+    "created_at": "2026-04-07T10:00:00+00:00",
+    "data": {
+      "invite_id": 45,
+      "ticket_id": 9001,
+      "event_id": 501,
+      "to_user_id": 88
+    }
+  },
+  "checkin.completed": {
+    "id": "evt_example_checkin_completed",
+    "type": "checkin.completed",
+    "version": "v1",
+    "created_at": "2026-04-07T10:00:00+00:00",
+    "data": {
+      "ticket_id": 9001,
+      "event_id": 501,
+      "order_id": 101,
+      "checked_in_at": "2026-04-07T10:03:00+00:00"
+    }
+  }
+}

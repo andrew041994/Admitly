@@ -29,6 +29,7 @@ from app.services.integrations import (
     list_deliveries,
     list_webhook_endpoints,
     require_scope,
+    redeliver_webhook_delivery,
     revoke_api_key,
     scopes_from_csv,
     update_webhook_endpoint,
@@ -67,6 +68,27 @@ def _to_endpoint_response(item) -> WebhookEndpointResponse:
         created_at=item.created_at,
         updated_at=item.updated_at,
         disabled_at=item.disabled_at,
+    )
+
+
+def _to_delivery_response(item) -> WebhookDeliveryResponse:
+    delivery = item.delivery
+    return WebhookDeliveryResponse(
+        id=delivery.id,
+        endpoint_id=delivery.endpoint_id,
+        endpoint_url=item.endpoint_url,
+        event_id=delivery.event_id,
+        event_type=delivery.event_type,
+        schema_version=delivery.schema_version,
+        attempt_number=delivery.attempt_number,
+        status=delivery.status,
+        requested_at=delivery.requested_at,
+        response_status_code=delivery.response_status_code,
+        failure_reason=delivery.failure_reason,
+        next_retry_at=delivery.next_retry_at,
+        delivered_at=delivery.delivered_at,
+        delivery_kind=delivery.delivery_kind,
+        redelivery_of_delivery_id=delivery.redelivery_of_delivery_id,
     )
 
 
@@ -168,7 +190,25 @@ def get_deliveries(
     user_id: int = Depends(get_current_user_id),
 ) -> list[WebhookDeliveryResponse]:
     _require_admin(db, user_id=user_id)
-    return [WebhookDeliveryResponse(**item.__dict__) for item in list_deliveries(db, user_id=user_id, endpoint_id=endpoint_id)]
+    return [_to_delivery_response(item) for item in list_deliveries(db, user_id=user_id, endpoint_id=endpoint_id)]
+
+
+@router.post("/deliveries/{delivery_id}/redeliver", response_model=WebhookDeliveryResponse, status_code=status.HTTP_201_CREATED)
+def redeliver_delivery_route(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> WebhookDeliveryResponse:
+    _require_admin(db, user_id=user_id)
+    attempt = redeliver_webhook_delivery(db, delivery_id=delivery_id, user_id=user_id)
+    if attempt is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
+    db.commit()
+    rows = list_deliveries(db, user_id=user_id)
+    row = next((entry for entry in rows if entry.delivery.id == attempt.id), None)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load redelivery attempt.")
+    return _to_delivery_response(row)
 
 
 @router.post("/deliveries/dispatch")
