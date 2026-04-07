@@ -117,6 +117,17 @@ def test_validate_order_still_payable_passes_for_pending_with_active_holds(db_se
     validate_order_still_payable(order)
 
 
+
+
+def test_validate_order_still_payable_allows_pending_without_holds(db_session: Session) -> None:
+    order, _, _ = _seed_order_with_hold(db_session)
+    for hold in list(order.ticket_holds):
+        db_session.delete(hold)
+    db_session.flush()
+    db_session.refresh(order)
+
+    validate_order_still_payable(order)
+
 def test_validate_order_still_payable_rejects_expired_hold(db_session: Session) -> None:
     order, _, _ = _seed_order_with_hold(db_session)
     order.ticket_holds[0].expires_at = datetime(2026, 4, 6, 8, 0, tzinfo=timezone.utc)

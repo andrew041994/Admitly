@@ -234,15 +234,17 @@ def validate_order_still_payable(order: Order | None, now: datetime | None = Non
     if order is None:
         raise OrderNotFoundError("Order not found.")
 
+    if order.status != OrderStatus.PENDING:
+        raise OrderNotPayableError("Only pending orders can be paid.")
+
+    if not order.ticket_holds:
+        return
+
     if now is not None:
         reference_now = _to_aware(now).astimezone(GYT)
     else:
         first_hold = _to_aware(order.ticket_holds[0].expires_at)
         reference_now = first_hold.astimezone(GYT) - timedelta(minutes=1)
-    if order.status != OrderStatus.PENDING:
-        raise OrderNotPayableError("Only pending orders can be paid.")
-    if not order.ticket_holds:
-        raise OrderNotPayableError("Order has no linked holds.")
 
     normalized_holds = []
     for hold in order.ticket_holds:
