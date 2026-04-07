@@ -25,6 +25,7 @@ from app.services.notifications import (
 )
 from app.services.ticket_holds import get_guyana_now
 from app.services.ticket_qr import extract_ticket_lookup_value
+from app.services.integrations import build_checkin_payload, build_transfer_payload, publish_webhook_event
 
 
 class TicketError(ValueError):
@@ -578,6 +579,7 @@ def accept_ticket_transfer_invite(
 
         db.flush()
         notify_ticket_transfer_invite_accepted(invite, ticket)
+        publish_webhook_event(db, event_type="transfer.accepted", payload=build_transfer_payload(invite, ticket))
         return ticket
 
 
@@ -990,6 +992,7 @@ def check_in_ticket(
             method=method,
         )
         db.flush()
+        publish_webhook_event(db, event_type="checkin.completed", payload=build_checkin_payload(ticket))
         return TicketCheckInValidationResult(
             valid=True,
             status=CHECK_IN_STATUS_VALID,

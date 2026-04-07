@@ -6,6 +6,7 @@ from app.api.events import router as events_router
 from app.api.health import router as health_router
 from app.api.messaging import router as messaging_router
 from app.api.internal_finance import router as internal_finance_router
+from app.api.integrations import router as integrations_router, public_router as public_integrations_router
 from app.api.notifications import router as notifications_router
 from app.api.organizer_reporting import router as organizer_reporting_router
 from app.api.organizer_promos import router as organizer_promos_router
@@ -38,3 +39,6 @@ app.include_router(admin_finance_router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+app.include_router(integrations_router)
+app.include_router(public_integrations_router)

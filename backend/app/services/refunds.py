@@ -25,6 +25,7 @@ from app.models.refund import Refund
 from app.models.user import User
 from app.services.notifications import notify_dispute_resolved, notify_order_refunded
 from app.services.tickets import invalidate_order_tickets
+from app.services.integrations import build_refund_payload, publish_webhook_event
 
 
 class RefundDisputeError(ValueError):
@@ -224,6 +225,11 @@ def _process_refund_locked(
         notify_order_refunded(order, actor_user_id=actor_user_id)
     except TypeError:
         notify_order_refunded(db, order, actor_user_id=actor_user_id)
+
+    payload = build_refund_payload(order, refund_id=refund.id, amount=float(refund.amount))
+    publish_webhook_event(db, event_type="refund.processed", payload=payload)
+    if order.refund_status == "refunded":
+        publish_webhook_event(db, event_type="order.refunded", payload=payload)
     return refund
 
 

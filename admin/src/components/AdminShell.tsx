@@ -36,6 +36,12 @@ export function AdminShell() {
           >
             Check-in
           </NavLink>
+          <NavLink
+            to="/integrations"
+            className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+          >
+            Integrations
+          </NavLink>
         </nav>
         <main className="admin-main">
           <Outlet />

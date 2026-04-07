@@ -24,6 +24,9 @@ from app.models.message_delivery_log import MessageDeliveryLog
 from app.models.support_case import SupportCase
 from app.models.user import User
 from app.models.venue import Venue
+from app.models.integration_api_key import IntegrationApiKey
+from app.models.webhook_endpoint import WebhookEndpoint
+from app.models.webhook_delivery import WebhookDelivery
 
 __all__ = [
     "User",
@@ -52,4 +55,7 @@ __all__ = [
     "SupportCaseNote",
     "AdminActionAudit",
     "MessageDeliveryLog",
+    "IntegrationApiKey",
+    "WebhookEndpoint",
+    "WebhookDelivery",
 ]

@@ -292,6 +292,7 @@ def complete_paid_order(
     if became_completed:
         notify_order_completed(db, order)
         notify_tickets_issued(db, order, tickets)
+        publish_webhook_event(db, event_type="order.paid", payload=build_order_paid_payload(order))
     return order
 
 

@@ -1,50 +1,139 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_messaging.py b/backend/tests/test_messaging.py
+diff --git a/backend/tests/test_integrations.py b/backend/tests/test_integrations.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e3b55d3eb50d3c8e266b089c66452b960a056457
+index 0000000000000000000000000000000000000000..e86c03346ee6270c4fe96eab3e9601a236d5a630
 --- /dev/null
-+++ b/backend/tests/test_messaging.py
-@@ -0,0 +1,113 @@
-+from __future__ import annotations
-+
-+from datetime import datetime, timedelta, timezone
++++ b/backend/tests/test_integrations.py
+@@ -0,0 +1,158 @@
++import os
++from datetime import datetime, timezone
 +from decimal import Decimal
 +
-+import pytest
-+from fastapi import HTTPException
-+from sqlalchemy import create_engine, select
++os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
++
++from sqlalchemy import create_engine
 +from sqlalchemy.orm import Session, sessionmaker
 +
-+from app.api.messaging import get_event_message_history, send_event_broadcast_message
 +from app.db.base import Base
-+from app.models import Event, OrganizerProfile, Order, OrderItem, Ticket, TicketTier, User, Venue
-+from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, MessageDeliveryStatus, MessageTemplateType, OrderStatus, TicketStatus
-+from app.models.message_delivery_log import MessageDeliveryLog
-+from app.schemas.messaging import EventBroadcastSendRequest
-+from app.services.notifications import notify_order_completed
-+from app.services.tickets import issue_tickets_for_completed_order
++from app.main import app
++from app.models import Event, Order, OrganizerProfile, User, Venue
++from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
++from app.services.integrations import (
++    SCOPE_READ,
++    SCOPE_WRITE,
++    authenticate_api_key,
++    build_order_paid_payload,
++    create_api_key,
++    create_webhook_endpoint,
++    dispatch_pending_webhook_deliveries,
++    list_deliveries,
++    publish_webhook_event,
++    require_scope,
++    revoke_api_key,
++    verify_webhook_signature,
++)
 +
 +
-+@pytest.fixture
-+def db_session() -> Session:
++def _db() -> Session:
 +    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 +    Base.metadata.create_all(engine)
 +    SessionLocal = sessionmaker(bind=engine, future=True)
-+    with SessionLocal() as session:
-+        yield session
++    return SessionLocal()
 +
 +
-+def _seed(db: Session, *, admin: bool = True):
-+    now = datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc)
-+    actor = User(email="actor@test.local", full_name="Actor", is_admin=admin)
-+    buyer = User(email="buyer@test.local", full_name="Buyer")
-+    organizer_user = User(email="org@test.local", full_name="Organizer")
-+    db.add_all([actor, buyer, organizer_user])
-+    db.flush()
-+    organizer = OrganizerProfile(user_id=organizer_user.id, business_name="Biz", display_name="Biz")
++def _seed_admin(db: Session) -> User:
++    admin = User(email="admin@x.com", full_name="Admin", is_admin=True)
++    db.add(admin)
++    db.commit()
++    db.refresh(admin)
++    return admin
++
++
++def test_api_key_create_auth_scope_and_revoke() -> None:
++    db = _db()
++    admin = _seed_admin(db)
++    key, raw = create_api_key(db, user_id=admin.id, name="Main", scopes=[SCOPE_READ, SCOPE_WRITE])
++    db.commit()
++
++    authed = authenticate_api_key(db, raw_key=raw)
++    assert authed is not None
++    assert require_scope(authed, SCOPE_READ)
++    assert require_scope(authed, SCOPE_WRITE)
++
++    revoke_api_key(db, key_id=key.id, user_id=admin.id)
++    db.commit()
++    assert authenticate_api_key(db, raw_key=raw) is None
++
++
++def test_webhook_signature_contract() -> None:
++    timestamp = "1712500000"
++    body = '{"id":"evt_1"}'
++    secret = "whsec_test"
++    import hashlib, hmac
++
++    digest = hmac.new(secret.encode(), f"{timestamp}.{body}".encode(), hashlib.sha256).hexdigest()
++    assert verify_webhook_signature(secret=secret, timestamp=timestamp, body=body, signature_header=f"v1={digest}")
++
++
++def test_webhook_delivery_retry_and_success_audit() -> None:
++    db = _db()
++    admin = _seed_admin(db)
++    endpoint, _ = create_webhook_endpoint(
++        db,
++        user_id=admin.id,
++        name="Main endpoint",
++        target_url="https://example.com/webhook",
++        subscribed_events=["order.paid"],
++    )
++    publish_webhook_event(db, event_type="order.paid", payload={"order_id": 1})
++    db.commit()
++
++    calls = {"count": 0}
++
++    def flaky(*, endpoint, body):
++        calls["count"] += 1
++        if calls["count"] == 1:
++            return type("Res", (), {"ok": False, "status_code": 500, "error": "boom"})
++        return type("Res", (), {"ok": True, "status_code": 200, "error": None})
++
++    assert dispatch_pending_webhook_deliveries(db, transport=flaky) == 1
++    db.commit()
++    assert dispatch_pending_webhook_deliveries(db, transport=flaky) == 0
++
++    # force second attempt due now
++    deliveries = list_deliveries(db, user_id=admin.id)
++    retry = next(item for item in deliveries if item.attempt_number == 2)
++    retry.next_retry_at = retry.requested_at
++    db.commit()
++
++    assert dispatch_pending_webhook_deliveries(db, transport=flaky) == 1
++    db.commit()
++    final = list_deliveries(db, user_id=admin.id)
++    assert any(item.status == "delivered" for item in final)
++
++
++def test_api_key_scope_contract() -> None:
++    db = _db()
++    admin = _seed_admin(db)
++    key, raw = create_api_key(db, user_id=admin.id, name="Read", scopes=[SCOPE_READ])
++    db.commit()
++
++    principal = authenticate_api_key(db, raw_key=raw)
++    assert principal is not None
++    assert require_scope(principal, SCOPE_READ)
++    assert not require_scope(principal, SCOPE_WRITE)
++
++    revoke_api_key(db, key_id=key.id, user_id=admin.id)
++    db.commit()
++    assert authenticate_api_key(db, raw_key=raw) is None
++
++def test_event_schema_stability_for_order_paid() -> None:
++    db = _db()
++    admin = _seed_admin(db)
++    organizer = OrganizerProfile(user_id=admin.id, business_name="Biz", display_name="Biz")
 +    db.add(organizer)
 +    db.flush()
-+    venue = Venue(organizer_id=organizer.id, name="Venue")
++    venue = Venue(organizer_id=organizer.id, name="Hall")
 +    db.add(venue)
 +    db.flush()
 +    event = Event(
@@ -52,8 +141,8 @@ index 0000000000000000000000000000000000000000..e3b55d3eb50d3c8e266b089c66452b96
 +        venue_id=venue.id,
 +        title="Event",
 +        slug="event",
-+        start_at=now + timedelta(days=2),
-+        end_at=now + timedelta(days=2, hours=2),
++        start_at=datetime(2026, 4, 7, 10, 0, tzinfo=timezone.utc),
++        end_at=datetime(2026, 4, 7, 11, 0, tzinfo=timezone.utc),
 +        status=EventStatus.PUBLISHED,
 +        visibility=EventVisibility.PUBLIC,
 +        approval_status=EventApprovalStatus.APPROVED,
@@ -62,62 +151,18 @@ index 0000000000000000000000000000000000000000..e3b55d3eb50d3c8e266b089c66452b96
 +    )
 +    db.add(event)
 +    db.flush()
-+    tier = TicketTier(
-+        event_id=event.id,
-+        name="General",
-+        tier_code="GEN",
-+        price_amount=Decimal("100.00"),
-+        currency="GYD",
-+        quantity_total=100,
-+        quantity_sold=0,
-+        quantity_held=0,
-+        min_per_order=1,
-+        max_per_order=4,
-+        is_active=True,
-+        sort_order=0,
-+    )
-+    db.add(tier)
-+    db.flush()
-+    order = Order(user_id=buyer.id, event_id=event.id, status=OrderStatus.COMPLETED, total_amount=Decimal("100.00"), currency="GYD", payment_verification_status="verified")
++    order = Order(user_id=admin.id, event_id=event.id, status=OrderStatus.COMPLETED, total_amount=Decimal("10.00"), currency="GYD")
 +    db.add(order)
 +    db.flush()
-+    db.add(OrderItem(order_id=order.id, ticket_tier_id=tier.id, quantity=1, unit_price=Decimal("100.00")))
++
++    create_webhook_endpoint(db, user_id=admin.id, name="E", target_url="https://example.com", subscribed_events=["order.paid"])
++    publish_webhook_event(db, event_type="order.paid", payload=build_order_paid_payload(order))
 +    db.commit()
-+    issue_tickets_for_completed_order(db, order)
-+    return actor, buyer, event, order
 +
-+
-+def test_dispatch_logs_order_confirmation_attempts(db_session: Session) -> None:
-+    _, _, _, order = _seed(db_session)
-+    notify_order_completed(db_session, order)
-+    notify_order_completed(db_session, order)
-+    logs = db_session.execute(select(MessageDeliveryLog).where(MessageDeliveryLog.related_entity_type == "order", MessageDeliveryLog.related_entity_id == order.id, MessageDeliveryLog.template_type == MessageTemplateType.ORDER_CONFIRMATION)).scalars().all()
-+    assert len(logs) == 4
-+
-+
-+def test_event_broadcast_permission_enforced(db_session: Session) -> None:
-+    actor, _, event, _ = _seed(db_session, admin=False)
-+    with pytest.raises(HTTPException) as exc:
-+        send_event_broadcast_message(event.id, EventBroadcastSendRequest(subject="update", body="hello", include_email=True, include_push=False), db=db_session, user_id=actor.id)
-+    assert exc.value.status_code == 403
-+
-+
-+def test_event_broadcast_and_history(db_session: Session) -> None:
-+    actor, _, event, _ = _seed(db_session, admin=True)
-+    result = send_event_broadcast_message(event.id, EventBroadcastSendRequest(subject="Ops", body="Doors delayed", include_email=False, include_push=True), db=db_session, user_id=actor.id)
-+    assert result.attempted_recipients == 1
-+    history = get_event_message_history(event.id, db=db_session, user_id=actor.id)
-+    assert len(history) >= 1
-+    assert history[0].template_type in {MessageTemplateType.EVENT_DAY_UPDATE.value, MessageTemplateType.REMINDER.value}
-+
-+
-+def test_failed_dispatch_logged(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-+    _, _, _, order = _seed(db_session)
-+    monkeypatch.setattr("app.services.notifications._send_email", lambda message: (_ for _ in ()).throw(RuntimeError("boom")))
-+    result = notify_order_completed(db_session, order)
-+    assert result.success is False
-+    failed = db_session.execute(select(MessageDeliveryLog).where(MessageDeliveryLog.status == MessageDeliveryStatus.FAILED)).scalars().all()
-+    assert failed
++    delivery = list_deliveries(db, user_id=admin.id)[0]
++    assert '"type": "order.paid"' in delivery.payload_json
++    assert '"version": "v1"' in delivery.payload_json
++    assert '"id": "evt_' in delivery.payload_json
  
 EOF
 )

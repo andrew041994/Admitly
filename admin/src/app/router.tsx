@@ -4,6 +4,7 @@ import { SupportPage } from '../pages/SupportPage';
 import { FinancePage } from '../pages/FinancePage';
 import { CheckInPage } from '../pages/CheckInPage';
 import { MessagingPage } from '../pages/MessagingPage';
+import { IntegrationsPage } from '../pages/IntegrationsPage';
 
 export function AppRouter() {
   return (
@@ -13,6 +14,7 @@ export function AppRouter() {
         <Route path="/support" element={<SupportPage />} />
         <Route path="/finance" element={<FinancePage />} />
         <Route path="/check-in" element={<CheckInPage />} />
+        <Route path="/integrations" element={<IntegrationsPage />} />
         <Route path="/messaging" element={<MessagingPage />} />
       </Route>
     </Routes>
