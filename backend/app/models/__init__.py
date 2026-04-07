@@ -1,4 +1,5 @@
 from app.models.event import Event
+from app.models.event_refund_batch import EventRefundBatch
 from app.models.event_reminder_log import EventReminderLog
 from app.models.event_staff import EventStaff
 from app.models.dispute import Dispute
@@ -24,6 +25,7 @@ __all__ = [
     "OrganizerProfile",
     "Venue",
     "Event",
+    "EventRefundBatch",
     "EventReminderLog",
     "EventStaff",
     "TicketTier",

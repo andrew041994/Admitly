@@ -6,7 +6,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
+from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
 from app.models.event import Event
 from app.models.order import Order
 from app.models.organizer_profile import OrganizerProfile
@@ -159,6 +159,10 @@ def create_pending_order_from_holds(
             raise HoldEventMismatchError("All holds must belong to the same event.")
         if len(currencies) != 1:
             raise HoldCurrencyMismatchError("All holds must share the same currency.")
+
+        event = db.execute(select(Event).where(Event.id == next(iter(event_ids)))).scalar_one_or_none()
+        if event is None or event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
+            raise OrderNotPayableError("Event is not currently sellable.")
 
         pricing = standard_pricing(subtotal_amount)
         if promo_code_text:

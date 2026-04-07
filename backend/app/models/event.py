@@ -18,6 +18,7 @@ from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.event_refund_batch import EventRefundBatch
     from app.models.event_staff import EventStaff
     from app.models.organizer_profile import OrganizerProfile
     from app.models.order import Order
@@ -88,5 +89,8 @@ class Event(TimestampMixin, Base):
     ticket_holds: Mapped[list["TicketHold"]] = relationship(back_populates="event")
     promo_codes: Mapped[list["PromoCode"]] = relationship(back_populates="event", cascade="all, delete-orphan")
     reminder_logs: Mapped[list["EventReminderLog"]] = relationship(
+        back_populates="event", cascade="all, delete-orphan"
+    )
+    refund_batches: Mapped[list["EventRefundBatch"]] = relationship(
         back_populates="event", cascade="all, delete-orphan"
     )

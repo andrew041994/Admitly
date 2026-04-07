@@ -15,3 +15,20 @@ class EventResponse(BaseModel):
     cancelled_by_user_id: int | None
     cancellation_reason: str | None
     updated_at: datetime
+    refund_batch_id: int | None = None
+    refund_batch_status: str | None = None
+
+
+class EventRefundBatchResponse(BaseModel):
+    id: int
+    event_id: int
+    status: str
+    total_orders: int
+    processed_orders: int
+    successful_refunds: int
+    skipped_orders: int
+    failed_orders: int
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+    last_error: str | None

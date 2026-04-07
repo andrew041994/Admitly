@@ -222,6 +222,58 @@ def _process_refund_locked(
     return refund
 
 
+
+def process_refund_for_order(
+    db: Session,
+    *,
+    order_id: int,
+    actor_user_id: int,
+    reason: RefundReason,
+    amount: Decimal | None = None,
+    admin_notes: str | None = None,
+) -> Refund:
+    _assert_admin(db, actor_user_id=actor_user_id)
+    order = (
+        db.execute(
+            select(Order)
+            .options(joinedload(Order.event), joinedload(Order.tickets))
+            .where(Order.id == order_id)
+            .with_for_update()
+        )
+        .unique()
+        .scalar_one_or_none()
+    )
+    if order is None:
+        raise RefundNotFoundError("Order not found.")
+
+    requested_amount = amount if amount is not None else get_order_remaining_refundable(db, order=order)
+    validate_refund_request(
+        db,
+        order=order,
+        requested_amount=requested_amount,
+        reason=reason,
+        admin_override=True,
+    )
+
+    refund = Refund(
+        order_id=order.id,
+        user_id=order.user_id,
+        amount=requested_amount,
+        reason=reason,
+        status=RefundStatus.APPROVED,
+        approved_by_user_id=actor_user_id,
+        admin_notes=admin_notes.strip() if admin_notes else None,
+    )
+    db.add(refund)
+    db.flush()
+    return _process_refund_locked(
+        db,
+        refund=refund,
+        order=order,
+        actor_user_id=actor_user_id,
+        admin_notes=admin_notes,
+    )
+
 def approve_refund(
     db: Session,
     *,

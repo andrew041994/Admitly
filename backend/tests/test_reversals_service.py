@@ -279,7 +279,7 @@ def test_cancel_event_voids_issued_tickets_and_cancels_pending_orders(db_session
     with pytest.raises(EventAuthorizationError):
         cancel_event(db_session, event_id=event.id, actor_user_id=outsider.id)
 
-    cancelled_event = cancel_event(db_session, event_id=event.id, actor_user_id=organizer_user.id, reason="weather")
+    cancelled_event, _ = cancel_event(db_session, event_id=event.id, actor_user_id=organizer_user.id, reason="weather")
     assert cancelled_event.status == EventStatus.CANCELLED
     assert cancelled_event.cancelled_by_user_id == organizer_user.id
     assert cancelled_event.cancellation_reason == "weather"

@@ -106,3 +106,10 @@ class FinancialEntryType(str, Enum):
 
 class BalanceAdjustmentType(str, Enum):
     REFUND_OFFSET = "refund_offset"
+
+
+class EventRefundBatchStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
