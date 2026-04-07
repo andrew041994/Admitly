@@ -7,6 +7,7 @@ Create Date: 2026-04-07 00:18:00.000000
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -16,7 +17,7 @@ branch_labels = None
 depends_on = None
 
 
-support_case_status = sa.Enum(
+support_case_status = postgresql.ENUM(
     "open",
     "investigating",
     "waiting_on_customer",
@@ -24,9 +25,12 @@ support_case_status = sa.Enum(
     "resolved",
     "closed",
     name="support_case_status",
+    create_type=False,
 )
 
-support_case_priority = sa.Enum("low", "normal", "high", "urgent", name="support_case_priority")
+support_case_priority = postgresql.ENUM(
+    "low", "normal", "high", "urgent", name="support_case_priority", create_type=False
+)
 
 
 def upgrade() -> None:
@@ -35,6 +39,7 @@ def upgrade() -> None:
         support_case_status.create(bind, checkfirst=True)
         support_case_priority.create(bind, checkfirst=True)
 
+    # create_type=False keeps CREATE TABLE from attempting a second CREATE TYPE for existing enums.
     op.create_table(
         "support_cases",
         sa.Column("id", sa.Integer(), nullable=False),
