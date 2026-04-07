@@ -1,16 +1,224 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/admin/vite.config.ts b/admin/vite.config.ts
-new file mode 100644
-index 0000000000000000000000000000000000000000..0466183af6ac8a9f74ced8fe1d8bcbf6c85dce5e
---- /dev/null
-+++ b/admin/vite.config.ts
-@@ -0,0 +1,6 @@
-+import { defineConfig } from 'vite';
-+import react from '@vitejs/plugin-react';
+diff --git a/admin/src/styles.css b/admin/src/styles.css
+index 3268034d00026d7c6612618c6d9549be10b6c0f5..620ac7a24b2bf14d20a3aee535de8dd33c4f9db6 100644
+--- a/admin/src/styles.css
++++ b/admin/src/styles.css
+@@ -44,35 +44,215 @@ body {
+   display: flex;
+   gap: 0.5rem;
+ }
+ 
+ .nav-link {
+   text-decoration: none;
+   color: #1f2937;
+   background: #e5e7eb;
+   border-radius: 0.5rem;
+   padding: 0.4rem 0.75rem;
+   font-weight: 600;
+ }
+ 
+ .nav-link.active {
+   background: #2563eb;
+   color: #ffffff;
+ }
+ 
+ .admin-main,
+ .support-placeholder {
+   background: #ffffff;
+   border-radius: 0.75rem;
+   padding: 1rem;
+ }
+ 
++.support-page {
++  display: grid;
++  gap: 1rem;
++}
 +
-+export default defineConfig({
-+  plugins: [react()],
-+});
++.card {
++  background: #ffffff;
++  border: 1px solid #e5e7eb;
++  border-radius: 0.75rem;
++  padding: 1rem;
++}
++
++.lookup-row {
++  display: grid;
++  gap: 0.5rem;
++}
++
++.lookup-row input,
++.lookup-row button,
++.form-grid input,
++.form-grid select,
++.notes-form textarea,
++.actions-grid input,
++button {
++  font: inherit;
++}
++
++input,
++select,
++textarea {
++  width: 100%;
++  border: 1px solid #d1d5db;
++  border-radius: 0.5rem;
++  padding: 0.5rem;
++}
++
++button {
++  border: 0;
++  border-radius: 0.5rem;
++  background: #2563eb;
++  color: #fff;
++  padding: 0.5rem 0.75rem;
++  font-weight: 600;
++  cursor: pointer;
++}
++
++button:disabled {
++  opacity: 0.6;
++  cursor: not-allowed;
++}
++
++.error-text {
++  color: #b91c1c;
++}
++
++.success-text {
++  color: #065f46;
++}
++
++.muted-text {
++  color: #6b7280;
++}
++
++.support-grid {
++  display: grid;
++  gap: 1rem;
++}
++
++.kv-list {
++  margin: 0;
++  display: grid;
++  gap: 0.35rem;
++}
++
++.kv-list div {
++  display: grid;
++  grid-template-columns: 160px 1fr;
++  gap: 0.75rem;
++}
++
++.kv-list dt {
++  color: #4b5563;
++}
++
++.kv-list dd {
++  margin: 0;
++  font-weight: 600;
++}
++
++.summary-columns {
++  margin-top: 1rem;
++  display: grid;
++  gap: 1rem;
++}
++
++.form-grid {
++  display: grid;
++  gap: 0.75rem;
++  margin-bottom: 0.75rem;
++}
++
++.form-grid label {
++  display: grid;
++  gap: 0.35rem;
++}
++
++.notes-form {
++  display: grid;
++  gap: 0.5rem;
++  margin-bottom: 1rem;
++}
++
++.notes-form textarea {
++  min-height: 90px;
++}
++
++.list-reset {
++  list-style: none;
++  margin: 0;
++  padding: 0;
++  display: grid;
++  gap: 0.75rem;
++}
++
++.timeline-item {
++  border-top: 1px solid #e5e7eb;
++  padding-top: 0.75rem;
++}
++
++.timeline-item:first-child {
++  border-top: 0;
++  padding-top: 0;
++}
++
++.timeline-item p {
++  margin: 0.35rem 0;
++}
++
++.badge {
++  font-size: 0.75rem;
++  border-radius: 999px;
++  padding: 0.1rem 0.45rem;
++  background: #dbeafe;
++  color: #1d4ed8;
++}
++
++.actions-grid {
++  display: grid;
++  gap: 0.75rem;
++}
++
++.action-item {
++  border: 1px solid #e5e7eb;
++  border-radius: 0.5rem;
++  padding: 0.75rem;
++  display: grid;
++  gap: 0.5rem;
++}
++
++.action-item h4 {
++  margin: 0;
++}
++
+ @media (min-width: 768px) {
+   .admin-body {
+     grid-template-columns: 220px 1fr;
+     align-items: start;
+   }
+ 
+   .admin-nav {
+     flex-direction: column;
+   }
++
++  .lookup-row {
++    grid-template-columns: 140px 1fr auto;
++    align-items: end;
++  }
++
++  .summary-columns {
++    grid-template-columns: repeat(3, minmax(0, 1fr));
++  }
++
++  .form-grid {
++    grid-template-columns: repeat(2, minmax(0, 1fr));
++  }
++
++  .actions-grid {
++    grid-template-columns: repeat(2, minmax(0, 1fr));
++  }
+ }
  
 EOF
 )
