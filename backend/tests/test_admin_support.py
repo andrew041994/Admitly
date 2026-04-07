@@ -260,3 +260,18 @@ def test_admin_support_routes_registered() -> None:
     assert "/admin/support/orders/{order_id}/notes" in route_paths
     assert "/admin/support/orders/{order_id}/case" in route_paths
     assert "/admin/support/orders/{order_id}/actions" in route_paths
+
+
+def test_admin_support_ui_route_registered() -> None:
+    route_paths = {route.path for route in app.routes}
+    assert "/admin/support" in route_paths
+
+
+def test_admin_support_ui_page_renders_sections() -> None:
+    from app.api.admin_support_ui import admin_support_workspace
+
+    html = admin_support_workspace()
+    assert "Order Support" in html
+    assert "Internal notes" in html
+    assert "Timeline / audit trail" in html
+    assert "Admin actions" in html

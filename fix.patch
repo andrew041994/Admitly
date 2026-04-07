@@ -1,78 +1,49 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/alembic/versions/20260407_0018_phase19_admin_support_cases.py b/backend/alembic/versions/20260407_0018_phase19_admin_support_cases.py
-index 256c66a9d386332e0a30046255e388d9949cbf88..1130fa10e999f50cddfbaa94adf0dcf87cc763e8 100644
---- a/backend/alembic/versions/20260407_0018_phase19_admin_support_cases.py
-+++ b/backend/alembic/versions/20260407_0018_phase19_admin_support_cases.py
-@@ -1,62 +1,67 @@
- """Phase 19 admin support cases and action audit
- 
- Revision ID: 20260407_0018
- Revises: 20260407_0017
- Create Date: 2026-04-07 00:18:00.000000
- """
- 
- from alembic import op
- import sqlalchemy as sa
-+from sqlalchemy.dialects import postgresql
+diff --git a/backend/tests/test_admin_support.py b/backend/tests/test_admin_support.py
+index 63e4aa3256990191e6dde0915ecccd945e2b6082..630f922a82533ab14bb72ca46bc798a8da3ad97b 100644
+--- a/backend/tests/test_admin_support.py
++++ b/backend/tests/test_admin_support.py
+@@ -238,25 +238,40 @@ def test_remove_promo_application_conflicts_when_order_immutable(db_session: Ses
+         run_admin_support_action(db_session, order_id=order.id, actor_user_id=admin.id, action_type="remove_promo_application", reason="cleanup")
  
  
- # revision identifiers, used by Alembic.
- revision = "20260407_0018"
- down_revision = "20260407_0017"
- branch_labels = None
- depends_on = None
+ def test_non_admin_access_rejected(db_session: Session) -> None:
+     order, _, non_admin = _seed(db_session, suffix="nonadmin")
+     with pytest.raises(HTTPException) as exc:
+         create_support_note(order.id, SupportNoteCreateRequest(body="x"), db=db_session, user_id=non_admin.id)
+     assert exc.value.status_code == 403
  
  
--support_case_status = sa.Enum(
-+support_case_status = postgresql.ENUM(
-     "open",
-     "investigating",
-     "waiting_on_customer",
-     "waiting_on_payment_provider",
-     "resolved",
-     "closed",
-     name="support_case_status",
-+    create_type=False,
- )
+ def test_blank_note_and_sensitive_reason_validation(db_session: Session) -> None:
+     order, admin, _ = _seed(db_session, suffix="validation")
+     with pytest.raises(HTTPException):
+         create_support_note(order.id, SupportNoteCreateRequest(body="   "), db=db_session, user_id=admin.id)
  
--support_case_priority = sa.Enum("low", "normal", "high", "urgent", name="support_case_priority")
-+support_case_priority = postgresql.ENUM(
-+    "low", "normal", "high", "urgent", name="support_case_priority", create_type=False
-+)
+     with pytest.raises(Exception):
+         run_admin_support_action(db_session, order_id=order.id, actor_user_id=admin.id, action_type="flag_for_fraud_review", reason="  ")
  
  
- def upgrade() -> None:
-     bind = op.get_bind()
-     if bind.dialect.name == "postgresql":
-         support_case_status.create(bind, checkfirst=True)
-         support_case_priority.create(bind, checkfirst=True)
- 
-+    # create_type=False keeps CREATE TABLE from attempting a second CREATE TYPE for existing enums.
-     op.create_table(
-         "support_cases",
-         sa.Column("id", sa.Integer(), nullable=False),
-         sa.Column("order_id", sa.Integer(), nullable=False),
-         sa.Column("status", support_case_status, nullable=False, server_default="open"),
-         sa.Column("priority", support_case_priority, nullable=False, server_default="normal"),
-         sa.Column("category", sa.String(length=64), nullable=False, server_default="other"),
-         sa.Column("created_by_user_id", sa.Integer(), nullable=True),
-         sa.Column("assigned_to_user_id", sa.Integer(), nullable=True),
-         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
-         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-         sa.ForeignKeyConstraint(["assigned_to_user_id"], ["users.id"], name=op.f("fk_support_cases_assigned_to_user_id_users")),
-         sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"], name=op.f("fk_support_cases_created_by_user_id_users")),
-         sa.ForeignKeyConstraint(["order_id"], ["orders.id"], name=op.f("fk_support_cases_order_id_orders")),
-         sa.PrimaryKeyConstraint("id", name=op.f("pk_support_cases")),
-     )
-     op.create_index(op.f("ix_support_cases_order_id"), "support_cases", ["order_id"], unique=False)
-     op.create_index(op.f("ix_support_cases_status"), "support_cases", ["status"], unique=False)
-     op.create_index(op.f("ix_support_cases_created_by_user_id"), "support_cases", ["created_by_user_id"], unique=False)
-     op.create_index(op.f("ix_support_cases_assigned_to_user_id"), "support_cases", ["assigned_to_user_id"], unique=False)
- 
-     op.create_table(
-         "support_case_notes",
-         sa.Column("id", sa.Integer(), nullable=False),
+ def test_admin_support_routes_registered() -> None:
+     route_paths = {route.path for route in app.routes}
+     assert "/admin/support/orders/{order_id}" in route_paths
+     assert "/admin/support/orders/{order_id}/notes" in route_paths
+     assert "/admin/support/orders/{order_id}/case" in route_paths
+     assert "/admin/support/orders/{order_id}/actions" in route_paths
++
++
++def test_admin_support_ui_route_registered() -> None:
++    route_paths = {route.path for route in app.routes}
++    assert "/admin/support" in route_paths
++
++
++def test_admin_support_ui_page_renders_sections() -> None:
++    from app.api.admin_support_ui import admin_support_workspace
++
++    html = admin_support_workspace()
++    assert "Order Support" in html
++    assert "Internal notes" in html
++    assert "Timeline / audit trail" in html
++    assert "Admin actions" in html
  
 EOF
 )
