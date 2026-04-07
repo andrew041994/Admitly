@@ -11,6 +11,7 @@ from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus, Re
 from app.models.event import Event
 from app.models.order import Order
 from app.models.organizer_balance_adjustment import OrganizerBalanceAdjustment
+from app.models.organizer_profile import OrganizerProfile
 from app.models.refund import Refund
 from app.models.order_item import OrderItem
 from app.models.user import User

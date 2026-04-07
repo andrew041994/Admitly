@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -239,9 +239,6 @@ def validate_order_still_payable(order: Order | None, now: datetime | None = Non
 
     normalized_holds = [_to_aware(hold.expires_at) for hold in order.ticket_holds]
     effective_now = reference_now
-    if now is None and all(hold.astimezone(reference_now.tzinfo).date() == reference_now.date() for hold in normalized_holds):
-        effective_now = datetime.combine(reference_now.date(), time.min, tzinfo=reference_now.tzinfo)
-
     if not all(hold > effective_now for hold in normalized_holds):
         order.status = OrderStatus.EXPIRED
         raise OrderNotPayableError("Order holds have expired.")

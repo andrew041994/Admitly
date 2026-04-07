@@ -1,61 +1,92 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
-index 4e714f6e6abdea187ec23988b4599623ac7611dc..1adfb2cd81fb3711b202f9ba30eff62e8ec921dd 100644
---- a/backend/tests/test_tickets_service.py
-+++ b/backend/tests/test_tickets_service.py
-@@ -321,51 +321,51 @@ def test_user_cannot_retrieve_another_users_order_tickets(db_session: Session) -
-     issue_tickets_for_completed_order(db_session, order)
+diff --git a/backend/app/services/orders.py b/backend/app/services/orders.py
+index bfe12dc47a4e2121d78b2ddf65ee352e517d0b8a..79450be05c782486cea3d4ab4edf42562bf395bf 100644
+--- a/backend/app/services/orders.py
++++ b/backend/app/services/orders.py
+@@ -1,28 +1,28 @@
+ from __future__ import annotations
  
-     other = User(email="forbidden@example.com", full_name="Forbidden")
-     db_session.add(other)
-     db_session.commit()
-     db_session.refresh(other)
+-from datetime import datetime, time, timezone
++from datetime import datetime, timezone
+ from decimal import Decimal
  
-     with pytest.raises(TicketAuthorizationError):
-         list_tickets_for_order_owner(db_session, order_id=order.id, user_id=other.id)
+ from sqlalchemy import select
+ from sqlalchemy.orm import Session, joinedload
  
+ from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
+ from app.models.event import Event
+ from app.models.order import Order
+ from app.models.order_item import OrderItem
+ from app.models.ticket_hold import TicketHold
+ from app.models.ticket_tier import TicketTier
+ from app.models.user import User
+ from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
+ from app.services.promo_codes import (
+     PromoCodeValidationError,
+     apply_promo_code_to_order_pricing_context,
+     comp_pricing,
+     record_promo_redemption_for_order,
+     standard_pricing,
+ )
+ from app.services.notifications import (
+     NotificationDispatchResult,
+     notify_order_cancelled,
+     notify_order_completed,
+     notify_order_refunded,
+@@ -217,53 +217,50 @@ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | N
  
- def test_organizer_and_staff_authz_for_checkin(db_session: Session) -> None:
-     order, _, _, _, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
- 
-     organizer_user_id = event.organizer.user_id
-     assert can_check_in_event_tickets(db_session, user_id=organizer_user_id, event_id=event.id)
- 
-     staff_user = User(email="staff@example.com", full_name="Staff")
-     db_session.add(staff_user)
-     db_session.flush()
-     db_session.add(
-         EventStaff(
-             event_id=event.id,
-             user_id=staff_user.id,
--            role=EventStaffRole.SCANNER,
-+            role=EventStaffRole.CHECKIN,
-             is_active=True,
-             invited_by_user_id=organizer_user_id,
+ def get_order_with_holds(db: Session, *, order_id: int) -> Order | None:
+     return (
+         db.execute(
+             select(Order)
+             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds), joinedload(Order.tickets))
+             .where(Order.id == order_id)
          )
-     )
-     db_session.commit()
- 
-     assert can_check_in_event_tickets(db_session, user_id=staff_user.id, event_id=event.id)
-     check_in_ticket_for_event(
-         db_session,
-         scanner_user_id=staff_user.id,
-         event_id=event.id,
-         qr_payload=ticket.qr_payload,
-         ticket_code=None,
+         .unique()
+         .scalar_one_or_none()
      )
  
  
- def test_unrelated_user_cannot_check_in(db_session: Session) -> None:
-     order, _, _, _, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     outsider = User(email="outsider@example.com", full_name="Outsider")
-     db_session.add(outsider)
-     db_session.commit()
-     db_session.refresh(outsider)
+ def validate_order_still_payable(order: Order | None, now: datetime | None = None) -> None:
+     if order is None:
+         raise OrderNotFoundError("Order not found.")
  
-     with pytest.raises(TicketAuthorizationError):
+     reference_now = _to_aware(now) if now is not None else get_guyana_now()
+     if order.status != OrderStatus.PENDING:
+         raise OrderNotPayableError("Only pending orders can be paid.")
+     if not order.ticket_holds:
+         raise OrderNotPayableError("Order has no linked holds.")
+ 
+     normalized_holds = [_to_aware(hold.expires_at) for hold in order.ticket_holds]
+     effective_now = reference_now
+-    if now is None and all(hold.astimezone(reference_now.tzinfo).date() == reference_now.date() for hold in normalized_holds):
+-        effective_now = datetime.combine(reference_now.date(), time.min, tzinfo=reference_now.tzinfo)
+-
+     if not all(hold > effective_now for hold in normalized_holds):
+         order.status = OrderStatus.EXPIRED
+         raise OrderNotPayableError("Order holds have expired.")
+ 
+ 
+ def complete_paid_order(
+     db: Session,
+     order: Order,
+     *,
+     paid_at: datetime | None = None,
+     payment_reference: str | None = None,
+ ) -> Order:
+     if order.payment_verification_status != "verified":
+         raise OrderNotPayableError("Order payment is not verified.")
+ 
+     became_completed = order.status != OrderStatus.COMPLETED
+     if became_completed:
+         order.status = OrderStatus.COMPLETED
+ 
+     if payment_reference:
+         order.payment_reference = payment_reference
+ 
+     if order.refund_status != "refunded":
+         order.reconciliation_status = ReconciliationStatus.UNRECONCILED
+         order.payout_status = PayoutStatus.ELIGIBLE
  
 EOF
 )
