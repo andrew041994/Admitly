@@ -30,7 +30,7 @@ from app.services.notifications import (
     notify_tickets_issued,
 )
 from app.services.tickets import invalidate_order_tickets, issue_tickets_for_completed_order
-from app.services.ticket_holds import get_guyana_now
+from app.services.ticket_holds import get_guyana_now, get_ticket_tier_capacity_summary
 
 GYT = ZoneInfo("America/Guyana")
 
@@ -267,6 +267,8 @@ def complete_paid_order(
 ) -> Order:
     if order.payment_verification_status != "verified":
         raise OrderNotPayableError("Order payment is not verified.")
+    if order.status != OrderStatus.COMPLETED:
+        validate_order_still_payable(order, now=paid_at or get_guyana_now())
 
     became_completed = order.status != OrderStatus.COMPLETED
     if became_completed:
@@ -321,10 +323,10 @@ def create_comp_order_for_user(
         raise OrderFlowError("One or more ticket tiers were not found for event.")
 
     subtotal = Decimal("0.00")
-    for tier in tiers:
+    for tier in sorted(tiers, key=lambda item: item.id):
         quantity = tier_quantities[tier.id]
-        remaining = int(tier.quantity_total) - int(tier.quantity_sold) - int(tier.quantity_held)
-        if remaining < quantity:
+        capacity = get_ticket_tier_capacity_summary(db, ticket_tier_id=tier.id, now=get_guyana_now())
+        if capacity.available_quantity < quantity:
             raise OrderFlowError(f"Insufficient availability for tier {tier.id}.")
         subtotal += Decimal(quantity) * Decimal(tier.price_amount)
 

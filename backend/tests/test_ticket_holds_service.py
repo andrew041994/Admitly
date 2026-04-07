@@ -12,6 +12,7 @@ from app.services.ticket_holds import (
     TicketHoldWindowClosedError,
     calculate_ticket_hold_expiry,
     create_ticket_hold,
+    get_ticket_tier_capacity_summary,
     get_ticket_type_availability,
 )
 
@@ -149,6 +150,29 @@ def test_completed_orders_count_pending_do_not(db_session: Session) -> None:
 
     availability = get_ticket_type_availability(db_session, ticket_tier_id=tier.id, now=now)
     assert availability == 8
+
+
+def test_expired_attached_pending_hold_does_not_reduce_availability(db_session: Session) -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    tier = _seed_ticket_tier(db_session, start_at=now + timedelta(days=3), quantity_total=10)
+    pending_order = Order(user_id=1, event_id=tier.event_id, status=OrderStatus.PENDING, total_amount=100, currency="GYD")
+    db_session.add(pending_order)
+    db_session.flush()
+    db_session.add(
+        TicketHold(
+            event_id=tier.event_id,
+            ticket_tier_id=tier.id,
+            user_id=1,
+            quantity=4,
+            expires_at=now - timedelta(minutes=1),
+            order_id=pending_order.id,
+        )
+    )
+    db_session.commit()
+
+    summary = get_ticket_tier_capacity_summary(db_session, ticket_tier_id=tier.id, now=now)
+    assert summary.active_hold_quantity == 0
+    assert summary.available_quantity == 10
 
 
 def test_hold_creation_rejects_quantity_over_availability(db_session: Session) -> None:

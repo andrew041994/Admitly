@@ -38,7 +38,7 @@ def mmg_config() -> None:
 
 
 def _seed_order_with_hold(db: Session, *, user_email: str = "u@example.com") -> tuple[Order, TicketTier, User]:
-    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     user = User(email=user_email, full_name="User")
     db.add(user)
     db.flush()
@@ -55,7 +55,7 @@ def _seed_order_with_hold(db: Session, *, user_email: str = "u@example.com") -> 
         organizer_id=organizer.id,
         venue_id=venue.id,
         title="Concert",
-        slug=f"concert-{user_email}",
+        slug=f"concert-{user_email}-{int(now.timestamp())}",
         start_at=now + timedelta(days=3),
         end_at=now + timedelta(days=3, hours=3),
         status=EventStatus.PUBLISHED,
@@ -136,10 +136,10 @@ def test_validate_order_still_payable_rejects_non_pending_statuses(db_session: S
 def test_mmg_checkout_initiation_is_idempotent_and_pending_not_sold(db_session: Session) -> None:
     order, tier, user = _seed_order_with_hold(db_session)
 
-    before = get_ticket_type_availability(db_session, tier.id)
+    before = get_ticket_type_availability(db_session, tier.id, now=datetime.now(timezone.utc))
     first = create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     second = create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
-    after = get_ticket_type_availability(db_session, tier.id)
+    after = get_ticket_type_availability(db_session, tier.id, now=datetime.now(timezone.utc))
 
     assert first.checkout_url
     assert first.payment_reference == second.payment_reference
@@ -159,7 +159,7 @@ def test_mmg_agent_initiation_and_submit_outcomes(db_session: Session) -> None:
 
     initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     assert initiated.payment_reference.startswith("AGT-")
-    assert get_ticket_type_availability(db_session, tier.id) == 8
+    assert get_ticket_type_availability(db_session, tier.id, now=datetime.now(timezone.utc)) == 8
 
     verified = submit_mmg_agent_payment(
         db_session,
@@ -169,7 +169,7 @@ def test_mmg_agent_initiation_and_submit_outcomes(db_session: Session) -> None:
     )
     assert verified.payment_verification_status == "verified"
     assert verified.status == "completed"
-    assert get_ticket_type_availability(db_session, tier.id) == 8
+    assert get_ticket_type_availability(db_session, tier.id, now=datetime.now(timezone.utc)) == 8
 
 
 def test_mmg_agent_submit_pending_and_rejected_paths(db_session: Session) -> None:
@@ -214,6 +214,40 @@ def test_manual_agent_verify_hook_and_callback_scaffold(db_session: Session) -> 
         payload={"payment_reference": checkout_order.payment_reference, "status": "paid"},
     )
     assert callback.status == "completed"
+
+
+def test_paid_callback_is_idempotent_and_does_not_double_issue_tickets(db_session: Session) -> None:
+    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email="idempotent@example.com")
+    create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
+
+    first = handle_mmg_callback(
+        db_session,
+        payload={"payment_reference": checkout_order.payment_reference, "status": "paid"},
+    )
+    second = handle_mmg_callback(
+        db_session,
+        payload={"payment_reference": checkout_order.payment_reference, "status": "paid"},
+    )
+    db_session.refresh(checkout_order)
+    assert first.status == "completed"
+    assert second.status == "completed"
+    assert len(checkout_order.tickets) == 2
+
+
+def test_callback_cannot_complete_order_after_hold_expiration(db_session: Session) -> None:
+    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email="expired-callback@example.com")
+    create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
+    checkout_order.ticket_holds[0].expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+    db_session.commit()
+
+    with pytest.raises(OrderNotPayableError):
+        handle_mmg_callback(
+            db_session,
+            payload={"payment_reference": checkout_order.payment_reference, "status": "paid"},
+        )
+
+    db_session.refresh(checkout_order)
+    assert checkout_order.status == OrderStatus.PENDING
 
 
 def test_live_mode_missing_config_fails_clearly(db_session: Session) -> None:

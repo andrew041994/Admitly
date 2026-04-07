@@ -34,6 +34,15 @@ class HoldCreationResult:
     availability_remaining: int
 
 
+@dataclass(slots=True, frozen=True)
+class TicketTierCapacitySummary:
+    ticket_tier_id: int
+    total_capacity: int
+    committed_quantity: int
+    active_hold_quantity: int
+    available_quantity: int
+
+
 def _to_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
@@ -57,18 +66,21 @@ def calculate_ticket_hold_expiry(event_starts_at: datetime, now: datetime | None
     return min(current_guyana + timedelta(hours=48), event_start_guyana - timedelta(hours=8))
 
 
-def get_ticket_type_availability(db: Session, ticket_tier_id: int, now: datetime | None = None) -> int:
+def get_ticket_tier_capacity_summary(
+    db: Session,
+    *,
+    ticket_tier_id: int,
+    now: datetime | None = None,
+) -> TicketTierCapacitySummary:
     reference_now = _to_aware(now) if now is not None else get_guyana_now()
     if now is None:
         reference_now = datetime.combine(reference_now.date(), time.min, tzinfo=reference_now.tzinfo)
 
-    ticket_tier = db.execute(
-        select(TicketTier).where(TicketTier.id == ticket_tier_id)
-    ).scalar_one_or_none()
+    ticket_tier = db.execute(select(TicketTier).where(TicketTier.id == ticket_tier_id)).scalar_one_or_none()
     if ticket_tier is None:
         raise TicketHoldError("Ticket tier not found.")
 
-    completed_sold = (
+    committed_quantity = (
         db.execute(
             select(func.coalesce(func.sum(OrderItem.quantity), 0))
             .join(Order, Order.id == OrderItem.order_id)
@@ -76,22 +88,51 @@ def get_ticket_type_availability(db: Session, ticket_tier_id: int, now: datetime
         ).scalar_one()
         or 0
     )
-
-    active_holds = (
+    active_hold_quantity = (
         db.execute(
             select(func.coalesce(func.sum(TicketHold.quantity), 0))
             .select_from(TicketHold)
             .outerjoin(Order, Order.id == TicketHold.order_id)
             .where(
                 TicketHold.ticket_tier_id == ticket_tier_id,
-                ((TicketHold.order_id.is_(None)) & (TicketHold.expires_at > reference_now))
-                | ((TicketHold.order_id.is_not(None)) & (Order.status == OrderStatus.PENDING)),
+                (
+                    (TicketHold.order_id.is_(None))
+                    & (TicketHold.expires_at > reference_now)
+                )
+                | (
+                    (TicketHold.order_id.is_not(None))
+                    & (TicketHold.expires_at > reference_now)
+                    & (Order.status == OrderStatus.PENDING)
+                ),
             )
         ).scalar_one()
         or 0
     )
 
-    return max(ticket_tier.quantity_total - int(completed_sold) - int(active_holds), 0)
+    available_quantity = max(ticket_tier.quantity_total - int(committed_quantity) - int(active_hold_quantity), 0)
+    return TicketTierCapacitySummary(
+        ticket_tier_id=ticket_tier.id,
+        total_capacity=int(ticket_tier.quantity_total),
+        committed_quantity=int(committed_quantity),
+        active_hold_quantity=int(active_hold_quantity),
+        available_quantity=int(available_quantity),
+    )
+
+
+def get_ticket_type_availability(db: Session, ticket_tier_id: int, now: datetime | None = None) -> int:
+    return get_ticket_tier_capacity_summary(db, ticket_tier_id=ticket_tier_id, now=now).available_quantity
+
+
+def get_event_ticket_tier_capacity_summaries(
+    db: Session,
+    *,
+    event_id: int,
+    now: datetime | None = None,
+) -> list[TicketTierCapacitySummary]:
+    tier_ids = db.execute(
+        select(TicketTier.id).where(TicketTier.event_id == event_id).order_by(TicketTier.sort_order.asc(), TicketTier.id.asc())
+    ).scalars().all()
+    return [get_ticket_tier_capacity_summary(db, ticket_tier_id=tier_id, now=now) for tier_id in tier_ids]
 
 
 def create_ticket_hold(
@@ -125,7 +166,8 @@ def create_ticket_hold(
         if event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
             raise TicketHoldError("Event is not currently sellable.")
 
-        availability = get_ticket_type_availability(db, ticket_tier_id=ticket_tier_id, now=reference_now)
+        availability_summary = get_ticket_tier_capacity_summary(db, ticket_tier_id=ticket_tier_id, now=reference_now)
+        availability = availability_summary.available_quantity
         if quantity > availability:
             raise InsufficientAvailabilityError("Insufficient availability for requested quantity.")
 

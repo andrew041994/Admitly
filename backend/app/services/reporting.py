@@ -15,7 +15,7 @@ from app.models.ticket import Ticket
 from app.models.ticket_hold import TicketHold
 from app.models.ticket_tier import TicketTier
 from app.services.event_permissions import EventPermissionAction, has_event_permission
-from app.services.ticket_holds import get_guyana_now
+from app.services.ticket_holds import get_guyana_now, get_ticket_tier_capacity_summary
 
 
 class EventReportingError(ValueError):
@@ -236,20 +236,6 @@ def get_event_tier_summary(db: Session, *, event_id: int) -> list[TierSummaryRow
         .subquery()
     )
 
-    holds_by_tier = (
-        select(
-            TicketHold.ticket_tier_id.label("ticket_tier_id"),
-            func.coalesce(func.sum(TicketHold.quantity), 0).label("active_hold_count"),
-        )
-        .where(
-            TicketHold.event_id == event_id,
-            TicketHold.order_id.is_(None),
-            TicketHold.expires_at > active_now,
-        )
-        .group_by(TicketHold.ticket_tier_id)
-        .subquery()
-    )
-
     tickets_by_tier = (
         select(
             Ticket.ticket_tier_id.label("ticket_tier_id"),
@@ -270,7 +256,6 @@ def get_event_tier_summary(db: Session, *, event_id: int) -> list[TierSummaryRow
             TicketTier.currency,
             TicketTier.quantity_total,
             func.coalesce(sold_by_tier.c.sold_count, 0),
-            func.coalesce(holds_by_tier.c.active_hold_count, 0),
             func.coalesce(tickets_by_tier.c.issued_count, 0),
             func.coalesce(tickets_by_tier.c.checked_in_count, 0),
             func.coalesce(tickets_by_tier.c.voided_count, 0),
@@ -278,14 +263,13 @@ def get_event_tier_summary(db: Session, *, event_id: int) -> list[TierSummaryRow
         )
         .where(TicketTier.event_id == event_id)
         .outerjoin(sold_by_tier, sold_by_tier.c.ticket_tier_id == TicketTier.id)
-        .outerjoin(holds_by_tier, holds_by_tier.c.ticket_tier_id == TicketTier.id)
         .outerjoin(tickets_by_tier, tickets_by_tier.c.ticket_tier_id == TicketTier.id)
         .order_by(TicketTier.sort_order.asc(), TicketTier.id.asc())
     ).all()
 
     result: list[TierSummaryRow] = []
     for row in rows:
-        remaining = max(int(row[4]) - int(row[5]) - int(row[6]), 0)
+        capacity = get_ticket_tier_capacity_summary(db, ticket_tier_id=int(row[0]), now=active_now)
         result.append(
             TierSummaryRow(
                 ticket_tier_id=row[0],
@@ -294,12 +278,12 @@ def get_event_tier_summary(db: Session, *, event_id: int) -> list[TierSummaryRow
                 currency=row[3],
                 configured_quantity=row[4],
                 sold_count=int(row[5]),
-                active_hold_count=int(row[6]),
-                issued_count=int(row[7]),
-                checked_in_count=int(row[8]),
-                voided_count=int(row[9]),
-                remaining_count=remaining,
-                gross_revenue=Decimal(row[10] or 0),
+                active_hold_count=capacity.active_hold_quantity,
+                issued_count=int(row[6]),
+                checked_in_count=int(row[7]),
+                voided_count=int(row[8]),
+                remaining_count=capacity.available_quantity,
+                gross_revenue=Decimal(row[9] or 0),
             )
         )
 

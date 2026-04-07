@@ -15,6 +15,7 @@ from app.services.orders import (
     HoldExpiredError,
     HoldOwnershipError,
     OrderAuthorizationError,
+    OrderFlowError,
     create_comp_order_for_user,
     create_pending_order_from_holds,
 )
@@ -382,5 +383,33 @@ def test_unrelated_user_cannot_create_comp_order(db_session: Session) -> None:
             event_id=event.id,
             purchaser_user_id=user.id,
             actor_user_id=outsider.id,
+            ticket_requests=[{"ticket_tier_id": tiers[0].id, "quantity": 1}],
+        )
+
+
+def test_comp_order_respects_active_hold_capacity(db_session: Session) -> None:
+    now = datetime.now(timezone.utc)
+    user, event, tiers = _seed_event_with_tiers(
+        db_session,
+        owner_email="compowner3@example.com",
+        start_at=now + timedelta(days=3),
+        tier_prices=[Decimal("100.00")],
+        quantity_total=2,
+    )
+    _create_hold(
+        db_session,
+        event_id=event.id,
+        tier_id=tiers[0].id,
+        user_id=user.id,
+        quantity=2,
+        expires_at=now + timedelta(hours=1),
+    )
+
+    with pytest.raises(OrderFlowError):
+        create_comp_order_for_user(
+            db_session,
+            event_id=event.id,
+            purchaser_user_id=user.id,
+            actor_user_id=user.id,
             ticket_requests=[{"ticket_tier_id": tiers[0].id, "quantity": 1}],
         )
