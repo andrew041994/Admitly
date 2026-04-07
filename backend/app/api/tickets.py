@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.ticket_holds import get_current_user_id
@@ -14,6 +14,7 @@ from app.schemas.ticket import (
     TicketResponse,
     TicketTransferRequest,
     TicketVoidRequest,
+    TicketQrResponse,
 )
 from app.services.tickets import (
     CHECK_IN_METHOD_MANUAL,
@@ -27,12 +28,21 @@ from app.services.tickets import (
     check_in_ticket,
     check_in_ticket_for_event,
     get_event_check_in_summary,
+    get_ticket_by_qr_payload,
+    get_ticket_for_owner,
     list_tickets_for_order_owner,
     list_tickets_for_user,
     transfer_ticket_to_user,
     validate_ticket_for_check_in,
     void_ticket,
     resend_ticket_notification,
+)
+from app.services.ticket_qr import (
+    build_ticket_qr_payload,
+    generate_qr_png_bytes,
+    generate_ticket_qr_data_uri,
+    get_ticket_public_url,
+    get_ticket_qr_image_url,
 )
 
 router = APIRouter(tags=["tickets"])
@@ -50,6 +60,8 @@ def _to_ticket_response(ticket) -> TicketResponse:
         status=ticket.status.value,
         ticket_code=ticket.ticket_code,
         qr_payload=ticket.qr_payload,
+        public_ticket_url=get_ticket_public_url(ticket),
+        qr_image_url=get_ticket_qr_image_url(ticket),
         issued_at=ticket.issued_at,
         checked_in_at=ticket.checked_in_at,
         check_in_method=ticket.check_in_method,
@@ -287,3 +299,50 @@ def resend_ticket(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     return NotificationDispatchResponse(success=result.success, channel_results=result.channel_results)
+
+
+@router.get("/tickets/{ticket_id}/qr", response_model=TicketQrResponse)
+def get_ticket_qr_by_ticket_id(
+    ticket_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketQrResponse:
+    ticket = get_ticket_for_owner(db, ticket_id=ticket_id, user_id=user_id)
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+    return TicketQrResponse(
+        ticket_public_token=ticket.qr_payload,
+        qr_payload=build_ticket_qr_payload(ticket),
+        public_ticket_url=get_ticket_public_url(ticket),
+        qr_image_url=get_ticket_qr_image_url(ticket),
+        qr_data_uri=generate_ticket_qr_data_uri(ticket),
+    )
+
+
+@router.get("/t/{ticket_token}", response_model=TicketQrResponse)
+def get_public_ticket_qr(
+    ticket_token: str,
+    db: Session = Depends(get_db),
+) -> TicketQrResponse:
+    ticket = get_ticket_by_qr_payload(db, qr_payload=ticket_token)
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+    return TicketQrResponse(
+        ticket_public_token=ticket.qr_payload,
+        qr_payload=build_ticket_qr_payload(ticket),
+        public_ticket_url=get_ticket_public_url(ticket),
+        qr_image_url=get_ticket_qr_image_url(ticket),
+        qr_data_uri=generate_ticket_qr_data_uri(ticket),
+    )
+
+
+@router.get("/t/{ticket_token}/qr")
+def get_public_ticket_qr_image(
+    ticket_token: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    ticket = get_ticket_by_qr_payload(db, qr_payload=ticket_token)
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+    png_bytes = generate_qr_png_bytes(build_ticket_qr_payload(ticket))
+    return Response(content=png_bytes, media_type="image/png")

@@ -23,6 +23,7 @@ from app.services.notifications import (
     notify_tickets_issued,
 )
 from app.services.ticket_holds import get_guyana_now
+from app.services.ticket_qr import extract_ticket_lookup_value
 
 
 class TicketError(ValueError):
@@ -324,6 +325,14 @@ def list_tickets_for_order_owner(db: Session, *, order_id: int, user_id: int) ->
         .scalars()
         .all()
     )
+
+
+
+
+def get_ticket_for_owner(db: Session, *, ticket_id: int, user_id: int) -> Ticket | None:
+    return db.execute(
+        select(Ticket).where(Ticket.id == ticket_id, Ticket.owner_user_id == user_id)
+    ).scalar_one_or_none()
 
 
 def validate_ticket_transferable(ticket: Ticket, *, current_user_id: int) -> None:
@@ -650,7 +659,7 @@ def can_check_in_event_tickets(db: Session, *, user_id: int, event_id: int) -> b
 
 
 def get_ticket_by_qr_payload(db: Session, *, qr_payload: str) -> Ticket | None:
-    lookup = qr_payload.strip()
+    lookup = extract_ticket_lookup_value(qr_payload)
     if not lookup:
         return None
     return (
@@ -692,7 +701,7 @@ def validate_ticket_for_check_in(
             event_id=event_id,
         )
 
-    lookup = (ticket_code or qr_payload or "").strip()
+    lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
     if not lookup:
         return TicketCheckInValidationResult(
             valid=False,
@@ -787,7 +796,7 @@ def check_in_ticket(
             event_id=event_id,
         )
 
-    lookup = (ticket_code or qr_payload or "").strip()
+    lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
     if not lookup:
         return TicketCheckInValidationResult(
             valid=False,

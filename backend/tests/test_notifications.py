@@ -21,6 +21,7 @@ from app.services.notifications import (
     get_notification_channels,
     notify_event_reminder,
     notify_order_completed,
+    notify_tickets_issued,
 )
 from app.services.orders import complete_paid_order, refund_completed_order
 from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
@@ -252,3 +253,26 @@ def test_event_reminder_routes_push_only_and_graceful_without_tokens(
     assert result.success is True
     assert result.channel_results["push"] == "skipped_no_tokens"
     assert sent == {"email": 0, "push": 1}
+
+
+def test_ticket_issue_email_includes_ticket_specific_qr_links(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    order, _, _ = _seed_order(db_session, suffix="qr-email")
+    tickets = issue_tickets_for_completed_order(db_session, order)
+
+    monkeypatch.setattr("app.services.notifications.settings.email_notifications_enabled", True)
+    monkeypatch.setattr("app.services.notifications.settings.email_provider", "mock")
+
+    captured: dict[str, str] = {}
+
+    def _capture_email(message):
+        captured["subject"] = message.subject
+        captured["body"] = message.body
+        return "sent_mock"
+
+    monkeypatch.setattr("app.services.notifications._send_email", _capture_email)
+
+    result = notify_tickets_issued(db_session, order, tickets)
+    assert result.channel_results["email"] == "sent_mock"
+    assert "Ticket access links" in captured["body"]
+    for ticket in tickets:
+        assert f"/t/{ticket.qr_payload}" in captured["body"]

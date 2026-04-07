@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+
+from fastapi import HTTPException
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -20,7 +22,9 @@ from app.models.enums import (
     OrderStatus,
     TicketStatus,
 )
+from app.api.tickets import get_ticket_qr_by_ticket_id
 from app.services.orders import complete_paid_order
+from app.services.ticket_qr import build_ticket_qr_payload, generate_qr_png_bytes, get_ticket_public_url
 from app.services.tickets import (
     CHECK_IN_METHOD_MANUAL,
     CHECK_IN_STATUS_ALREADY_CHECKED_IN,
@@ -770,3 +774,62 @@ def test_ticket_lifecycle_notification_hooks_are_called(db_session: Session, mon
     )
 
     assert [name for name, _ in calls] == ["issued", "transferred", "voided"]
+
+
+def test_ticket_qr_payload_and_png_generation_are_stable(db_session: Session) -> None:
+    pytest.importorskip("qrcode")
+    order, _, _, _, _ = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    payload = build_ticket_qr_payload(ticket)
+    assert payload == get_ticket_public_url(ticket)
+    assert payload.endswith(f"/t/{ticket.qr_payload}")
+
+    png = generate_qr_png_bytes(payload)
+    assert png
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_checkin_accepts_ticket_url_payload_and_reuses_phase17_validation(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    url_payload = build_ticket_qr_payload(ticket)
+    valid = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=url_payload,
+    )
+    assert valid.valid is True
+
+    ticket.status = TicketStatus.VOIDED
+    db_session.commit()
+
+    rejected = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=url_payload,
+    )
+    assert rejected.valid is False
+    assert rejected.status == "refunded_or_invalidated"
+
+
+def test_ticket_qr_endpoint_requires_ticket_ownership(db_session: Session) -> None:
+    pytest.importorskip("qrcode")
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    owner_view = get_ticket_qr_by_ticket_id(ticket.id, db=db_session, user_id=buyer.id)
+    assert owner_view.ticket_public_token == ticket.qr_payload
+    assert owner_view.qr_data_uri.startswith("data:image/png;base64,")
+
+    outsider = User(email="qr-outsider@example.com", full_name="Outsider")
+    db_session.add(outsider)
+    db_session.commit()
+    db_session.refresh(outsider)
+
+    with pytest.raises(HTTPException) as exc:
+        get_ticket_qr_by_ticket_id(ticket.id, db=db_session, user_id=outsider.id)
+    assert exc.value.status_code == 404

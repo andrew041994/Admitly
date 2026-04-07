@@ -18,6 +18,7 @@ from app.models.push_token import PushToken
 from app.models.ticket import Ticket
 from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.user import User
+from app.services.ticket_qr import get_ticket_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -217,12 +218,19 @@ def notify_tickets_issued(db: Session, order: Order, tickets: list[Ticket]) -> N
     email = _user_email(db, order.user_id)
     quantity = len(tickets)
     first_ticket = tickets[0]
+    ticket_lines = "\n".join(
+        f"- Ticket #{ticket.id}: {get_ticket_public_url(ticket)}"
+        for ticket in tickets
+    )
     return _dispatch(
         db,
         email=EmailMessage(
             to_email=email,
             subject=f"{quantity} ticket(s) issued for order #{order.id}",
-            body=f"{quantity} ticket(s) are now available for your order #{order.id}.",
+            body=(
+                f"{quantity} ticket(s) are now available for your order #{order.id}.\n\n"
+                f"Ticket access links:\n{ticket_lines}"
+            ),
         ) if email else None,
         push=PushMessage(
             user_id=order.user_id,

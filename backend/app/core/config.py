@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     push_notifications_enabled: bool = Field(default=False, alias="PUSH_NOTIFICATIONS_ENABLED")
     push_provider: str = Field(default="noop", alias="PUSH_PROVIDER")
 
+    ticket_public_base_url: str = Field(default="https://admitly.app", alias="TICKET_PUBLIC_BASE_URL")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

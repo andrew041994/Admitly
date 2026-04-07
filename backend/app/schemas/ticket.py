@@ -16,6 +16,8 @@ class TicketResponse(BaseModel):
     status: str
     ticket_code: str
     qr_payload: str
+    public_ticket_url: str
+    qr_image_url: str
     issued_at: datetime
     checked_in_at: datetime | None
     check_in_method: str | None = None
@@ -76,3 +78,11 @@ class TicketCheckInSummaryResponse(BaseModel):
 
 class TicketVoidRequest(BaseModel):
     reason: str | None = None
+
+
+class TicketQrResponse(BaseModel):
+    ticket_public_token: str
+    qr_payload: str
+    public_ticket_url: str
+    qr_image_url: str
+    qr_data_uri: str

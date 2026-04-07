@@ -1,296 +1,67 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
-index 48dbe56706f0931527432475130b7da21aab9586..6b49552d402486b32ddcdd55845662b5ab5fbfe2 100644
---- a/backend/tests/test_tickets_service.py
-+++ b/backend/tests/test_tickets_service.py
-@@ -1,63 +1,73 @@
- from __future__ import annotations
- 
- from concurrent.futures import ThreadPoolExecutor
- from datetime import datetime, timedelta, timezone
- from decimal import Decimal
- from pathlib import Path
- 
- import pytest
- from sqlalchemy import create_engine, select
- from sqlalchemy.exc import OperationalError
- from sqlalchemy.orm import Session, sessionmaker
- 
- from app.db.base import Base
- from app.models import Event, EventStaff, OrganizerProfile, Order, OrderItem, Ticket, TicketTier, User, Venue
- from app.models.enums import (
-     EventApprovalStatus,
-     EventStaffRole,
-     EventStatus,
-     EventVisibility,
-     OrderStatus,
-     TicketStatus,
- )
- from app.services.orders import complete_paid_order
- from app.services.tickets import (
-+    CHECK_IN_METHOD_MANUAL,
-+    CHECK_IN_STATUS_ALREADY_CHECKED_IN,
-+    CHECK_IN_STATUS_CANCELED_EVENT,
-+    CHECK_IN_STATUS_NOT_FOUND,
-+    CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
-+    CHECK_IN_STATUS_VALID,
-+    CHECK_IN_STATUS_WRONG_EVENT,
-     TicketAuthorizationError,
-     TicketCheckInConflictError,
-     TicketCrossEventError,
-     TicketIssuanceError,
-     TicketNotFoundError,
-     TicketTransferError,
-     TicketVoidError,
-+    check_in_ticket,
-     can_check_in_event_tickets,
-     can_void_event_ticket,
-     check_in_ticket_for_event,
-+    get_event_check_in_summary,
-     issue_tickets_for_completed_order,
-     list_tickets_for_order_owner,
-     list_tickets_for_user,
-     transfer_ticket_to_user,
-+    validate_ticket_for_check_in,
-     void_ticket,
- )
- 
- 
- @pytest.fixture
- def db_session() -> Session:
-     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-     Base.metadata.create_all(engine)
-     SessionLocal = sessionmaker(bind=engine, future=True)
-     with SessionLocal() as session:
-         yield session
- 
- 
- def _seed_order(
-     db: Session,
-     *,
-     user_email: str = "buyer@example.com",
-     quantity: int = 3,
-     status: OrderStatus = OrderStatus.COMPLETED,
-     payment_verification_status: str = "verified",
- ) -> tuple[Order, OrderItem, TicketTier, User, Event]:
-     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-     user = User(email=user_email, full_name="Buyer")
-     db.add(user)
-     db.flush()
-@@ -365,119 +375,213 @@ def test_unrelated_user_cannot_check_in(db_session: Session) -> None:
- 
- 
- def test_checkin_success_and_second_scan_rejected(db_session: Session) -> None:
-     order, _, _, _, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
- 
-     scanned = check_in_ticket_for_event(
-         db_session,
-         scanner_user_id=event.organizer.user_id,
-         event_id=event.id,
-         qr_payload=ticket.qr_payload,
-         ticket_code=None,
-     )
-     assert scanned.status == TicketStatus.CHECKED_IN
- 
-     with pytest.raises(TicketCheckInConflictError):
-         check_in_ticket_for_event(
-             db_session,
-             scanner_user_id=event.organizer.user_id,
-             event_id=event.id,
-             qr_payload=ticket.qr_payload,
-             ticket_code=None,
-         )
- 
- 
-+def test_validate_ticket_statuses_for_qr_flow(db_session: Session) -> None:
-+    order, _, _, _, event = _seed_order(db_session, quantity=1)
-+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+diff --git a/backend/alembic/versions/20260407_0018_phase16b_reminder_delivery_tracking.py b/backend/alembic/versions/20260407_0018_phase16b_reminder_delivery_tracking.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cdee39b4fc5c53268012a723e650eb28e5fe4894
+--- /dev/null
++++ b/backend/alembic/versions/20260407_0018_phase16b_reminder_delivery_tracking.py
+@@ -0,0 +1,57 @@
++"""Phase 16B reminder delivery tracking
 +
-+    valid = validate_ticket_for_check_in(
-+        db_session,
-+        actor_user_id=event.organizer.user_id,
-+        event_id=event.id,
-+        qr_payload=ticket.qr_payload,
++Revision ID: 20260407_0018
++Revises: 20260407_0016
++Create Date: 2026-04-07 14:20:00
++
++"""
++
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++
++
++# revision identifiers, used by Alembic.
++revision: str = "20260407_0018"
++down_revision: Union[str, None] = "20260407_0016"
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++
++def upgrade() -> None:
++    op.add_column(
++        "event_reminder_logs",
++        sa.Column("scheduled_for", sa.DateTime(timezone=True), nullable=True),
 +    )
-+    assert valid.valid
-+    assert valid.status == CHECK_IN_STATUS_VALID
-+
-+    unknown = validate_ticket_for_check_in(
-+        db_session,
-+        actor_user_id=event.organizer.user_id,
-+        event_id=event.id,
-+        qr_payload="missing-ticket",
++    op.add_column(
++        "event_reminder_logs",
++        sa.Column("status", sa.String(length=32), nullable=False, server_default="sent"),
 +    )
-+    assert not unknown.valid
-+    assert unknown.status == CHECK_IN_STATUS_NOT_FOUND
-+
-+
- def test_transferred_ticket_can_still_be_checked_in(db_session: Session) -> None:
-     order, _, _, buyer, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     recipient = User(email="recipient-4@example.com", full_name="Recipient")
-     db_session.add(recipient)
-     db_session.commit()
-     db_session.refresh(recipient)
- 
-     transferred = transfer_ticket_to_user(
-         db_session,
-         ticket_id=ticket.id,
-         from_user_id=buyer.id,
-         to_user_id=recipient.id,
-     )
-     assert transferred.owner_user_id == recipient.id
- 
-     scanned = check_in_ticket_for_event(
-         db_session,
-         scanner_user_id=event.organizer.user_id,
-         event_id=event.id,
-         qr_payload=ticket.qr_payload,
-         ticket_code=None,
-     )
-     assert scanned.status == TicketStatus.CHECKED_IN
- 
- 
- def test_ticket_for_different_event_is_rejected(db_session: Session) -> None:
-     order_1, _, _, _, event_1 = _seed_order(db_session, user_email="a@example.com", quantity=1)
-     order_2, _, _, _, event_2 = _seed_order(db_session, user_email="b@example.com", quantity=1)
-     ticket_1 = issue_tickets_for_completed_order(db_session, order_1)[0]
-     issue_tickets_for_completed_order(db_session, order_2)
- 
-     with pytest.raises(TicketCrossEventError):
-         check_in_ticket_for_event(
-             db_session,
-             scanner_user_id=event_2.organizer.user_id,
-             event_id=event_2.id,
-             qr_payload=ticket_1.qr_payload,
-             ticket_code=None,
-         )
- 
-     assert event_1.id != event_2.id
- 
-+    wrong_event = validate_ticket_for_check_in(
-+        db_session,
-+        actor_user_id=event_2.organizer.user_id,
-+        event_id=event_2.id,
-+        qr_payload=ticket_1.qr_payload,
++    op.add_column(
++        "event_reminder_logs",
++        sa.Column("last_attempted_at", sa.DateTime(timezone=True), nullable=True),
 +    )
-+    assert not wrong_event.valid
-+    assert wrong_event.status == CHECK_IN_STATUS_WRONG_EVENT
-+
- 
- def test_voided_ticket_and_unknown_payload_are_rejected(db_session: Session) -> None:
-     order, _, _, _, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     ticket.status = TicketStatus.VOIDED
-     db_session.commit()
- 
-     with pytest.raises(TicketCheckInConflictError):
-         check_in_ticket_for_event(
-             db_session,
-             scanner_user_id=event.organizer.user_id,
-             event_id=event.id,
-             qr_payload=ticket.qr_payload,
-             ticket_code=None,
-         )
- 
-     with pytest.raises(TicketNotFoundError):
-         check_in_ticket_for_event(
-             db_session,
-             scanner_user_id=event.organizer.user_id,
-             event_id=event.id,
-             qr_payload="unknown-payload",
-             ticket_code=None,
-         )
- 
- 
-+def test_refunded_and_cancelled_event_tickets_are_not_admittable(db_session: Session) -> None:
-+    order, _, _, _, event = _seed_order(db_session, quantity=1)
-+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
-+    order.refund_status = "refunded"
-+    db_session.commit()
-+
-+    refunded = validate_ticket_for_check_in(
-+        db_session,
-+        actor_user_id=event.organizer.user_id,
-+        event_id=event.id,
-+        qr_payload=ticket.qr_payload,
++    op.add_column(
++        "event_reminder_logs",
++        sa.Column("error_message", sa.Text(), nullable=True),
 +    )
-+    assert not refunded.valid
-+    assert refunded.status == CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE
 +
-+    order_2, _, _, _, event_2 = _seed_order(db_session, user_email="cancelled-event@example.com", quantity=1)
-+    ticket_2 = issue_tickets_for_completed_order(db_session, order_2)[0]
-+    event_2.status = EventStatus.CANCELLED
-+    db_session.commit()
++    op.execute("UPDATE event_reminder_logs SET scheduled_for = sent_at WHERE scheduled_for IS NULL")
 +
-+    cancelled = validate_ticket_for_check_in(
-+        db_session,
-+        actor_user_id=event_2.organizer.user_id,
-+        event_id=event_2.id,
-+        qr_payload=ticket_2.qr_payload,
-+    )
-+    assert not cancelled.valid
-+    assert cancelled.status == CHECK_IN_STATUS_CANCELED_EVENT
++    op.alter_column("event_reminder_logs", "scheduled_for", nullable=False)
++    op.alter_column("event_reminder_logs", "sent_at", nullable=True)
++
++    op.create_index(op.f("ix_event_reminder_logs_scheduled_for"), "event_reminder_logs", ["scheduled_for"], unique=False)
++    op.create_index(op.f("ix_event_reminder_logs_status"), "event_reminder_logs", ["status"], unique=False)
 +
 +
-+def test_manual_checkin_and_summary_are_ticket_level(db_session: Session) -> None:
-+    order, _, _, _, event = _seed_order(db_session, quantity=3)
-+    tickets = issue_tickets_for_completed_order(db_session, order)
-+    scanner_id = event.organizer.user_id
++def downgrade() -> None:
++    op.drop_index(op.f("ix_event_reminder_logs_status"), table_name="event_reminder_logs")
++    op.drop_index(op.f("ix_event_reminder_logs_scheduled_for"), table_name="event_reminder_logs")
 +
-+    first = check_in_ticket(
-+        db_session,
-+        scanner_user_id=scanner_id,
-+        event_id=event.id,
-+        ticket_code=tickets[0].ticket_code,
-+        method=CHECK_IN_METHOD_MANUAL,
-+    )
-+    assert first.valid
-+    assert first.ticket is not None
-+    assert first.ticket.check_in_method == CHECK_IN_METHOD_MANUAL
-+
-+    duplicate = check_in_ticket(
-+        db_session,
-+        scanner_user_id=scanner_id,
-+        event_id=event.id,
-+        ticket_code=tickets[0].ticket_code,
-+        method=CHECK_IN_METHOD_MANUAL,
-+    )
-+    assert not duplicate.valid
-+    assert duplicate.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN
-+
-+    summary = get_event_check_in_summary(db_session, actor_user_id=scanner_id, event_id=event.id)
-+    assert summary.total_admittable_tickets == 3
-+    assert summary.checked_in_tickets == 1
-+    assert summary.remaining_tickets == 2
-+
-+
- def test_concurrent_duplicate_scan_only_one_succeeds(tmp_path: Path) -> None:
-     db_path = tmp_path / "tickets-concurrency.db"
-     engine = create_engine(
-         f"sqlite+pysqlite:///{db_path}",
-         future=True,
-         connect_args={"check_same_thread": False},
-     )
-     Base.metadata.create_all(engine)
-     SessionLocal = sessionmaker(bind=engine, future=True)
- 
-     with SessionLocal() as session:
-         order, _, _, _, event = _seed_order(session, quantity=1)
-         ticket = issue_tickets_for_completed_order(session, order)[0]
-         scanner_user_id = event.organizer.user_id
-         event_id = event.id
-         qr_payload = ticket.qr_payload
- 
-     def _attempt() -> bool:
-         with SessionLocal() as local_session:
-             try:
-                 check_in_ticket_for_event(
-                     local_session,
-                     scanner_user_id=scanner_user_id,
-                     event_id=event_id,
-                     qr_payload=qr_payload,
++    op.alter_column("event_reminder_logs", "sent_at", nullable=False)
++    op.drop_column("event_reminder_logs", "error_message")
++    op.drop_column("event_reminder_logs", "last_attempted_at")
++    op.drop_column("event_reminder_logs", "status")
++    op.drop_column("event_reminder_logs", "scheduled_for")
  
 EOF
 )
