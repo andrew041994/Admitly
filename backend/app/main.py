@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.api.admin_support import router as admin_support_router
+from app.api.admin_finance import router as admin_finance_router
 from app.api.events import router as events_router
 from app.api.health import router as health_router
 from app.api.internal_finance import router as internal_finance_router
@@ -29,6 +30,7 @@ app.include_router(organizer_reporting_router)
 app.include_router(organizer_promos_router)
 app.include_router(internal_finance_router)
 app.include_router(admin_support_router)
+app.include_router(admin_finance_router)
 
 
 @app.get("/health")

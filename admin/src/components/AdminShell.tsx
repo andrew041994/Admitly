@@ -17,6 +17,13 @@ export function AdminShell() {
           >
             Support
           </NavLink>
+
+          <NavLink
+            to="/finance"
+            className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+          >
+            Finance
+          </NavLink>
         </nav>
         <main className="admin-main">
           <Outlet />

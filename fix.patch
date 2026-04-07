@@ -1,70 +1,36 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_mmg_payments_service.py b/backend/tests/test_mmg_payments_service.py
-index 1f4ef1ecd4329e1649bd9dc0131b3d0d8718b775..3120a673da52ee4a86c991f68e752d8ac1bc37b4 100644
---- a/backend/tests/test_mmg_payments_service.py
-+++ b/backend/tests/test_mmg_payments_service.py
-@@ -95,50 +95,61 @@ def _seed_order_with_hold(db: Session, *, user_email: str = "u@example.com") ->
-     db.flush()
+diff --git a/backend/tests/test_finance_reporting_api.py b/backend/tests/test_finance_reporting_api.py
+index 114621fd29395eda50b0364600eeb6461fb15928..a4475b0a01c46baa98acf3c9aab83727eb338199 100644
+--- a/backend/tests/test_finance_reporting_api.py
++++ b/backend/tests/test_finance_reporting_api.py
+@@ -1,24 +1,27 @@
+ import os
  
-     db.add(OrderItem(order_id=order.id, ticket_tier_id=tier.id, quantity=2, unit_price=Decimal("100.00")))
-     db.add(
-         TicketHold(
-             event_id=event.id,
-             ticket_tier_id=tier.id,
-             user_id=user.id,
-             quantity=2,
-             expires_at=now + timedelta(hours=2),
-             order_id=order.id,
-         )
-     )
-     db.commit()
-     db.refresh(order)
-     db.refresh(tier)
-     db.refresh(user)
-     return order, tier, user
+ os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+ 
+ from app.main import app
  
  
- def test_validate_order_still_payable_passes_for_pending_with_active_holds(db_session: Session) -> None:
-     order, _, _ = _seed_order_with_hold(db_session)
-     validate_order_still_payable(order)
+ def test_finance_reporting_routes_registered() -> None:
+     route_paths = {route.path for route in app.routes}
  
- 
-+
-+
-+def test_validate_order_still_payable_allows_pending_without_holds(db_session: Session) -> None:
-+    order, _, _ = _seed_order_with_hold(db_session)
-+    for hold in list(order.ticket_holds):
-+        db_session.delete(hold)
-+    db_session.flush()
-+    db_session.refresh(order)
-+
-+    validate_order_still_payable(order)
-+
- def test_validate_order_still_payable_rejects_expired_hold(db_session: Session) -> None:
-     order, _, _ = _seed_order_with_hold(db_session)
-     order.ticket_holds[0].expires_at = datetime(2026, 4, 6, 8, 0, tzinfo=timezone.utc)
-     with pytest.raises(OrderNotPayableError):
-         validate_order_still_payable(order, now=datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc))
-     assert order.status == OrderStatus.EXPIRED
- 
- 
- def test_validate_order_still_payable_rejects_non_pending_statuses(db_session: Session) -> None:
-     order, _, _ = _seed_order_with_hold(db_session)
-     for status in (OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.EXPIRED):
-         order.status = status
-         with pytest.raises(OrderNotPayableError):
-             validate_order_still_payable(order)
- 
- 
- def test_mmg_checkout_initiation_is_idempotent_and_pending_not_sold(db_session: Session) -> None:
-     order, tier, user = _seed_order_with_hold(db_session)
- 
-     before = get_ticket_type_availability(db_session, tier.id, now=datetime.now(timezone.utc))
-     first = create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
-     second = create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
-     after = get_ticket_type_availability(db_session, tier.id, now=datetime.now(timezone.utc))
- 
-     assert first.checkout_url
+     assert "/organizer/events/{event_id}/finance-summary" in route_paths
+     assert "/organizer/events/{event_id}/finance-orders" in route_paths
+     assert "/organizer/events/payout-summary" in route_paths
+     assert "/internal/orders/{order_id}/reconcile" in route_paths
+     assert "/internal/orders/{order_id}/payout-status" in route_paths
+     assert "/refunds/request" in route_paths
+     assert "/refunds/my" in route_paths
+     assert "/disputes" in route_paths
+     assert "/admin/refunds" in route_paths
+     assert "/admin/refunds/{refund_id}/approve" in route_paths
+     assert "/admin/refunds/{refund_id}/reject" in route_paths
+     assert "/admin/disputes" in route_paths
+     assert "/admin/disputes/{dispute_id}/resolve" in route_paths
+     assert "/admin/disputes/{dispute_id}/reject" in route_paths
++    assert "/admin/finance/summary" in route_paths
++    assert "/admin/finance/orders" in route_paths
++    assert "/admin/finance/orders/export.csv" in route_paths
  
 EOF
 )

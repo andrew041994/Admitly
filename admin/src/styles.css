@@ -256,3 +256,7 @@ button:disabled {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+.finance-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.finance-table th, .finance-table td { border-top: 1px solid #e5e7eb; padding: 0.4rem; text-align: left; }
+.finance-table th { background: #f9fafb; }

@@ -22,3 +22,6 @@ def test_finance_reporting_routes_registered() -> None:
     assert "/admin/disputes" in route_paths
     assert "/admin/disputes/{dispute_id}/resolve" in route_paths
     assert "/admin/disputes/{dispute_id}/reject" in route_paths
+    assert "/admin/finance/summary" in route_paths
+    assert "/admin/finance/orders" in route_paths
+    assert "/admin/finance/orders/export.csv" in route_paths

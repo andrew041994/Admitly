@@ -7,7 +7,8 @@ from decimal import Decimal
 from sqlalchemy import Select, and_, case, func, select
 from sqlalchemy.orm import Session
 
-from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus, RefundStatus
+from app.models.dispute import Dispute
+from app.models.enums import DisputeStatus, OrderStatus, PayoutStatus, PricingSource, ReconciliationStatus, RefundStatus
 from app.models.event import Event
 from app.models.order import Order
 from app.models.organizer_balance_adjustment import OrganizerBalanceAdjustment
@@ -96,6 +97,50 @@ class OrganizerPayoutSummaryData:
     generated_at: datetime
 
 
+@dataclass(frozen=True)
+class AdminFinanceSummaryData:
+    gross_sales_amount: Decimal
+    refunded_amount: Decimal
+    dispute_amount: Decimal
+    discount_amount: Decimal
+    promo_discount_amount: Decimal
+    comp_amount: Decimal
+    platform_fee_amount: Decimal
+    organizer_net_amount: Decimal
+    settled_amount: Decimal
+    pending_payout_amount: Decimal
+    payout_eligible_amount: Decimal
+    refunded_order_count: int
+    dispute_count: int
+    promo_usage_count: int
+    reconciliation_exception_count: int
+    order_count: int
+    currency: str
+    date_from: datetime | None
+    date_to: datetime | None
+    generated_at: datetime
+
+
+@dataclass(frozen=True)
+class AdminSettlementRow:
+    payout_status: str
+    order_count: int
+    gross_amount: Decimal
+    refunded_amount: Decimal
+    net_amount: Decimal
+
+
+@dataclass(frozen=True)
+class AdminRefundDisputeRow:
+    kind: str
+    record_id: int
+    order_id: int
+    status: str
+    amount: Decimal
+    created_at: datetime
+    resolved_at: datetime | None
+
+
 def validate_event_finance_access(db: Session, *, user_id: int, event_id: int) -> Event:
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
@@ -165,6 +210,225 @@ def _event_order_query(event_id: int) -> Select[tuple[Order]]:
     return select(Order).where(Order.event_id == event_id)
 
 
+def _apply_paid_range_filters(
+    query: Select[tuple[Order]],
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    event_id: int | None = None,
+    organizer_user_id: int | None = None,
+) -> Select[tuple[Order]]:
+    query = query.where(Order.status == OrderStatus.COMPLETED, Order.payment_verification_status == "verified")
+    if event_id is not None:
+        query = query.where(Order.event_id == event_id)
+    if organizer_user_id is not None:
+        query = query.join(Event, Event.id == Order.event_id).join(OrganizerProfile, OrganizerProfile.id == Event.organizer_id).where(
+            OrganizerProfile.user_id == organizer_user_id
+        )
+    if date_from is not None:
+        query = query.where(Order.paid_at >= date_from)
+    if date_to is not None:
+        query = query.where(Order.paid_at < date_to)
+    return query
+
+
+def list_admin_finance_orders(
+    db: Session,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    event_id: int | None = None,
+    organizer_user_id: int | None = None,
+    payout_status: PayoutStatus | None = None,
+    reconciliation_status: ReconciliationStatus | None = None,
+    refund_status: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[EventFinanceOrderRow]:
+    query = _apply_paid_range_filters(select(Order), date_from=date_from, date_to=date_to, event_id=event_id, organizer_user_id=organizer_user_id)
+    if payout_status is not None:
+        query = query.where(Order.payout_status == payout_status)
+    if reconciliation_status is not None:
+        query = query.where(Order.reconciliation_status == reconciliation_status)
+    if refund_status is not None:
+        query = query.where(Order.refund_status == refund_status)
+
+    orders = db.execute(query.order_by(Order.paid_at.desc(), Order.id.desc()).limit(limit).offset(offset)).scalars().all()
+    return [
+        EventFinanceOrderRow(
+            order_id=order.id,
+            buyer_user_id=order.user_id,
+            status=order.status.value,
+            refund_status=order.refund_status,
+            reconciliation_status=order.reconciliation_status.value,
+            payout_status=order.payout_status.value,
+            subtotal_amount=Decimal(order.subtotal_amount or order.total_amount),
+            discount_amount=Decimal(order.discount_amount),
+            total_amount=Decimal(order.total_amount),
+            is_comp=bool(order.is_comp),
+            pricing_source=order.pricing_source.value,
+            refunded_amount=get_order_refunded_amount(order, db=db),
+            payout_eligible_amount=get_order_payout_eligible_amount(order, db=db),
+            currency=order.currency,
+            payment_provider=order.payment_provider,
+            payment_method=order.payment_method,
+            payment_reference=order.payment_reference,
+            created_at=order.created_at,
+            completed_at=order.paid_at,
+            refunded_at=order.refunded_at,
+            reconciled_at=order.reconciled_at,
+        )
+        for order in orders
+    ]
+
+
+def get_admin_finance_summary(
+    db: Session,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    event_id: int | None = None,
+    organizer_user_id: int | None = None,
+) -> AdminFinanceSummaryData:
+    orders = db.execute(
+        _apply_paid_range_filters(select(Order), date_from=date_from, date_to=date_to, event_id=event_id, organizer_user_id=organizer_user_id)
+    ).scalars().all()
+
+    gross_sales_amount = sum((Decimal(o.total_amount) for o in orders), Decimal("0.00"))
+    refunded_amount = sum((get_order_refunded_amount(o, db=db) for o in orders), Decimal("0.00"))
+    discount_amount = sum((Decimal(o.discount_amount or 0) for o in orders), Decimal("0.00"))
+    promo_discount_amount = sum(
+        (Decimal(o.discount_amount or 0) for o in orders if o.pricing_source == PricingSource.PROMO_CODE),
+        Decimal("0.00"),
+    )
+    comp_amount = sum((Decimal(o.subtotal_amount or o.total_amount or 0) for o in orders if o.is_comp), Decimal("0.00"))
+    payout_eligible_amount = sum((get_order_payout_eligible_amount(o, db=db) for o in orders), Decimal("0.00"))
+    settled_amount = sum(
+        (
+            max(Decimal("0.00"), Decimal(o.total_amount) - get_order_refunded_amount(o, db=db))
+            for o in orders
+            if o.payout_status == PayoutStatus.PAID
+        ),
+        Decimal("0.00"),
+    )
+    pending_payout_amount = max(Decimal("0.00"), payout_eligible_amount - settled_amount)
+
+    order_ids = [o.id for o in orders]
+    disputes = (
+        db.execute(select(Dispute).where(Dispute.order_id.in_(order_ids))).scalars().all() if order_ids else []
+    )
+    dispute_amount = sum(
+        (Decimal(o.total_amount) for o in orders if o.id in {d.order_id for d in disputes}),
+        Decimal("0.00"),
+    )
+
+    return AdminFinanceSummaryData(
+        gross_sales_amount=gross_sales_amount,
+        refunded_amount=refunded_amount,
+        dispute_amount=dispute_amount,
+        discount_amount=discount_amount,
+        promo_discount_amount=promo_discount_amount,
+        comp_amount=comp_amount,
+        platform_fee_amount=Decimal("0.00"),
+        organizer_net_amount=gross_sales_amount - refunded_amount,
+        settled_amount=settled_amount,
+        pending_payout_amount=pending_payout_amount,
+        payout_eligible_amount=payout_eligible_amount,
+        refunded_order_count=sum(1 for o in orders if get_order_refunded_amount(o, db=db) > Decimal("0.00")),
+        dispute_count=len(disputes),
+        promo_usage_count=sum(1 for o in orders if o.pricing_source == PricingSource.PROMO_CODE),
+        reconciliation_exception_count=sum(
+            1
+            for o in orders
+            if o.reconciliation_status in {ReconciliationStatus.UNRECONCILED, ReconciliationStatus.DISPUTED, ReconciliationStatus.EXCLUDED}
+        ),
+        order_count=len(orders),
+        currency="GYD",
+        date_from=date_from,
+        date_to=date_to,
+        generated_at=get_guyana_now(),
+    )
+
+
+def list_admin_settlement_rows(
+    db: Session,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    event_id: int | None = None,
+    organizer_user_id: int | None = None,
+) -> list[AdminSettlementRow]:
+    orders = db.execute(
+        _apply_paid_range_filters(select(Order), date_from=date_from, date_to=date_to, event_id=event_id, organizer_user_id=organizer_user_id)
+    ).scalars().all()
+    rows: list[AdminSettlementRow] = []
+    for payout_status in PayoutStatus:
+        scoped = [o for o in orders if o.payout_status == payout_status]
+        if not scoped:
+            continue
+        gross = sum((Decimal(o.total_amount) for o in scoped), Decimal("0.00"))
+        refunded = sum((get_order_refunded_amount(o, db=db) for o in scoped), Decimal("0.00"))
+        rows.append(
+            AdminSettlementRow(
+                payout_status=payout_status.value,
+                order_count=len(scoped),
+                gross_amount=gross,
+                refunded_amount=refunded,
+                net_amount=gross - refunded,
+            )
+        )
+    return rows
+
+
+def list_admin_refund_dispute_rows(
+    db: Session,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    event_id: int | None = None,
+    organizer_user_id: int | None = None,
+) -> list[AdminRefundDisputeRow]:
+    order_ids_query = _apply_paid_range_filters(
+        select(Order.id), date_from=date_from, date_to=date_to, event_id=event_id, organizer_user_id=organizer_user_id
+    )
+    order_ids = db.execute(order_ids_query).scalars().all()
+    if not order_ids:
+        return []
+
+    refunds = db.execute(select(Refund).where(Refund.order_id.in_(order_ids), Refund.status == RefundStatus.PROCESSED)).scalars().all()
+    disputes = db.execute(select(Dispute).where(Dispute.order_id.in_(order_ids))).scalars().all()
+
+    rows = [
+        AdminRefundDisputeRow(
+            kind="refund",
+            record_id=refund.id,
+            order_id=refund.order_id,
+            status=refund.status.value,
+            amount=Decimal(refund.amount),
+            created_at=refund.created_at,
+            resolved_at=refund.processed_at,
+        )
+        for refund in refunds
+    ]
+    order_amount_by_id = {
+        order.id: Decimal(order.total_amount)
+        for order in db.execute(select(Order).where(Order.id.in_({d.order_id for d in disputes}))).scalars().all()
+    }
+    rows.extend(
+        AdminRefundDisputeRow(
+            kind="dispute",
+            record_id=dispute.id,
+            order_id=dispute.order_id,
+            status=dispute.status.value,
+            amount=order_amount_by_id.get(dispute.order_id, Decimal("0.00")),
+            created_at=dispute.created_at,
+            resolved_at=dispute.resolved_at,
+        )
+        for dispute in disputes
+    )
+    return sorted(rows, key=lambda r: (r.created_at, r.record_id), reverse=True)
+
+
 def get_event_finance_summary(db: Session, *, event_id: int) -> EventFinanceSummaryData:
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
@@ -189,12 +453,6 @@ def get_event_finance_summary(db: Session, *, event_id: int) -> EventFinanceSumm
         )
     gross_sales_amount = Decimal(
         db.execute(select(func.coalesce(func.sum(Order.total_amount), 0)).where(Order.event_id == event_id, base_paid)).scalar_one()
-        or 0
-    )
-    refunded_amount = Decimal(
-        db.execute(
-            select(func.coalesce(func.sum(Order.total_amount), 0)).where(Order.event_id == event_id, base_paid, refunded)
-        ).scalar_one()
         or 0
     )
 
@@ -463,6 +721,3 @@ def mark_order_payout_status(
         order.payout_paid_at = now
     db.flush()
     return order
-    comp_order_count: int
-    comp_ticket_count: int
-    comp_face_value: Decimal
