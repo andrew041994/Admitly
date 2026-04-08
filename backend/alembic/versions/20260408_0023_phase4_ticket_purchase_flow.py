@@ -21,7 +21,9 @@ def upgrade() -> None:
     op.create_index(op.f("ix_orders_reference_code"), "orders", ["reference_code"], unique=False)
     op.alter_column("orders", "reference_code", nullable=False)
 
-    op.execute("ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'awaiting_payment'")
+    conn = op.get_bind()
+    conn.execute(text("COMMIT"))
+    conn.execute(text("ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'awaiting_payment'"))
     op.execute("ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'payment_submitted'")
     op.execute("ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'failed'")
 
