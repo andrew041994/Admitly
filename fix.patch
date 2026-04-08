@@ -1,73 +1,92 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/api/ticket_holds.py b/backend/app/api/ticket_holds.py
-index a26f8bba4f8444ba344b85fdfd8bebf42779cba0..1c8cbd2a4c5075764a67d6c5d06b1b4588ceca78 100644
---- a/backend/app/api/ticket_holds.py
-+++ b/backend/app/api/ticket_holds.py
-@@ -1,47 +1,58 @@
- from fastapi import APIRouter, Depends, Header, HTTPException, status
-+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
- from sqlalchemy.orm import Session
+diff --git a/backend/app/models/ticket_transfer_invite.py b/backend/app/models/ticket_transfer_invite.py
+index 411888b7b63540b83998e75f6ac7a4e666c60ab1..fe5c5511f7bdf82063d6091ddd47b2dcee646e1a 100644
+--- a/backend/app/models/ticket_transfer_invite.py
++++ b/backend/app/models/ticket_transfer_invite.py
+@@ -1,50 +1,71 @@
+ from __future__ import annotations
  
- from app.db.session import get_db
-+from app.services.auth import resolve_user_from_access_token
- from app.schemas.ticket_hold import CreateTicketHoldRequest, TicketHoldResponse
- from app.services.ticket_holds import (
-     InsufficientAvailabilityError,
-     TicketHoldError,
-     TicketHoldWindowClosedError,
-     create_ticket_hold,
- )
+ from datetime import datetime
+ from typing import TYPE_CHECKING
  
- router = APIRouter(prefix="/ticket-holds", tags=["ticket-holds"])
+-from sqlalchemy import DateTime, Enum, ForeignKey, String
++from sqlalchemy import DateTime, ForeignKey, String
+ from sqlalchemy.orm import Mapped, mapped_column, relationship
  
-+bearer_scheme = HTTPBearer(auto_error=False)
+ from app.db.base import Base
+ from app.models.enums import TransferInviteStatus
+ from app.models.mixins import TimestampMixin
++from app.models.sa_enum import db_enum
  
--def get_current_user_id(x_user_id: int | None = Header(default=None)) -> int:
-+
-+def get_current_user_id(
-+    db: Session = Depends(get_db),
-+    x_user_id: int | None = Header(default=None),
-+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-+) -> int:
-     if x_user_id is None:
--        raise HTTPException(
--            status_code=status.HTTP_401_UNAUTHORIZED,
--            detail="Authentication required.",
--        )
--    return x_user_id
-+        if credentials is None:
-+            raise HTTPException(
-+                status_code=status.HTTP_401_UNAUTHORIZED,
-+                detail="Authentication required.",
-+            )
-+        user = resolve_user_from_access_token(db, token=credentials.credentials)
-+        return user.id
-+    return int(x_user_id)
+ if TYPE_CHECKING:
+     from app.models.ticket import Ticket
+     from app.models.user import User
  
  
- @router.post("", response_model=TicketHoldResponse, status_code=status.HTTP_201_CREATED)
- def create_hold(
-     payload: CreateTicketHoldRequest,
-     db: Session = Depends(get_db),
-     user_id: int = Depends(get_current_user_id),
- ) -> TicketHoldResponse:
-     try:
-         result = create_ticket_hold(
-             db,
-             user_id=user_id,
-             ticket_tier_id=payload.ticket_tier_id,
-             quantity=payload.quantity,
-         )
-     except InsufficientAvailabilityError as exc:
-         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-     except TicketHoldWindowClosedError as exc:
-         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-     except TicketHoldError as exc:
-         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+ class TicketTransferInvite(TimestampMixin, Base):
+     __tablename__ = "ticket_transfer_invites"
  
-     hold = result.hold
-     return TicketHoldResponse(
-         id=hold.id,
+     id: Mapped[int] = mapped_column(primary_key=True)
+-    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True)
+-    sender_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+-    recipient_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
++    ticket_id: Mapped[int] = mapped_column(
++        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True
++    )
++    sender_user_id: Mapped[int] = mapped_column(
++        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
++    )
++    recipient_user_id: Mapped[int | None] = mapped_column(
++        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
++    )
+     recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+     recipient_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+-    invite_token: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
++    invite_token: Mapped[str] = mapped_column(
++        String(128), nullable=False, unique=True, index=True
++    )
+     status: Mapped[TransferInviteStatus] = mapped_column(
+-        Enum(TransferInviteStatus, name="transfer_invite_status"),
++        db_enum(TransferInviteStatus, name="transfer_invite_status"),
+         nullable=False,
+         default=TransferInviteStatus.PENDING,
+         index=True,
+     )
+-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+-    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+-    accepted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+-    revoked_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
++    expires_at: Mapped[datetime | None] = mapped_column(
++        DateTime(timezone=True), nullable=True
++    )
++    accepted_at: Mapped[datetime | None] = mapped_column(
++        DateTime(timezone=True), nullable=True
++    )
++    revoked_at: Mapped[datetime | None] = mapped_column(
++        DateTime(timezone=True), nullable=True
++    )
++    accepted_by_user_id: Mapped[int | None] = mapped_column(
++        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
++    )
++    revoked_by_user_id: Mapped[int | None] = mapped_column(
++        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
++    )
+ 
+     ticket: Mapped["Ticket"] = relationship(back_populates="transfer_invites")
+-    sender: Mapped["User"] = relationship(back_populates="sent_transfer_invites", foreign_keys=[sender_user_id])
++    sender: Mapped["User"] = relationship(
++        back_populates="sent_transfer_invites", foreign_keys=[sender_user_id]
++    )
+     recipient: Mapped["User | None"] = relationship(
+         back_populates="received_transfer_invites", foreign_keys=[recipient_user_id]
+     )
+     accepted_by: Mapped["User | None"] = relationship(
+         back_populates="accepted_transfer_invites", foreign_keys=[accepted_by_user_id]
+     )
+     revoked_by: Mapped["User | None"] = relationship(
+         back_populates="revoked_transfer_invites", foreign_keys=[revoked_by_user_id]
+     )
  
 EOF
 )
