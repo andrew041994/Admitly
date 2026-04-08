@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+
     app_name: str = Field(default="Admitly API", alias="APP_NAME")
     env: str = Field(default="development", alias="ENV")
     database_url: str = Field(alias="DATABASE_URL")

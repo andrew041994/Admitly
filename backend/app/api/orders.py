@@ -149,6 +149,10 @@ def create_order_from_selection(
         hold_ids.append(hold_result.hold.id)
 
     order = create_pending_order_from_holds(db, user_id=current_user.id, hold_ids=hold_ids)
+    print("DATABASE_URL =", settings.database_url)
+
+    print("CREATED ORDER ID =", order.id)
+
     return _to_order_response(order)
 
 
@@ -187,6 +191,7 @@ def create_order_from_holds(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except HoldEventMismatchError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    print("CREATED ORDER ID =", order.id)
 
     return _to_order_response(order)
 
