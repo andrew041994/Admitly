@@ -92,15 +92,19 @@ def _load_order_for_payment(db: Session, *, order_id: int) -> Order:
     order = (
         db.execute(
             select(Order)
-            .options(joinedload(Order.ticket_holds), joinedload(Order.order_items), joinedload(Order.tickets))
             .where(Order.id == order_id)
             .with_for_update()
         )
-        .unique()
         .scalar_one_or_none()
     )
     if order is None:
         raise PaymentError("Order not found.")
+
+    # Load related collections outside the locking query to avoid FOR UPDATE on
+    # nullable sides of outer joins.
+    _ = order.ticket_holds
+    _ = order.order_items
+    _ = order.tickets
     return order
 
 

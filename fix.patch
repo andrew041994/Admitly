@@ -1,71 +1,74 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_orders_api.py b/backend/tests/test_orders_api.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..f1a8b44cfb09984427fa40b32934d027cf214075
---- /dev/null
-+++ b/backend/tests/test_orders_api.py
-@@ -0,0 +1,61 @@
-+import os
-+from types import SimpleNamespace
+diff --git a/backend/app/services/payments/__init__.py b/backend/app/services/payments/__init__.py
+index 566f66af7aba1860b4aae6cbf70cb9b1e2ff0492..e61ecef2b34fe9da60a103b804e5d5b7c0281d7a 100644
+--- a/backend/app/services/payments/__init__.py
++++ b/backend/app/services/payments/__init__.py
+@@ -70,59 +70,63 @@ def _record_payment_attempt(
+     status: str,
+     verification_status: str,
+     provider_reference: str | None = None,
+     request_payload: dict | None = None,
+     response_payload: dict | None = None,
+     provider: str = "mmg",
+ ) -> None:
+     db.add(
+         PaymentAttempt(
+             order_id=order.id,
+             provider=provider,
+             payment_method=payment_method,
+             status=status,
+             verification_status=verification_status,
+             provider_reference=provider_reference,
+             request_payload=json.dumps(request_payload) if request_payload else None,
+             response_payload=json.dumps(response_payload) if response_payload else None,
+         )
+     )
+ 
+ 
+ def _load_order_for_payment(db: Session, *, order_id: int) -> Order:
+     order = (
+         db.execute(
+             select(Order)
+-            .options(joinedload(Order.ticket_holds), joinedload(Order.order_items), joinedload(Order.tickets))
+             .where(Order.id == order_id)
+             .with_for_update()
+         )
+-        .unique()
+         .scalar_one_or_none()
+     )
+     if order is None:
+         raise PaymentError("Order not found.")
 +
-+os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-+
-+from app.api.orders import complete_dev_test_checkout
-+from app.core.config import settings
-+from app.main import app
-+
-+
-+def test_dev_test_checkout_route_registered() -> None:
-+    route_paths = {route.path for route in app.routes}
-+
-+    assert "/orders/{order_id}/payments/dev-test/complete" in route_paths
-+
-+
-+def test_dev_test_checkout_route_is_post_and_defaults_to_http_200() -> None:
-+    target_route = next(route for route in app.routes if route.path == "/orders/{order_id}/payments/dev-test/complete")
-+
-+    assert "POST" in target_route.methods
-+    assert target_route.status_code is None
-+
-+
-+def test_dev_test_checkout_handler_returns_payload_when_enabled(monkeypatch) -> None:
-+    previous_enabled = settings.enable_dev_test_checkout
-+    previous_env = settings.env
-+
-+    settings.enable_dev_test_checkout = True
-+    settings.env = "development"
-+
-+    def _fake_complete_checkout(db, *, order_id: int, user_id: int):
-+        assert order_id == 77
-+        assert user_id == 123
-+        return SimpleNamespace(
-+            order_id=order_id,
-+            order_reference="ORD-77",
-+            provider="dev_test",
-+            payment_method="dev_test",
-+            payment_reference="pay-ref-77",
-+            status="completed",
-+            payment_verification_status="verified",
-+            message="Dev test checkout completed.",
-+        )
-+
-+    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
-+    monkeypatch.setattr("app.api.orders.complete_dev_test_checkout_for_order", _fake_complete_checkout)
-+
-+    try:
-+        response = complete_dev_test_checkout(
-+            order_id=77,
-+            db=object(),
-+            current_user=SimpleNamespace(id=123),
-+            client_ip="127.0.0.1",
-+        )
-+    finally:
-+        settings.enable_dev_test_checkout = previous_enabled
-+        settings.env = previous_env
-+
-+    assert response.order_id == 77
-+    assert response.provider == "dev_test"
-+    assert response.payment_reference == "pay-ref-77"
++    # Load related collections outside the locking query to avoid FOR UPDATE on
++    # nullable sides of outer joins.
++    _ = order.ticket_holds
++    _ = order.order_items
++    _ = order.tickets
+     return order
+ 
+ 
+ def _assert_order_owner(order: Order, *, user_id: int) -> None:
+     if order.user_id != user_id:
+         raise PaymentAuthorizationError("Order does not belong to the authenticated user.")
+ 
+ 
+ def _derive_reference_now_from_order(order: Order) -> datetime:
+     first_hold = order.ticket_holds[0].expires_at
+     if first_hold.tzinfo is None:
+         first_hold = first_hold.replace(tzinfo=timezone.utc)
+     return first_hold.astimezone(get_guyana_now().tzinfo) - timedelta(minutes=1)
+ 
+ 
+ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
+     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+     with tx_ctx:
+         order = _load_order_for_payment(db, order_id=order_id)
+         _assert_order_owner(order, user_id=user_id)
+         validate_mmg_provider_config()
+         validate_order_still_payable(order)
+ 
+         if order.payment_method == "mmg_agent":
+             raise PaymentMethodMismatchError("Order has already started MMG agent checkout.")
  
 EOF
 )
