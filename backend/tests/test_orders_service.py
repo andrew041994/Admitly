@@ -19,6 +19,7 @@ from app.services.orders import (
     create_comp_order_for_user,
     create_pending_order_from_holds,
 )
+from app.lib.order_references import format_order_reference
 from app.services.ticket_holds import get_ticket_type_availability
 
 
@@ -145,6 +146,7 @@ def test_create_pending_order_from_single_active_hold(db_session: Session) -> No
 
     db_session.refresh(hold)
     assert hold.order_id == order.id
+    assert order.reference_code == format_order_reference(order.id)
 
 
 def test_create_pending_order_from_multiple_holds_same_event(db_session: Session) -> None:
@@ -182,6 +184,67 @@ def test_create_pending_order_from_multiple_holds_same_event(db_session: Session
     assert order.status == OrderStatus.AWAITING_PAYMENT
     assert order.total_amount == Decimal("600.00")
     assert len(order.order_items) == 2
+    assert order.reference_code == format_order_reference(order.id)
+
+
+def test_manual_order_insert_gets_reference_code_after_flush(db_session: Session) -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    user, event, _ = _seed_event_with_tiers(
+        db_session,
+        owner_email="manual-ref@example.com",
+        start_at=now + timedelta(days=3),
+        tier_prices=[Decimal("100.00")],
+    )
+    order = Order(
+        user_id=user.id,
+        event_id=event.id,
+        status=OrderStatus.AWAITING_PAYMENT,
+        subtotal_amount=Decimal("100.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("100.00"),
+        currency="GYD",
+    )
+    db_session.add(order)
+    db_session.commit()
+    db_session.refresh(order)
+
+    assert order.reference_code == format_order_reference(order.id)
+
+
+def test_order_reference_codes_are_unique_for_multiple_orders(db_session: Session) -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    user, event, _ = _seed_event_with_tiers(
+        db_session,
+        owner_email="unique-ref@example.com",
+        start_at=now + timedelta(days=3),
+        tier_prices=[Decimal("100.00")],
+    )
+    first = Order(
+        user_id=user.id,
+        event_id=event.id,
+        status=OrderStatus.AWAITING_PAYMENT,
+        subtotal_amount=Decimal("100.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("100.00"),
+        currency="GYD",
+    )
+    second = Order(
+        user_id=user.id,
+        event_id=event.id,
+        status=OrderStatus.AWAITING_PAYMENT,
+        subtotal_amount=Decimal("100.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("100.00"),
+        currency="GYD",
+    )
+    db_session.add_all([first, second])
+    db_session.commit()
+    db_session.refresh(first)
+    db_session.refresh(second)
+
+    assert first.reference_code == format_order_reference(first.id)
+    assert second.reference_code == format_order_reference(second.id)
+    assert first.reference_code != second.reference_code
 
 
 def test_create_pending_order_rejects_empty_hold_ids(db_session: Session) -> None:

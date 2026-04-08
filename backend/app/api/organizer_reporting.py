@@ -226,6 +226,7 @@ def get_organizer_event_finance_orders(
     return [
         EventFinanceOrderRowResponse(
             order_id=row.order_id,
+            order_reference=row.order_reference,
             buyer_user_id=row.buyer_user_id,
             status=row.status,
             refund_status=row.refund_status,

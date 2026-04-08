@@ -5,6 +5,7 @@ class CreateOrderMMGCheckoutResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     order_id: int
+    order_reference: str
     provider: str
     payment_method: str
     payment_reference: str
@@ -19,6 +20,7 @@ class CreateOrderMMGAgentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     order_id: int
+    order_reference: str
     provider: str
     payment_method: str
     payment_reference: str
@@ -37,6 +39,7 @@ class CompleteMMGAgentPaymentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     order_id: int
+    order_reference: str
     provider: str
     payment_method: str
     payment_reference: str

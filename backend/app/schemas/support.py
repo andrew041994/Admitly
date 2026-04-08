@@ -85,6 +85,7 @@ class SupportMessageLogResponse(BaseModel):
 
 class SupportSnapshotResponse(BaseModel):
     order_id: int
+    order_reference: str
     event_id: int
     event_title: str | None
     buyer_user_id: int

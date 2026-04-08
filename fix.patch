@@ -1,27 +1,61 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
-index 4937a8ece897137c3a8ec86aa3eec3ed13931bab..1789ab733105a038262b761084d8fbc6ad0d4a27 100644
---- a/mobile/src/navigation/types.ts
-+++ b/mobile/src/navigation/types.ts
-@@ -1,17 +1,18 @@
- export type AuthStackParamList = {
-   SignIn: undefined;
-   SignUp: undefined;
-   ForgotPassword: undefined;
-   ResetPassword: undefined;
- };
+diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
+index 5ea0b1d667c93da8a1b192b646cc17f7c09ad2cc..1ea0130e15a496a24a431469648c2eb4b4e197dd 100644
+--- a/backend/tests/test_tickets_service.py
++++ b/backend/tests/test_tickets_service.py
+@@ -966,50 +966,52 @@ def test_wallet_list_orders_upcoming_before_past(db_session: Session) -> None:
+     order_upcoming_near.user_id = buyer.id
+     issue_tickets_for_completed_order(db_session, order_upcoming_near)
  
- export type AppStackParamList = {
-   Home: undefined;
-   EventDetail: { eventId: number };
-   TicketSelection: { eventId: number };
-   CheckoutMethod: { eventId: number; orderId: number };
-   MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
-   PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
-   MyTickets: undefined;
-+  TicketDetail: { ticketId: number };
-   Profile: undefined;
- };
+     event_upcoming_far.start_at = now + timedelta(days=10)
+     event_upcoming_far.end_at = now + timedelta(days=10, hours=2)
+     event_upcoming_near.start_at = now + timedelta(days=1)
+     event_upcoming_near.end_at = now + timedelta(days=1, hours=2)
+     event_past_recent.start_at = now - timedelta(days=1)
+     event_past_recent.end_at = now - timedelta(days=1, hours=-2)
+     db_session.commit()
+ 
+     wallet = list_wallet_tickets(db_session, user_id=buyer.id)
+     assert len(wallet) == 3
+     assert wallet[0].ticket.event_id == event_upcoming_near.id
+     assert wallet[1].ticket.event_id == event_upcoming_far.id
+     assert wallet[2].ticket.event_id == event_past_recent.id
+ 
+ 
+ def test_wallet_ticket_detail_owned_vs_non_owned(db_session: Session) -> None:
+     order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+ 
+     owner_detail = get_wallet_ticket(db_session, user_id=buyer.id, ticket_id=ticket.id)
+     assert owner_detail is not None
+     assert owner_detail.ticket.id == ticket.id
++    assert owner_detail.ticket.order is not None
++    assert owner_detail.ticket.order.reference_code.startswith("ORD-")
+ 
+     other = User(email="wallet-other@example.com", full_name="Other")
+     db_session.add(other)
+     db_session.commit()
+     assert get_wallet_ticket(db_session, user_id=other.id, ticket_id=ticket.id) is None
+ 
+ 
+ def test_wallet_status_used_and_invalid(db_session: Session) -> None:
+     order_used, _, _, buyer, event = _seed_order(db_session, user_email="wallet-used@example.com", quantity=1)
+     used_ticket = issue_tickets_for_completed_order(db_session, order_used)[0]
+     check_in_ticket_for_event(
+         db_session,
+         scanner_user_id=event.organizer.user_id,
+         event_id=event.id,
+         qr_payload=used_ticket.qr_payload,
+         ticket_code=None,
+     )
+ 
+     order_invalid, _, _, _, _ = _seed_order(db_session, user_email="wallet-invalid@example.com", quantity=1)
+     order_invalid.user_id = buyer.id
+     invalid_ticket = issue_tickets_for_completed_order(db_session, order_invalid)[0]
+     invalid_ticket.status = TicketStatus.VOIDED
+     db_session.commit()
+ 
+     wallet = {v.ticket.id: v for v in list_wallet_tickets(db_session, user_id=buyer.id)}
  
 EOF
 )

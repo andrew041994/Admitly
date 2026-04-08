@@ -271,6 +271,7 @@ def initiate_mmg_checkout(
 
     return CreateOrderMMGCheckoutResponse(
         order_id=snapshot.order_id,
+        order_reference=snapshot.order_reference,
         provider=snapshot.provider,
         payment_method=snapshot.payment_method,
         payment_reference=snapshot.payment_reference,
@@ -307,6 +308,7 @@ def initiate_mmg_agent_checkout(
 
     return CreateOrderMMGAgentResponse(
         order_id=snapshot.order_id,
+        order_reference=snapshot.order_reference,
         provider=snapshot.provider,
         payment_method=snapshot.payment_method,
         payment_reference=snapshot.payment_reference,
@@ -349,6 +351,7 @@ def complete_agent_payment(
 
     return CompleteMMGAgentPaymentResponse(
         order_id=snapshot.order_id,
+        order_reference=snapshot.order_reference,
         provider=snapshot.provider,
         payment_method=snapshot.payment_method,
         payment_reference=snapshot.payment_reference,

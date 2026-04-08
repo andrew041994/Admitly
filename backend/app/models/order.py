@@ -5,10 +5,11 @@ import secrets
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, event
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from app.db.base import Base
+from app.lib.order_references import format_order_reference
 from app.models.enums import (
     OrderStatus,
     PayoutStatus,
@@ -135,7 +136,7 @@ class Order(TimestampMixin, Base):
         nullable=False,
         unique=True,
         index=True,
-        default=lambda: f"ORD-{secrets.token_hex(4).upper()}",
+        default=lambda: f"TMP-{secrets.token_hex(8).upper()}",
     )
 
     user: Mapped["User"] = relationship(foreign_keys=[user_id])
@@ -157,3 +158,45 @@ class Order(TimestampMixin, Base):
     payment_attempts: Mapped[list["PaymentAttempt"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
     )
+
+
+@event.listens_for(Session, "before_flush")
+def _track_new_orders_for_reference_assignment(
+    session: Session,
+    flush_context,  # noqa: ANN001
+    instances,  # noqa: ANN001
+) -> None:
+    pending_orders = [
+        obj
+        for obj in session.new
+        if isinstance(obj, Order) and (not obj.reference_code or obj.reference_code.startswith("TMP-"))
+    ]
+    if pending_orders:
+        tracked = session.info.setdefault("orders_missing_reference", set())
+        tracked.update(pending_orders)
+
+
+@event.listens_for(Session, "after_flush_postexec")
+def _assign_reference_codes_after_insert(
+    session: Session,
+    flush_context,  # noqa: ANN001
+) -> None:
+    tracked_orders = session.info.get("orders_missing_reference")
+    if not tracked_orders:
+        return
+
+    unresolved_orders = set()
+    for order in tracked_orders:
+        if order not in session:
+            continue
+        if order.id is None:
+            unresolved_orders.add(order)
+            continue
+        if order.reference_code and not order.reference_code.startswith("TMP-"):
+            continue
+        order.reference_code = format_order_reference(order.id)
+
+    if unresolved_orders:
+        session.info["orders_missing_reference"] = unresolved_orders
+    else:
+        session.info.pop("orders_missing_reference", None)

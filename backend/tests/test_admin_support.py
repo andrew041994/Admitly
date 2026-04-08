@@ -193,6 +193,7 @@ def test_support_snapshot_merges_data(db_session: Session) -> None:
 
     snap = get_support_snapshot(order.id, db=db_session, user_id=admin.id)
     assert snap.order_id == order.id
+    assert snap.order_reference == order.reference_code
     assert snap.dispute_count == 1
     assert snap.support_case is not None
     assert len(snap.timeline) >= 2

@@ -988,6 +988,8 @@ def test_wallet_ticket_detail_owned_vs_non_owned(db_session: Session) -> None:
     owner_detail = get_wallet_ticket(db_session, user_id=buyer.id, ticket_id=ticket.id)
     assert owner_detail is not None
     assert owner_detail.ticket.id == ticket.id
+    assert owner_detail.ticket.order is not None
+    assert owner_detail.ticket.order.reference_code.startswith("ORD-")
 
     other = User(email="wallet-other@example.com", full_name="Other")
     db_session.add(other)

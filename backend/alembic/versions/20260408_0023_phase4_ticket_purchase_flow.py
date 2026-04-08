@@ -14,11 +14,12 @@ def upgrade() -> None:
     op.add_column("orders", sa.Column("reference_code", sa.String(length=32), nullable=True))
     op.execute("""
     UPDATE orders
-    SET reference_code = 'ORD-' || upper(substr(md5(random()::text || id::text), 1, 8))
+    SET reference_code = 'ORD-' || lpad(id::text, 8, '0')
     WHERE reference_code IS NULL
     """)
+    op.create_unique_constraint("uq_orders_reference_code", "orders", ["reference_code"])
+    op.create_index(op.f("ix_orders_reference_code"), "orders", ["reference_code"], unique=False)
     op.alter_column("orders", "reference_code", nullable=False)
-    op.create_index(op.f("ix_orders_reference_code"), "orders", ["reference_code"], unique=True)
 
     op.execute("ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'awaiting_payment'")
     op.execute("ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'payment_submitted'")
@@ -49,4 +50,5 @@ def downgrade() -> None:
     op.drop_table("payment_attempts")
 
     op.drop_index(op.f("ix_orders_reference_code"), table_name="orders")
+    op.drop_constraint("uq_orders_reference_code", "orders", type_="unique")
     op.drop_column("orders", "reference_code")

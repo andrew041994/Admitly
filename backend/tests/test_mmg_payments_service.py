@@ -153,6 +153,7 @@ def test_mmg_checkout_initiation_is_idempotent_and_pending_not_sold(db_session: 
     after = get_ticket_type_availability(db_session, tier.id, now=datetime.now(timezone.utc))
 
     assert first.checkout_url
+    assert first.order_reference == order.reference_code
     assert first.payment_reference == second.payment_reference
     assert first.checkout_url == second.checkout_url
     assert first.status == "awaiting_payment"
@@ -170,6 +171,8 @@ def test_mmg_agent_initiation_and_submit_outcomes(db_session: Session) -> None:
 
     initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     assert initiated.payment_reference.startswith("AGT-")
+    assert initiated.order_reference == order.reference_code
+    assert initiated.order_reference != initiated.payment_reference
     assert get_ticket_type_availability(db_session, tier.id, now=datetime.now(timezone.utc)) == 8
 
     verified = submit_mmg_agent_payment(
@@ -180,6 +183,7 @@ def test_mmg_agent_initiation_and_submit_outcomes(db_session: Session) -> None:
     )
     assert verified.payment_verification_status == "verified"
     assert verified.status == "completed"
+    assert verified.order_reference == order.reference_code
     assert get_ticket_type_availability(db_session, tier.id, now=datetime.now(timezone.utc)) == 8
 
 

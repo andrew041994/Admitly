@@ -61,6 +61,7 @@ class EventFinanceSummaryData:
 @dataclass(frozen=True)
 class EventFinanceOrderRow:
     order_id: int
+    order_reference: str
     buyer_user_id: int
     status: str
     refund_status: str
@@ -257,6 +258,7 @@ def list_admin_finance_orders(
     return [
         EventFinanceOrderRow(
             order_id=order.id,
+            order_reference=order.reference_code,
             buyer_user_id=order.user_id,
             status=order.status.value,
             refund_status=order.refund_status,
@@ -594,6 +596,7 @@ def list_event_finance_orders(
     return [
         EventFinanceOrderRow(
             order_id=order.id,
+            order_reference=order.reference_code,
             buyer_user_id=order.user_id,
             status=order.status.value,
             refund_status=order.refund_status,

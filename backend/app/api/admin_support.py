@@ -114,6 +114,7 @@ def get_support_snapshot(
 
     return SupportSnapshotResponse(
         order_id=order.id,
+        order_reference=order.reference_code,
         event_id=order.event_id,
         event_title=order.event.title if order.event else None,
         buyer_user_id=order.user_id,

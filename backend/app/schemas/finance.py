@@ -30,6 +30,7 @@ class EventFinanceSummaryResponse(BaseModel):
 
 class EventFinanceOrderRowResponse(BaseModel):
     order_id: int
+    order_reference: str
     buyer_user_id: int
     status: str
     refund_status: str

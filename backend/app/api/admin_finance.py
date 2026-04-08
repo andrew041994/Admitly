@@ -117,6 +117,7 @@ def list_admin_orders(
     return [
         EventFinanceOrderRowResponse(
             order_id=row.order_id,
+            order_reference=row.order_reference,
             buyer_user_id=row.buyer_user_id,
             status=row.status,
             refund_status=row.refund_status,
@@ -214,10 +215,10 @@ def export_admin_orders_csv(
     _require_admin(db, user_id=user_id)
     rows = list_admin_finance_orders(db, date_from=date_from, date_to=date_to, event_id=event_id, organizer_user_id=organizer_user_id, limit=10000)
     headers = [
-        "order_id", "event_id", "buyer_user_id", "status", "refund_status", "reconciliation_status", "payout_status", "subtotal_amount", "discount_amount", "total_amount", "refunded_amount", "payout_eligible_amount", "currency", "paid_at"
+        "order_id", "order_reference", "event_id", "buyer_user_id", "status", "refund_status", "reconciliation_status", "payout_status", "subtotal_amount", "discount_amount", "total_amount", "refunded_amount", "payout_eligible_amount", "currency", "paid_at"
     ]
     csv_rows = [[
-        str(row.order_id), "", str(row.buyer_user_id), row.status, row.refund_status, row.reconciliation_status, row.payout_status,
+        str(row.order_id), row.order_reference, "", str(row.buyer_user_id), row.status, row.refund_status, row.reconciliation_status, row.payout_status,
         f"{row.subtotal_amount:.2f}", f"{row.discount_amount:.2f}", f"{row.total_amount:.2f}", f"{row.refunded_amount:.2f}", f"{row.payout_eligible_amount:.2f}", row.currency, row.completed_at.isoformat() if row.completed_at else ""
     ] for row in rows]
     return _csv_response(filename="finance-orders.csv", headers=headers, rows=csv_rows)

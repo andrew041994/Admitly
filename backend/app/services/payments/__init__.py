@@ -48,6 +48,7 @@ class PaymentMethodMismatchError(PaymentError):
 @dataclass(slots=True)
 class OrderPaymentSnapshot:
     order_id: int
+    order_reference: str
     provider: str
     payment_method: str
     payment_reference: str
@@ -152,6 +153,7 @@ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -
 
         return OrderPaymentSnapshot(
             order_id=order.id,
+            order_reference=order.reference_code,
             provider="mmg",
             payment_method=order.payment_method,
             payment_reference=order.payment_reference,
@@ -199,6 +201,7 @@ def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: 
 
         return OrderPaymentSnapshot(
             order_id=order.id,
+            order_reference=order.reference_code,
             provider="mmg",
             payment_method=order.payment_method,
             payment_reference=order.payment_reference,
@@ -225,6 +228,7 @@ def submit_mmg_agent_payment(
             logger.info("Ignoring duplicate MMG agent submit for finalized order", extra={"order_id": order.id})
             return OrderPaymentSnapshot(
                 order_id=order.id,
+                order_reference=order.reference_code,
                 provider="mmg",
                 payment_method=order.payment_method or "mmg_agent",
                 payment_reference=order.payment_reference or "",
@@ -269,6 +273,7 @@ def submit_mmg_agent_payment(
         db.flush()
         return OrderPaymentSnapshot(
             order_id=order.id,
+            order_reference=order.reference_code,
             provider="mmg",
             payment_method=order.payment_method,
             payment_reference=order.payment_reference,
@@ -335,6 +340,7 @@ def handle_mmg_callback(db: Session, *, payload: dict) -> OrderPaymentSnapshot:
         db.flush()
         return OrderPaymentSnapshot(
             order_id=order.id,
+            order_reference=order.reference_code,
             provider="mmg",
             payment_method=order.payment_method or "mmg_checkout",
             payment_reference=order.payment_reference or parsed.payment_reference,

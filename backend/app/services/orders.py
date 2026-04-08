@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import secrets
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from app.lib.order_references import format_order_reference
 from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
 from app.models.event import Event
 from app.models.order import Order
@@ -35,18 +35,6 @@ from app.services.tickets import invalidate_order_tickets, issue_tickets_for_com
 from app.services.ticket_holds import get_guyana_now, get_ticket_tier_capacity_summary
 
 GYT = ZoneInfo("America/Guyana")
-
-
-
-
-def generate_order_reference_code(db: Session) -> str:
-    for _ in range(8):
-        candidate = f"ORD-{secrets.token_hex(4).upper()}"
-        exists = db.execute(select(Order.id).where(Order.reference_code == candidate)).scalar_one_or_none()
-        if exists is None:
-            return candidate
-    raise OrderFlowError("Unable to allocate unique order reference code.")
-
 
 class OrderFlowError(ValueError):
     """Base business-rule error for order creation from holds."""
@@ -191,10 +179,12 @@ def create_pending_order_from_holds(
             discount_value_snapshot=pricing.discount_value_snapshot,
             pricing_source=pricing.pricing_source,
             is_comp=False,
-            reference_code=generate_order_reference_code(db),
         )
         db.add(order)
         db.flush()
+        if not order.reference_code:
+            order.reference_code = format_order_reference(order.id)
+            db.flush()
 
         for hold in holds:
             db.add(

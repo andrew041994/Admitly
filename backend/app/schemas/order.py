@@ -48,6 +48,7 @@ class OrderResponse(BaseModel):
     refund_reason: str | None = None
     created_at: datetime
     updated_at: datetime
+    reference_code: str
     items: list[OrderItemResponse]
 
 
@@ -62,6 +63,5 @@ class CreateOrderFromSelectionRequest(BaseModel):
 
 
 class OrderStatusResponse(OrderResponse):
-    reference_code: str
     payment_method: str | None = None
     payment_verification_status: str | None = None
