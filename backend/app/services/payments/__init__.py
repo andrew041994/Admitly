@@ -182,8 +182,7 @@ def _ensure_dev_test_checkout_enabled() -> None:
 
 def complete_dev_test_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
     _ensure_dev_test_checkout_enabled()
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
+    try:
         order = _load_order_for_payment(db, order_id=order_id)
         _assert_order_owner(order, user_id=user_id)
 
@@ -216,7 +215,13 @@ def complete_dev_test_checkout_for_order(db: Session, *, order_id: int, user_id:
         order.payment_reference = payment_reference
         order.payment_checkout_url = None
         order.payment_verification_status = "verified"
-        complete_paid_order(db, order, paid_at=get_guyana_now(), payment_reference=payment_reference)
+        complete_paid_order(
+            db,
+            order,
+            paid_at=get_guyana_now(),
+            payment_reference=payment_reference,
+            emit_noncritical_side_effects=False,
+        )
 
         _record_payment_attempt(
             db,
@@ -240,18 +245,24 @@ def complete_dev_test_checkout_for_order(db: Session, *, order_id: int, user_id:
             },
         )
         db.flush()
-        return OrderPaymentSnapshot(
-            order_id=order.id,
-            order_reference=order.reference_code,
-            provider=order.payment_provider or "dev_test",
-            payment_method=order.payment_method or "dev_test",
-            payment_reference=order.payment_reference or payment_reference,
-            amount=order.total_amount,
-            currency=order.currency,
-            status=order.status.value,
-            payment_verification_status=order.payment_verification_status,
-            message="Dev test checkout completed.",
-        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(order)
+    return OrderPaymentSnapshot(
+        order_id=order.id,
+        order_reference=order.reference_code,
+        provider=order.payment_provider or "dev_test",
+        payment_method=order.payment_method or "dev_test",
+        payment_reference=order.payment_reference or payment_reference,
+        amount=order.total_amount,
+        currency=order.currency,
+        status=order.status.value,
+        payment_verification_status=order.payment_verification_status,
+        message="Dev test checkout completed.",
+    )
 
 
 def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:

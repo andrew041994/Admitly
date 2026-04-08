@@ -3,6 +3,7 @@
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import text
+from sqlalchemy.dialects import postgresql
 
 
 revision = "20260408_0024"
@@ -11,30 +12,17 @@ branch_labels = None
 depends_on = None
 
 
-message_template_type = sa.Enum(
-    "order_confirmation",
-    "ticket_issued",
-    "transfer_invite",
-    "transfer_accepted",
-    "refund_processed",
-    "reminder",
-    "event_day_update",
-    "organizer_broadcast",
+message_template_type = postgresql.ENUM(
     name="message_template_type",
     create_type=False,
 )
 
-message_channel = sa.Enum(
-    "email",
-    "push",
+message_channel = postgresql.ENUM(
     name="message_channel",
     create_type=False,
 )
 
-message_delivery_status = sa.Enum(
-    "sent",
-    "failed",
-    "skipped",
+message_delivery_status = postgresql.ENUM(
     name="message_delivery_status",
     create_type=False,
 )

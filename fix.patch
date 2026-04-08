@@ -1,106 +1,155 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/alembic/versions/20260408_0024_create_message_delivery_logs.py b/backend/alembic/versions/20260408_0024_create_message_delivery_logs.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..5af865aaa5ad0657059df116b900d7b94463bd45
---- /dev/null
-+++ b/backend/alembic/versions/20260408_0024_create_message_delivery_logs.py
-@@ -0,0 +1,96 @@
-+"""create message delivery logs table"""
+diff --git a/backend/app/services/payments/__init__.py b/backend/app/services/payments/__init__.py
+index e61ecef2b34fe9da60a103b804e5d5b7c0281d7a..922239c62a0328e96a869ddac799ee1b7672bfa8 100644
+--- a/backend/app/services/payments/__init__.py
++++ b/backend/app/services/payments/__init__.py
+@@ -160,120 +160,131 @@ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -
+         return OrderPaymentSnapshot(
+             order_id=order.id,
+             order_reference=order.reference_code,
+             provider="mmg",
+             payment_method=order.payment_method,
+             payment_reference=order.payment_reference,
+             checkout_url=order.payment_checkout_url,
+             amount=order.total_amount,
+             currency=order.currency,
+             status=order.status.value,
+             payment_verification_status=order.payment_verification_status,
+         )
+ 
+ 
+ def _is_production_env() -> bool:
+     return (settings.env or "").strip().lower() in {"prod", "production"}
+ 
+ 
+ def _ensure_dev_test_checkout_enabled() -> None:
+     if not settings.enable_dev_test_checkout or _is_production_env():
+         raise PaymentError("Dev test checkout is unavailable.")
+ 
+ 
+ def complete_dev_test_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
+     _ensure_dev_test_checkout_enabled()
+-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+-    with tx_ctx:
++    try:
+         order = _load_order_for_payment(db, order_id=order_id)
+         _assert_order_owner(order, user_id=user_id)
+ 
+         if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
+             logger.info(
+                 "Duplicate dev-test checkout complete ignored for finalized order",
+                 extra={"order_id": order.id, "order_reference": order.reference_code, "user_id": order.user_id, "env": settings.env},
+             )
+             return OrderPaymentSnapshot(
+                 order_id=order.id,
+                 order_reference=order.reference_code,
+                 provider=order.payment_provider or "dev_test",
+                 payment_method=order.payment_method or "dev_test",
+                 payment_reference=order.payment_reference or f"DEV-{order.reference_code}",
+                 amount=order.total_amount,
+                 currency=order.currency,
+                 status=order.status.value,
+                 payment_verification_status=order.payment_verification_status,
+                 message="Payment already completed.",
+             )
+ 
+         validate_order_still_payable(order)
+ 
+         if order.payment_method in {"mmg_checkout", "mmg_agent"}:
+             raise PaymentMethodMismatchError("Order is already configured for MMG checkout.")
+ 
+         payment_reference = order.payment_reference or f"DEV-{order.reference_code}"
+         order.payment_provider = "dev_test"
+         order.payment_method = "dev_test"
+         order.payment_reference = payment_reference
+         order.payment_checkout_url = None
+         order.payment_verification_status = "verified"
+-        complete_paid_order(db, order, paid_at=get_guyana_now(), payment_reference=payment_reference)
++        complete_paid_order(
++            db,
++            order,
++            paid_at=get_guyana_now(),
++            payment_reference=payment_reference,
++            emit_noncritical_side_effects=False,
++        )
+ 
+         _record_payment_attempt(
+             db,
+             order=order,
+             payment_method="dev_test",
+             status=order.status.value,
+             verification_status=order.payment_verification_status,
+             provider_reference=order.payment_reference,
+             response_payload={"mode": "dev_test", "message": "Dev test checkout completed."},
+             provider="dev_test",
+         )
+         logger.info(
+             "Dev test checkout completed",
+             extra={
+                 "order_id": order.id,
+                 "order_reference": order.reference_code,
+                 "user_id": order.user_id,
+                 "payment_reference": order.payment_reference,
+                 "env": settings.env,
+                 "checkout_mode": "dev_test",
+             },
+         )
+         db.flush()
+-        return OrderPaymentSnapshot(
+-            order_id=order.id,
+-            order_reference=order.reference_code,
+-            provider=order.payment_provider or "dev_test",
+-            payment_method=order.payment_method or "dev_test",
+-            payment_reference=order.payment_reference or payment_reference,
+-            amount=order.total_amount,
+-            currency=order.currency,
+-            status=order.status.value,
+-            payment_verification_status=order.payment_verification_status,
+-            message="Dev test checkout completed.",
+-        )
++        db.commit()
++    except Exception:
++        db.rollback()
++        raise
 +
-+from alembic import op
-+import sqlalchemy as sa
-+
-+
-+revision = "20260408_0024"
-+down_revision = "20260408_0023"
-+branch_labels = None
-+depends_on = None
-+
-+
-+message_template_type = sa.Enum(
-+    "order_confirmation",
-+    "ticket_issued",
-+    "transfer_invite",
-+    "transfer_accepted",
-+    "refund_processed",
-+    "reminder",
-+    "event_day_update",
-+    "organizer_broadcast",
-+    name="message_template_type",
-+)
-+
-+message_channel = sa.Enum(
-+    "email",
-+    "push",
-+    name="message_channel",
-+)
-+
-+message_delivery_status = sa.Enum(
-+    "sent",
-+    "failed",
-+    "skipped",
-+    name="message_delivery_status",
-+)
-+
-+
-+def upgrade() -> None:
-+    bind = op.get_bind()
-+    message_template_type.create(bind, checkfirst=True)
-+    message_channel.create(bind, checkfirst=True)
-+    message_delivery_status.create(bind, checkfirst=True)
-+
-+    op.create_table(
-+        "message_delivery_logs",
-+        sa.Column("id", sa.Integer(), nullable=False),
-+        sa.Column("template_type", message_template_type, nullable=False),
-+        sa.Column("channel", message_channel, nullable=False),
-+        sa.Column("status", message_delivery_status, nullable=False),
-+        sa.Column("recipient_user_id", sa.Integer(), nullable=True),
-+        sa.Column("recipient_email", sa.String(length=255), nullable=True),
-+        sa.Column("related_entity_type", sa.String(length=32), nullable=True),
-+        sa.Column("related_entity_id", sa.Integer(), nullable=True),
-+        sa.Column("provider_reference_id", sa.String(length=255), nullable=True),
-+        sa.Column("provider_status", sa.String(length=64), nullable=True),
-+        sa.Column("error_reason", sa.Text(), nullable=True),
-+        sa.Column("idempotency_key", sa.String(length=255), nullable=True),
-+        sa.Column("is_manual_resend", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-+        sa.Column("resend_of_message_id", sa.Integer(), nullable=True),
-+        sa.Column("actor_user_id", sa.Integer(), nullable=True),
-+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-+        sa.ForeignKeyConstraint(["actor_user_id"], ["users.id"], name=op.f("fk_message_delivery_logs_actor_user_id_users")),
-+        sa.ForeignKeyConstraint(["recipient_user_id"], ["users.id"], name=op.f("fk_message_delivery_logs_recipient_user_id_users")),
-+        sa.ForeignKeyConstraint(["resend_of_message_id"], ["message_delivery_logs.id"], name=op.f("fk_message_delivery_logs_resend_of_message_id_message_delivery_logs")),
-+        sa.PrimaryKeyConstraint("id", name=op.f("pk_message_delivery_logs")),
++    db.refresh(order)
++    return OrderPaymentSnapshot(
++        order_id=order.id,
++        order_reference=order.reference_code,
++        provider=order.payment_provider or "dev_test",
++        payment_method=order.payment_method or "dev_test",
++        payment_reference=order.payment_reference or payment_reference,
++        amount=order.total_amount,
++        currency=order.currency,
++        status=order.status.value,
++        payment_verification_status=order.payment_verification_status,
++        message="Dev test checkout completed.",
 +    )
-+
-+    op.create_index(op.f("ix_message_delivery_logs_actor_user_id"), "message_delivery_logs", ["actor_user_id"], unique=False)
-+    op.create_index(op.f("ix_message_delivery_logs_channel"), "message_delivery_logs", ["channel"], unique=False)
-+    op.create_index(op.f("ix_message_delivery_logs_idempotency_key"), "message_delivery_logs", ["idempotency_key"], unique=False)
-+    op.create_index(op.f("ix_message_delivery_logs_recipient_user_id"), "message_delivery_logs", ["recipient_user_id"], unique=False)
-+    op.create_index(op.f("ix_message_delivery_logs_related_entity_id"), "message_delivery_logs", ["related_entity_id"], unique=False)
-+    op.create_index(op.f("ix_message_delivery_logs_related_entity_type"), "message_delivery_logs", ["related_entity_type"], unique=False)
-+    op.create_index(op.f("ix_message_delivery_logs_resend_of_message_id"), "message_delivery_logs", ["resend_of_message_id"], unique=False)
-+    op.create_index(op.f("ix_message_delivery_logs_status"), "message_delivery_logs", ["status"], unique=False)
-+    op.create_index(op.f("ix_message_delivery_logs_template_type"), "message_delivery_logs", ["template_type"], unique=False)
-+
-+
-+def downgrade() -> None:
-+    op.drop_index(op.f("ix_message_delivery_logs_template_type"), table_name="message_delivery_logs")
-+    op.drop_index(op.f("ix_message_delivery_logs_status"), table_name="message_delivery_logs")
-+    op.drop_index(op.f("ix_message_delivery_logs_resend_of_message_id"), table_name="message_delivery_logs")
-+    op.drop_index(op.f("ix_message_delivery_logs_related_entity_type"), table_name="message_delivery_logs")
-+    op.drop_index(op.f("ix_message_delivery_logs_related_entity_id"), table_name="message_delivery_logs")
-+    op.drop_index(op.f("ix_message_delivery_logs_recipient_user_id"), table_name="message_delivery_logs")
-+    op.drop_index(op.f("ix_message_delivery_logs_idempotency_key"), table_name="message_delivery_logs")
-+    op.drop_index(op.f("ix_message_delivery_logs_channel"), table_name="message_delivery_logs")
-+    op.drop_index(op.f("ix_message_delivery_logs_actor_user_id"), table_name="message_delivery_logs")
-+    op.drop_table("message_delivery_logs")
-+
-+    bind = op.get_bind()
-+    message_delivery_status.drop(bind, checkfirst=True)
-+    message_channel.drop(bind, checkfirst=True)
-+    message_template_type.drop(bind, checkfirst=True)
+ 
+ 
+ def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
+     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+     with tx_ctx:
+         order = _load_order_for_payment(db, order_id=order_id)
+         _assert_order_owner(order, user_id=user_id)
+         validate_mmg_provider_config()
+         reference_now = _derive_reference_now_from_order(order)
+         validate_order_still_payable(order, now=reference_now)
+ 
+         if order.payment_method == "mmg_checkout":
+             raise PaymentMethodMismatchError("Order has already started MMG checkout.")
+ 
+         payment_reference = create_agent_payment_reference(
+             order_id=order.id,
+             existing_reference=order.payment_reference if order.payment_method == "mmg_agent" else None,
+         )
+ 
+         order.payment_provider = "mmg"
+         order.payment_method = "mmg_agent"
+         order.payment_reference = payment_reference
+         order.payment_checkout_url = None
+         order.status = OrderStatus.AWAITING_PAYMENT
+         order.payment_verification_status = "pending"
  
 EOF
 )

@@ -276,6 +276,7 @@ def complete_paid_order(
     *,
     paid_at: datetime | None = None,
     payment_reference: str | None = None,
+    emit_noncritical_side_effects: bool = True,
 ) -> Order:
     if order.payment_verification_status != "verified":
         raise OrderNotPayableError("Order payment is not verified.")
@@ -299,7 +300,7 @@ def complete_paid_order(
     tickets = issue_tickets_for_completed_order(db, order)
     if became_completed:
         record_promo_redemption_for_order(db, order=order)
-    if became_completed:
+    if became_completed and emit_noncritical_side_effects:
         notify_order_completed(db, order)
         notify_tickets_issued(db, order, tickets)
         publish_webhook_event(db, event_type="order.paid", payload=build_order_paid_payload(order))
