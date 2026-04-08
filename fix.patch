@@ -1,26 +1,73 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
-index 358760a34739224366aeabd4af077c3473c225db..4937a8ece897137c3a8ec86aa3eec3ed13931bab 100644
---- a/mobile/src/navigation/types.ts
-+++ b/mobile/src/navigation/types.ts
-@@ -1,13 +1,17 @@
- export type AuthStackParamList = {
-   SignIn: undefined;
-   SignUp: undefined;
-   ForgotPassword: undefined;
-   ResetPassword: undefined;
- };
+diff --git a/backend/app/api/ticket_holds.py b/backend/app/api/ticket_holds.py
+index a26f8bba4f8444ba344b85fdfd8bebf42779cba0..1c8cbd2a4c5075764a67d6c5d06b1b4588ceca78 100644
+--- a/backend/app/api/ticket_holds.py
++++ b/backend/app/api/ticket_holds.py
+@@ -1,47 +1,58 @@
+ from fastapi import APIRouter, Depends, Header, HTTPException, status
++from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+ from sqlalchemy.orm import Session
  
- export type AppStackParamList = {
-   Home: undefined;
-   EventDetail: { eventId: number };
-+  TicketSelection: { eventId: number };
-+  CheckoutMethod: { eventId: number; orderId: number };
-+  MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
-+  PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
-   MyTickets: undefined;
-   Profile: undefined;
- };
+ from app.db.session import get_db
++from app.services.auth import resolve_user_from_access_token
+ from app.schemas.ticket_hold import CreateTicketHoldRequest, TicketHoldResponse
+ from app.services.ticket_holds import (
+     InsufficientAvailabilityError,
+     TicketHoldError,
+     TicketHoldWindowClosedError,
+     create_ticket_hold,
+ )
+ 
+ router = APIRouter(prefix="/ticket-holds", tags=["ticket-holds"])
+ 
++bearer_scheme = HTTPBearer(auto_error=False)
+ 
+-def get_current_user_id(x_user_id: int | None = Header(default=None)) -> int:
++
++def get_current_user_id(
++    db: Session = Depends(get_db),
++    x_user_id: int | None = Header(default=None),
++    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
++) -> int:
+     if x_user_id is None:
+-        raise HTTPException(
+-            status_code=status.HTTP_401_UNAUTHORIZED,
+-            detail="Authentication required.",
+-        )
+-    return x_user_id
++        if credentials is None:
++            raise HTTPException(
++                status_code=status.HTTP_401_UNAUTHORIZED,
++                detail="Authentication required.",
++            )
++        user = resolve_user_from_access_token(db, token=credentials.credentials)
++        return user.id
++    return int(x_user_id)
+ 
+ 
+ @router.post("", response_model=TicketHoldResponse, status_code=status.HTTP_201_CREATED)
+ def create_hold(
+     payload: CreateTicketHoldRequest,
+     db: Session = Depends(get_db),
+     user_id: int = Depends(get_current_user_id),
+ ) -> TicketHoldResponse:
+     try:
+         result = create_ticket_hold(
+             db,
+             user_id=user_id,
+             ticket_tier_id=payload.ticket_tier_id,
+             quantity=payload.quantity,
+         )
+     except InsufficientAvailabilityError as exc:
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+     except TicketHoldWindowClosedError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+     except TicketHoldError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+ 
+     hold = result.hold
+     return TicketHoldResponse(
+         id=hold.id,
  
 EOF
 )
