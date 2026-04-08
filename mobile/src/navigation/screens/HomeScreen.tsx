@@ -21,13 +21,14 @@ type DateFilter = 'today' | 'this_week' | 'upcoming';
 
 type HomeScreenProps = {
   onOpenProfile: () => void;
+  onOpenMyTickets: () => void;
   onSignOut: () => void;
   onOpenEvent: (eventId: number) => void;
 };
 
 const CATEGORY_FILTERS = ['All', 'Party', 'Concert', 'Festival'];
 
-export function HomeScreen({ onOpenProfile, onSignOut, onOpenEvent }: HomeScreenProps) {
+export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent }: HomeScreenProps) {
   const [events, setEvents] = useState<EventDiscoveryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -89,9 +90,7 @@ export function HomeScreen({ onOpenProfile, onSignOut, onOpenEvent }: HomeScreen
             <Text style={styles.kicker}>DISCOVER</Text>
             <Text style={styles.title}>Admitly Nights</Text>
           </View>
-          <Pressable onPress={onOpenProfile}>
-            <Text style={styles.profileLink}>Profile</Text>
-          </Pressable>
+          <View style={styles.headerLinks}><Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable><Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable></View>
         </View>
 
         <View style={styles.searchWrap}>
@@ -206,10 +205,8 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.heading,
     fontWeight: '700',
   },
-  profileLink: {
-    color: theme.colors.primary,
-    fontWeight: '600',
-  },
+  headerLinks: { flexDirection: 'row', gap: theme.spacing.md },
+  profileLink: { color: theme.colors.primary, fontWeight: '600' },
   searchWrap: {
     paddingHorizontal: theme.spacing.lg,
     marginBottom: theme.spacing.sm,

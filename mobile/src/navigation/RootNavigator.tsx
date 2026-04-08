@@ -17,6 +17,8 @@ import { SignInScreen } from './screens/SignInScreen';
 import { SignUpScreen } from './screens/SignUpScreen';
 import { PurchaseResultScreen } from './screens/PurchaseResultScreen';
 import { MmgAgentCheckoutScreen } from './screens/MmgAgentCheckoutScreen';
+import { MyTicketsScreen } from './screens/MyTicketsScreen';
+import { TicketDetailScreen } from './screens/TicketDetailScreen';
 import { CheckoutMethodScreen } from './screens/CheckoutMethodScreen';
 import { TicketSelectionScreen } from './screens/TicketSelectionScreen';
 
@@ -100,6 +102,7 @@ function SignedInNavigator() {
         {({ navigation }) => (
           <HomeScreen
             onOpenProfile={() => navigation.navigate('Profile')}
+            onOpenMyTickets={() => navigation.navigate('MyTickets')}
             onSignOut={signOut}
             onOpenEvent={(eventId) => navigation.navigate('EventDetail', { eventId })}
           />
@@ -148,12 +151,12 @@ function SignedInNavigator() {
       <AppStack.Screen name="PurchaseResult" options={{ title: 'Purchase status' }}>
         {({ route, navigation }) => <PurchaseResultScreen title={route.params.title} message={route.params.message} onDone={() => navigation.navigate('Home')} />}
       </AppStack.Screen>
-      <AppStack.Screen
-        name="MyTickets"
-        children={() => (
-          <PlaceholderScreen title="My tickets" description="Ticket wallet UI is out of scope in Phase 1." />
-        )}
-      />
+      <AppStack.Screen name="MyTickets" options={{ title: 'My Tickets' }}>
+        {({ navigation }) => <MyTicketsScreen onOpenTicket={(ticketId) => navigation.navigate('TicketDetail', { ticketId })} />}
+      </AppStack.Screen>
+      <AppStack.Screen name="TicketDetail" options={{ title: 'Ticket' }}>
+        {({ route }) => <TicketDetailScreen ticketId={route.params.ticketId} />}
+      </AppStack.Screen>
       <AppStack.Screen
         name="Profile"
         children={() => <PlaceholderScreen title="Profile" description="Account profile shell for future phases." />}

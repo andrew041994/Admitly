@@ -18,6 +18,14 @@ from app.schemas.ticket import (
     TicketVoidRequest,
     TicketQrResponse,
 )
+from app.schemas.ticket_wallet import (
+    WalletEventSummary,
+    WalletOrganizerSummary,
+    WalletOwnershipSummary,
+    WalletTicketCardItemResponse,
+    WalletTicketDetailResponse,
+    WalletVenueSummary,
+)
 from app.services.tickets import (
     CHECK_IN_METHOD_MANUAL,
     CHECK_IN_METHOD_QR,
@@ -33,7 +41,6 @@ from app.services.tickets import (
     get_ticket_by_qr_payload,
     get_ticket_for_owner,
     list_tickets_for_order_owner,
-    list_tickets_for_user,
     list_recent_check_in_attempts,
     override_ticket_check_in,
     transfer_ticket_to_user,
@@ -41,6 +48,7 @@ from app.services.tickets import (
     void_ticket,
     resend_ticket_notification,
 )
+from app.services.ticket_wallet import WalletTicketView, get_wallet_ticket, list_wallet_tickets
 from app.services.ticket_qr import (
     build_ticket_qr_payload,
     generate_qr_png_bytes,
@@ -77,14 +85,90 @@ def _to_ticket_response(ticket) -> TicketResponse:
     )
 
 
-@router.get("/me/tickets", response_model=list[TicketResponse])
+def _build_venue_address(event) -> str | None:
+    if event is None:
+        return None
+    if event.custom_address_text:
+        return event.custom_address_text
+    venue = event.venue
+    if venue is None:
+        return None
+    parts = [venue.address_line1, venue.address_line2, venue.city, venue.country]
+    clean = [p.strip() for p in parts if p and p.strip()]
+    return ", ".join(clean) if clean else None
+
+
+def _to_wallet_ticket_card(view: WalletTicketView) -> WalletTicketCardItemResponse:
+    ticket = view.ticket
+    event = ticket.event
+    return WalletTicketCardItemResponse(
+        id=ticket.id,
+        ticket_code=ticket.ticket_code,
+        ticket_status=ticket.status.value,
+        display_status=view.display_status,
+        is_valid_for_entry=view.is_valid_for_entry,
+        can_display_entry_code=view.can_display_entry_code,
+        event=WalletEventSummary(
+            id=event.id,
+            title=event.title,
+            start_at=event.start_at,
+            end_at=event.end_at,
+            timezone=event.timezone,
+            banner_image_url=event.cover_image_url,
+            is_upcoming=view.event_is_upcoming,
+            status=event.status.value,
+        ),
+        venue=WalletVenueSummary(
+            name=event.custom_venue_name or (event.venue.name if event.venue else None),
+            address_summary=_build_venue_address(event),
+        ),
+        organizer=WalletOrganizerSummary(name=event.organizer.display_name if event.organizer else None),
+        ticket_tier_name=ticket.ticket_tier.name,
+        ownership=WalletOwnershipSummary(
+            is_current_owner=True,
+            purchaser_user_id=ticket.purchaser_user_id,
+            owner_user_id=ticket.owner_user_id,
+            acquired_via_transfer=ticket.owner_user_id != ticket.purchaser_user_id,
+        ),
+        order_id=ticket.order_id,
+        order_reference=ticket.order.reference_code if ticket.order else None,
+        issued_at=ticket.issued_at,
+        checked_in_at=ticket.checked_in_at,
+        transferred_at=ticket.transferred_at,
+        transfer_count=ticket.transfer_count,
+    )
+
+
+@router.get("/me/tickets", response_model=list[WalletTicketCardItemResponse])
 def get_my_tickets(
-    event_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
-) -> list[TicketResponse]:
-    tickets = list_tickets_for_user(db, user_id=user_id, event_id=event_id)
-    return [_to_ticket_response(t) for t in tickets]
+) -> list[WalletTicketCardItemResponse]:
+    views = list_wallet_tickets(db, user_id=user_id)
+    return [_to_wallet_ticket_card(v) for v in views]
+
+
+@router.get("/me/tickets/{ticket_id}", response_model=WalletTicketDetailResponse)
+def get_my_ticket_detail(
+    ticket_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> WalletTicketDetailResponse:
+    view = get_wallet_ticket(db, user_id=user_id, ticket_id=ticket_id)
+    if view is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+    card = _to_wallet_ticket_card(view)
+    ticket = view.ticket
+    return WalletTicketDetailResponse(
+        **card.model_dump(),
+        qr_payload=ticket.qr_payload,
+        check_in_token=ticket.ticket_code,
+        check_in_method=ticket.check_in_method,
+        voided_at=ticket.voided_at,
+        void_reason=ticket.void_reason,
+        order_status=ticket.order.status.value if ticket.order else "unknown",
+        order_refund_status=ticket.order.refund_status if ticket.order else "unknown",
+    )
 
 
 @router.get("/orders/{order_id}/tickets", response_model=list[TicketResponse])

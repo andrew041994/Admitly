@@ -1,93 +1,27 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/api/orders.py b/backend/app/api/orders.py
-index 5bdc268a1f7ae701cdf357d045e65a6cb36f34e2..6b9eeb76aea1ce05f100133979388fee7cf2b7e2 100644
---- a/backend/app/api/orders.py
-+++ b/backend/app/api/orders.py
-@@ -1,35 +1,36 @@
- from fastapi import APIRouter, Depends, HTTPException, status
- from sqlalchemy.orm import Session
- from app.models.user import User
- from app.services.ticket_holds import create_ticket_hold
- from app.models.event import Event
- from app.models.ticket_tier import TicketTier
- from sqlalchemy import select
+diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
+index 4937a8ece897137c3a8ec86aa3eec3ed13931bab..1789ab733105a038262b761084d8fbc6ad0d4a27 100644
+--- a/mobile/src/navigation/types.ts
++++ b/mobile/src/navigation/types.ts
+@@ -1,17 +1,18 @@
+ export type AuthStackParamList = {
+   SignIn: undefined;
+   SignUp: undefined;
+   ForgotPassword: undefined;
+   ResetPassword: undefined;
+ };
  
- from app.api.rate_limit import apply_rate_limit, request_client_ip
- from app.api.auth import get_current_user
-+from app.api.ticket_holds import get_current_user_id
- from app.core.config import settings
- from app.db.session import get_db
- from app.schemas.mmg import (
-     CreateOrderMMGAgentResponse,
-     CreateOrderMMGCheckoutResponse,
-     CompleteMMGAgentPaymentRequest,
-     CompleteMMGAgentPaymentResponse,
- )
- from app.schemas.notification import NotificationDispatchResponse
- from app.schemas.order import (
-     CreateOrderFromSelectionRequest,
-     CreatePendingOrderFromHoldsRequest,
-     OrderCancelRequest,
-     OrderItemResponse,
-     OrderRefundRequest,
-     OrderResponse,
- )
- from app.services.orders import (
-     EmptyHoldSelectionError,
-     HoldAlreadyAttachedError,
-     HoldEventMismatchError,
-     HoldExpiredError,
-     HoldNotFoundError,
-     HoldOwnershipError,
-     OrderAuthorizationError,
-@@ -339,44 +340,44 @@ def complete_agent_payment(
-             user_id=current_user.id,
-             submitted_reference_code=payload.submitted_reference_code,
-         )
-     except PaymentAuthorizationError as exc:
-         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-     except (OrderNotPayableError, PaymentMethodMismatchError) as exc:
-         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-     except PaymentError as exc:
-         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
- 
-     return CompleteMMGAgentPaymentResponse(
-         order_id=snapshot.order_id,
-         provider=snapshot.provider,
-         payment_method=snapshot.payment_method,
-         payment_reference=snapshot.payment_reference,
-         status=snapshot.status,
-         payment_verification_status=snapshot.payment_verification_status,
-         message=snapshot.message or "Payment submission accepted.",
-     )
- 
- 
- @router.post("/{order_id}/resend-confirmation", response_model=NotificationDispatchResponse)
- def resend_order_confirmation_notification(
-     order_id: int,
-     db: Session = Depends(get_db),
--    current_user: User = Depends(get_current_user),
-+    user_id: int = Depends(get_current_user_id),
-     client_ip: str = Depends(request_client_ip),
- ) -> NotificationDispatchResponse:
-     apply_rate_limit(
-         scope="resend_confirmation",
--        key=f"{current_user.id}:{order_id}:{client_ip}",
-+        key=f"{user_id}:{order_id}:{client_ip}",
-         limit=settings.rate_limit_payment_submit_count,
-         window_seconds=settings.rate_limit_payment_submit_window_seconds,
-     )
-     try:
--        result = resend_order_confirmation(db, order_id=order_id, actor_user_id=current_user.id)
-+        result = resend_order_confirmation(db, order_id=order_id, actor_user_id=user_id)
-     except OrderNotFoundError as exc:
-         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-     except OrderAuthorizationError as exc:
-         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-     except OrderResendError as exc:
-         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
- 
-     return NotificationDispatchResponse(success=result.success, channel_results=result.channel_results)
+ export type AppStackParamList = {
+   Home: undefined;
+   EventDetail: { eventId: number };
+   TicketSelection: { eventId: number };
+   CheckoutMethod: { eventId: number; orderId: number };
+   MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
+   PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
+   MyTickets: undefined;
++  TicketDetail: { ticketId: number };
+   Profile: undefined;
+ };
  
 EOF
 )

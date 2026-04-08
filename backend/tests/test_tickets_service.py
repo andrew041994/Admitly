@@ -55,6 +55,7 @@ from app.services.tickets import (
     validate_ticket_for_check_in,
     void_ticket,
 )
+from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
 
 
 @pytest.fixture
@@ -74,7 +75,7 @@ def _seed_order(
     status: OrderStatus = OrderStatus.COMPLETED,
     payment_verification_status: str = "verified",
 ) -> tuple[Order, OrderItem, TicketTier, User, Event]:
-    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     user = User(email=user_email, full_name="Buyer")
     db.add(user)
     db.flush()
@@ -936,3 +937,115 @@ def test_ticket_qr_endpoint_requires_ticket_ownership(db_session: Session) -> No
     with pytest.raises(HTTPException) as exc:
         get_ticket_qr_by_ticket_id(ticket.id, db=db_session, user_id=outsider.id)
     assert exc.value.status_code == 404
+
+def test_wallet_list_only_returns_current_owner_tickets(db_session: Session) -> None:
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=2)
+    issued = issue_tickets_for_completed_order(db_session, order)
+    recipient = User(email="wallet-recipient@example.com", full_name="Recipient")
+    db_session.add(recipient)
+    db_session.commit()
+    transfer_ticket_to_user(db_session, ticket_id=issued[0].id, from_user_id=buyer.id, to_user_id=recipient.id)
+
+    buyer_wallet = list_wallet_tickets(db_session, user_id=buyer.id)
+    recipient_wallet = list_wallet_tickets(db_session, user_id=recipient.id)
+
+    assert [v.ticket.id for v in buyer_wallet] == [issued[1].id]
+    assert [v.ticket.id for v in recipient_wallet] == [issued[0].id]
+
+
+def test_wallet_list_orders_upcoming_before_past(db_session: Session) -> None:
+    now = datetime.now(timezone.utc)
+    order_upcoming_far, _, _, buyer, event_upcoming_far = _seed_order(db_session, user_email="wallet-sort@example.com", quantity=1)
+    issue_tickets_for_completed_order(db_session, order_upcoming_far)
+
+    order_past_recent, _, _, _, event_past_recent = _seed_order(db_session, user_email="wallet-sort-2@example.com", quantity=1)
+    order_past_recent.user_id = buyer.id
+    issue_tickets_for_completed_order(db_session, order_past_recent)
+
+    order_upcoming_near, _, _, _, event_upcoming_near = _seed_order(db_session, user_email="wallet-sort-3@example.com", quantity=1)
+    order_upcoming_near.user_id = buyer.id
+    issue_tickets_for_completed_order(db_session, order_upcoming_near)
+
+    event_upcoming_far.start_at = now + timedelta(days=10)
+    event_upcoming_far.end_at = now + timedelta(days=10, hours=2)
+    event_upcoming_near.start_at = now + timedelta(days=1)
+    event_upcoming_near.end_at = now + timedelta(days=1, hours=2)
+    event_past_recent.start_at = now - timedelta(days=1)
+    event_past_recent.end_at = now - timedelta(days=1, hours=-2)
+    db_session.commit()
+
+    wallet = list_wallet_tickets(db_session, user_id=buyer.id)
+    assert len(wallet) == 3
+    assert wallet[0].ticket.event_id == event_upcoming_near.id
+    assert wallet[1].ticket.event_id == event_upcoming_far.id
+    assert wallet[2].ticket.event_id == event_past_recent.id
+
+
+def test_wallet_ticket_detail_owned_vs_non_owned(db_session: Session) -> None:
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    owner_detail = get_wallet_ticket(db_session, user_id=buyer.id, ticket_id=ticket.id)
+    assert owner_detail is not None
+    assert owner_detail.ticket.id == ticket.id
+
+    other = User(email="wallet-other@example.com", full_name="Other")
+    db_session.add(other)
+    db_session.commit()
+    assert get_wallet_ticket(db_session, user_id=other.id, ticket_id=ticket.id) is None
+
+
+def test_wallet_status_used_and_invalid(db_session: Session) -> None:
+    order_used, _, _, buyer, event = _seed_order(db_session, user_email="wallet-used@example.com", quantity=1)
+    used_ticket = issue_tickets_for_completed_order(db_session, order_used)[0]
+    check_in_ticket_for_event(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=used_ticket.qr_payload,
+        ticket_code=None,
+    )
+
+    order_invalid, _, _, _, _ = _seed_order(db_session, user_email="wallet-invalid@example.com", quantity=1)
+    order_invalid.user_id = buyer.id
+    invalid_ticket = issue_tickets_for_completed_order(db_session, order_invalid)[0]
+    invalid_ticket.status = TicketStatus.VOIDED
+    db_session.commit()
+
+    wallet = {v.ticket.id: v for v in list_wallet_tickets(db_session, user_id=buyer.id)}
+    assert wallet[used_ticket.id].display_status == "used"
+    assert wallet[invalid_ticket.id].display_status == "invalid"
+
+
+def test_wallet_transferred_acceptance_behavior(db_session: Session) -> None:
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    new_owner = User(email="wallet-new-owner@example.com", full_name="New Owner")
+    db_session.add(new_owner)
+    db_session.commit()
+
+    transfer_ticket_to_user(db_session, ticket_id=ticket.id, from_user_id=buyer.id, to_user_id=new_owner.id)
+
+    assert list_wallet_tickets(db_session, user_id=buyer.id) == []
+    recipient_wallet = list_wallet_tickets(db_session, user_id=new_owner.id)
+    assert len(recipient_wallet) == 1
+    assert recipient_wallet[0].ticket.id == ticket.id
+
+
+def test_wallet_entry_payload_exists_and_stable(db_session: Session) -> None:
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    first = get_wallet_ticket(db_session, user_id=buyer.id, ticket_id=ticket.id)
+    second = get_wallet_ticket(db_session, user_id=buyer.id, ticket_id=ticket.id)
+    assert first is not None and second is not None
+    assert first.ticket.qr_payload
+    assert first.ticket.qr_payload == second.ticket.qr_payload
+    assert first.ticket.ticket_code == second.ticket.ticket_code
+
+
+def test_wallet_uses_issued_tickets_not_only_orders(db_session: Session) -> None:
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=2)
+    assert list_wallet_tickets(db_session, user_id=buyer.id) == []
+    issue_tickets_for_completed_order(db_session, order)
+    assert len(list_wallet_tickets(db_session, user_id=buyer.id)) == 2

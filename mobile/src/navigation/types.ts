@@ -13,5 +13,6 @@ export type AppStackParamList = {
   MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
   PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
   MyTickets: undefined;
+  TicketDetail: { ticketId: number };
   Profile: undefined;
 };
