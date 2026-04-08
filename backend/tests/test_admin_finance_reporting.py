@@ -150,7 +150,11 @@ def test_admin_csv_export_headers_and_rows(db_session: Session):
     )
     assert response.media_type == "text/csv"
     body = response.body.decode()
-    assert "order_id,event_id,buyer_user_id" in body
+    assert body.splitlines()[0] == (
+        "order_id,order_reference,event_id,buyer_user_id,status,refund_status,reconciliation_status,"
+        "payout_status,subtotal_amount,discount_amount,total_amount,refunded_amount,"
+        "payout_eligible_amount,currency,paid_at"
+    )
     assert "100.00" in body
 
 
