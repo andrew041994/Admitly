@@ -149,6 +149,8 @@ def create_order_from_selection(
         hold_ids.append(hold_result.hold.id)
 
     order = create_pending_order_from_holds(db, user_id=current_user.id, hold_ids=hold_ids)
+    db.commit()
+    db.refresh(order)
     print("DATABASE_URL =", settings.database_url)
 
     print("CREATED ORDER ID =", order.id)
@@ -176,6 +178,8 @@ def create_order_from_holds(
             hold_ids=payload.hold_ids,
             promo_code_text=payload.promo_code_text,
         )
+        db.commit()
+        db.refresh(order)
 
     except PromoCodeValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

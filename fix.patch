@@ -1,74 +1,90 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/payments/__init__.py b/backend/app/services/payments/__init__.py
-index 566f66af7aba1860b4aae6cbf70cb9b1e2ff0492..e61ecef2b34fe9da60a103b804e5d5b7c0281d7a 100644
---- a/backend/app/services/payments/__init__.py
-+++ b/backend/app/services/payments/__init__.py
-@@ -70,59 +70,63 @@ def _record_payment_attempt(
-     status: str,
-     verification_status: str,
-     provider_reference: str | None = None,
-     request_payload: dict | None = None,
-     response_payload: dict | None = None,
-     provider: str = "mmg",
- ) -> None:
-     db.add(
-         PaymentAttempt(
-             order_id=order.id,
-             provider=provider,
-             payment_method=payment_method,
-             status=status,
-             verification_status=verification_status,
-             provider_reference=provider_reference,
-             request_payload=json.dumps(request_payload) if request_payload else None,
-             response_payload=json.dumps(response_payload) if response_payload else None,
-         )
+diff --git a/backend/app/api/orders.py b/backend/app/api/orders.py
+index dc1cd6f60f9748d25f5389a4794673a0e67f91e6..23f80056989ca3879f52ed0259063809e04cdd71 100644
+--- a/backend/app/api/orders.py
++++ b/backend/app/api/orders.py
+@@ -127,77 +127,81 @@ def create_order_from_selection(
+         limit=settings.rate_limit_order_create_count,
+         window_seconds=settings.rate_limit_order_create_window_seconds,
      )
  
+     hold_ids: list[int] = []
+     event = db.execute(select(Event).where(Event.id == payload.event_id)).scalar_one_or_none()
+     if event is None:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
  
- def _load_order_for_payment(db: Session, *, order_id: int) -> Order:
-     order = (
-         db.execute(
-             select(Order)
--            .options(joinedload(Order.ticket_holds), joinedload(Order.order_items), joinedload(Order.tickets))
-             .where(Order.id == order_id)
-             .with_for_update()
+     for item in payload.items:
+         tier = db.execute(select(TicketTier).where(TicketTier.id == item.ticket_tier_id)).scalar_one_or_none()
+         if tier is None or tier.event_id != payload.event_id:
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ticket tier selection.")
+         if item.quantity < tier.min_per_order or item.quantity > tier.max_per_order:
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ticket quantity is outside allowed range.")
+ 
+         hold_result = create_ticket_hold(
+             db,
+             user_id=current_user.id,
+             ticket_tier_id=item.ticket_tier_id,
+             quantity=item.quantity,
          )
--        .unique()
-         .scalar_one_or_none()
+         hold_ids.append(hold_result.hold.id)
+ 
+     order = create_pending_order_from_holds(db, user_id=current_user.id, hold_ids=hold_ids)
++    db.commit()
++    db.refresh(order)
+     print("DATABASE_URL =", settings.database_url)
+ 
+     print("CREATED ORDER ID =", order.id)
+ 
+     return _to_order_response(order)
+ 
+ 
+ @router.post("/from-holds", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
+ def create_order_from_holds(
+     payload: CreatePendingOrderFromHoldsRequest,
+     db: Session = Depends(get_db),
+     current_user: User = Depends(get_current_user),
+     client_ip: str = Depends(request_client_ip),
+ ) -> OrderResponse:
+     apply_rate_limit(
+         scope="order_create",
+         key=f"{current_user.id}:{client_ip}",
+         limit=settings.rate_limit_order_create_count,
+         window_seconds=settings.rate_limit_order_create_window_seconds,
      )
-     if order is None:
-         raise PaymentError("Order not found.")
-+
-+    # Load related collections outside the locking query to avoid FOR UPDATE on
-+    # nullable sides of outer joins.
-+    _ = order.ticket_holds
-+    _ = order.order_items
-+    _ = order.tickets
-     return order
+     try:
+         order = create_pending_order_from_holds(
+             db,
+             user_id=current_user.id,
+             hold_ids=payload.hold_ids,
+             promo_code_text=payload.promo_code_text,
+         )
++        db.commit()
++        db.refresh(order)
+ 
+     except PromoCodeValidationError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+     except EmptyHoldSelectionError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+     except HoldNotFoundError as exc:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+     except HoldOwnershipError as exc:
+         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+     except HoldExpiredError as exc:
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+     except HoldAlreadyAttachedError as exc:
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+     except HoldEventMismatchError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+     print("CREATED ORDER ID =", order.id)
+ 
+     return _to_order_response(order)
  
  
- def _assert_order_owner(order: Order, *, user_id: int) -> None:
-     if order.user_id != user_id:
-         raise PaymentAuthorizationError("Order does not belong to the authenticated user.")
- 
- 
- def _derive_reference_now_from_order(order: Order) -> datetime:
-     first_hold = order.ticket_holds[0].expires_at
-     if first_hold.tzinfo is None:
-         first_hold = first_hold.replace(tzinfo=timezone.utc)
-     return first_hold.astimezone(get_guyana_now().tzinfo) - timedelta(minutes=1)
- 
- 
- def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
-     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-     with tx_ctx:
-         order = _load_order_for_payment(db, order_id=order_id)
-         _assert_order_owner(order, user_id=user_id)
-         validate_mmg_provider_config()
-         validate_order_still_payable(order)
- 
-         if order.payment_method == "mmg_agent":
-             raise PaymentMethodMismatchError("Order has already started MMG agent checkout.")
+ @router.get("/{order_id}", response_model=OrderResponse)
+ def get_order(
+     order_id: int,
+     db: Session = Depends(get_db),
+     current_user: User = Depends(get_current_user),
  
 EOF
 )
