@@ -5,6 +5,7 @@ import { useSession } from '../context/SessionContext';
 import { theme } from '../theme';
 import { AppStackParamList, AuthStackParamList } from './types';
 import { BootScreen } from './screens/BootScreen';
+import { EventDetailScreen } from './screens/EventDetailScreen';
 import { ForgotPasswordScreen } from './screens/ForgotPasswordScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { PlaceholderScreen } from './screens/PlaceholderScreen';
@@ -76,15 +77,16 @@ function SignedInNavigator() {
     >
       <AppStack.Screen name="Home">
         {({ navigation }) => (
-          <HomeScreen onOpenProfile={() => navigation.navigate('Profile')} onSignOut={signOut} />
+          <HomeScreen
+            onOpenProfile={() => navigation.navigate('Profile')}
+            onSignOut={signOut}
+            onOpenEvent={(eventId) => navigation.navigate('EventDetail', { eventId })}
+          />
         )}
       </AppStack.Screen>
-      <AppStack.Screen
-        name="EventDetail"
-        children={() => (
-          <PlaceholderScreen title="Event detail" description="Event detail foundation route only." />
-        )}
-      />
+      <AppStack.Screen name="EventDetail">
+        {({ route }) => <EventDetailScreen eventId={route.params.eventId} />}
+      </AppStack.Screen>
       <AppStack.Screen
         name="MyTickets"
         children={() => (

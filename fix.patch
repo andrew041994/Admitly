@@ -1,58 +1,23 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/storage/sessionStorage.ts b/mobile/src/storage/sessionStorage.ts
-index d08c14cf11d67f5274d8c488332b2feeb2a113dd..59bce836629da59659b0142349da73a47b4befbb 100644
---- a/mobile/src/storage/sessionStorage.ts
-+++ b/mobile/src/storage/sessionStorage.ts
-@@ -1,15 +1,43 @@
- import AsyncStorage from '@react-native-async-storage/async-storage';
+diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
+index 6871c9e402b37556c10bf8646329703d82d25377..358760a34739224366aeabd4af077c3473c225db 100644
+--- a/mobile/src/navigation/types.ts
++++ b/mobile/src/navigation/types.ts
+@@ -1,13 +1,13 @@
+ export type AuthStackParamList = {
+   SignIn: undefined;
+   SignUp: undefined;
+   ForgotPassword: undefined;
+   ResetPassword: undefined;
+ };
  
- import { storageKeys } from './keys';
- 
--export async function getStoredSessionToken(): Promise<string | null> {
--  return AsyncStorage.getItem(storageKeys.sessionToken);
-+export type StoredSession = {
-+  accessToken: string;
-+  refreshToken: string | null;
-+};
-+
-+export async function getStoredSession(): Promise<StoredSession | null> {
-+  const [accessToken, refreshToken] = await Promise.all([
-+    AsyncStorage.getItem(storageKeys.sessionToken),
-+    AsyncStorage.getItem(storageKeys.refreshToken),
-+  ]);
-+
-+  if (!accessToken) {
-+    return null;
-+  }
-+
-+  return {
-+    accessToken,
-+    refreshToken,
-+  };
- }
- 
--export async function setStoredSessionToken(token: string): Promise<void> {
--  await AsyncStorage.setItem(storageKeys.sessionToken, token);
-+export async function setStoredSession(session: StoredSession): Promise<void> {
-+  const writes: Array<Promise<void>> = [AsyncStorage.setItem(storageKeys.sessionToken, session.accessToken)];
-+
-+  if (session.refreshToken) {
-+    writes.push(AsyncStorage.setItem(storageKeys.refreshToken, session.refreshToken));
-+  } else {
-+    writes.push(AsyncStorage.removeItem(storageKeys.refreshToken));
-+  }
-+
-+  await Promise.all(writes);
- }
- 
--export async function clearStoredSessionToken(): Promise<void> {
--  await AsyncStorage.removeItem(storageKeys.sessionToken);
-+export async function clearStoredSession(): Promise<void> {
-+  await Promise.all([
-+    AsyncStorage.removeItem(storageKeys.sessionToken),
-+    AsyncStorage.removeItem(storageKeys.refreshToken),
-+  ]);
- }
+ export type AppStackParamList = {
+   Home: undefined;
+-  EventDetail: undefined;
++  EventDetail: { eventId: number };
+   MyTickets: undefined;
+   Profile: undefined;
+ };
  
 EOF
 )

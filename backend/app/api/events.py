@@ -1,13 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
+from app.models.event import Event
 from app.models.enums import EventRefundBatchStatus, EventStaffRole
+from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility
 from app.models.user import User
+from app.models.venue import Venue
 from app.schemas.event import (
     EventCancelRequest,
+    EventDiscoveryDetailResponse,
+    EventDiscoveryItemResponse,
+    EventPriceSummaryResponse,
     EventRefundBatchResponse,
     EventResponse,
     EventStaffCreateRequest,
@@ -34,6 +40,56 @@ from app.services.events import (
 )
 
 router = APIRouter(prefix="/events", tags=["events"])
+
+
+def _discoverable_event_query() -> select:
+    return (
+        select(Event)
+        .options(joinedload(Event.venue), joinedload(Event.organizer), joinedload(Event.ticket_tiers))
+        .where(
+            Event.status == EventStatus.PUBLISHED,
+            Event.visibility == EventVisibility.PUBLIC,
+            Event.approval_status == EventApprovalStatus.APPROVED,
+            Event.published_at.is_not(None),
+        )
+    )
+
+
+def _to_price_summary(event: Event) -> EventPriceSummaryResponse | None:
+    active_tiers = [tier for tier in event.ticket_tiers if tier.is_active]
+    if not active_tiers:
+        return None
+    min_tier = min(active_tiers, key=lambda tier: tier.price_amount)
+    min_price = str(min_tier.price_amount)
+    return EventPriceSummaryResponse(
+        currency=min_tier.currency,
+        min_price=min_price,
+        is_free=float(min_tier.price_amount) <= 0,
+    )
+
+
+def _to_discovery_item(event: Event) -> EventDiscoveryItemResponse:
+    return EventDiscoveryItemResponse(
+        id=event.id,
+        title=event.title,
+        short_description=event.short_description,
+        category=event.category,
+        cover_image_url=event.cover_image_url,
+        start_at=event.start_at,
+        end_at=event.end_at,
+        venue_name=event.venue.name if event.venue else None,
+        venue_city=event.venue.city if event.venue else None,
+        venue_country=event.venue.country if event.venue else None,
+        custom_venue_name=event.custom_venue_name,
+        custom_address_text=event.custom_address_text,
+        organizer_name=event.organizer.display_name if event.organizer else None,
+        price_summary=_to_price_summary(event),
+    )
+
+
+def _to_discovery_detail(event: Event) -> EventDiscoveryDetailResponse:
+    item = _to_discovery_item(event)
+    return EventDiscoveryDetailResponse(**item.model_dump(), long_description=event.long_description)
 
 
 def _require_admin(db: Session, *, user_id: int) -> None:
@@ -92,6 +148,82 @@ def cancel_existing_event(
         refund_batch_id=batch.id,
         refund_batch_status=batch.status.value,
     )
+
+
+@router.get("/discover", response_model=list[EventDiscoveryItemResponse])
+def discover_events(
+    q: str | None = Query(default=None, max_length=100),
+    category: str | None = Query(default=None, max_length=100),
+    city: str | None = Query(default=None, max_length=120),
+    date_bucket: str | None = Query(default=None, pattern="^(today|this_week|upcoming)$"),
+    is_free: bool | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _user_id: int = Depends(get_current_user_id),
+) -> list[EventDiscoveryItemResponse]:
+    query = _discoverable_event_query()
+
+    if q:
+        like_q = f"%{q.strip()}%"
+        query = query.where(
+            or_(
+                Event.title.ilike(like_q),
+                Event.short_description.ilike(like_q),
+                Event.long_description.ilike(like_q),
+                Event.category.ilike(like_q),
+            )
+        )
+
+    if category:
+        query = query.where(func.lower(Event.category) == category.strip().lower())
+
+    if city:
+        query = query.join(Venue, Venue.id == Event.venue_id).where(func.lower(Venue.city) == city.strip().lower())
+
+    now_expr = func.now()
+    if date_bucket == "today":
+        query = query.where(func.date(Event.start_at) == func.current_date())
+    elif date_bucket == "this_week":
+        query = query.where(
+            and_(
+                Event.start_at >= now_expr,
+                Event.start_at < now_expr + func.make_interval(days=7),
+            )
+        )
+    else:
+        query = query.where(Event.start_at >= now_expr)
+
+    events = db.execute(query.order_by(Event.start_at.asc()).limit(100)).scalars().unique().all()
+
+    if is_free is not None:
+        filtered: list[Event] = []
+        for event in events:
+            summary = _to_price_summary(event)
+            if summary is None:
+                if is_free:
+                    filtered.append(event)
+                continue
+            if summary.is_free == is_free:
+                filtered.append(event)
+        events = filtered
+
+    return [_to_discovery_item(event) for event in events]
+
+
+@router.get("/discover/{event_id}", response_model=EventDiscoveryDetailResponse)
+def discover_event_detail(
+    event_id: int,
+    db: Session = Depends(get_db),
+    _user_id: int = Depends(get_current_user_id),
+) -> EventDiscoveryDetailResponse:
+    event = (
+        db.execute(_discoverable_event_query().where(Event.id == event_id))
+        .scalars()
+        .unique()
+        .one_or_none()
+    )
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+    return _to_discovery_detail(event)
 
 
 

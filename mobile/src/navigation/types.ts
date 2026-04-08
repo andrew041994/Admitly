@@ -7,7 +7,7 @@ export type AuthStackParamList = {
 
 export type AppStackParamList = {
   Home: undefined;
-  EventDetail: undefined;
+  EventDetail: { eventId: number };
   MyTickets: undefined;
   Profile: undefined;
 };

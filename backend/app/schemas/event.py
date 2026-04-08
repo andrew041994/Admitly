@@ -19,6 +19,33 @@ class EventResponse(BaseModel):
     refund_batch_status: str | None = None
 
 
+class EventPriceSummaryResponse(BaseModel):
+    currency: str
+    min_price: str
+    is_free: bool
+
+
+class EventDiscoveryItemResponse(BaseModel):
+    id: int
+    title: str
+    short_description: str | None
+    category: str | None
+    cover_image_url: str | None
+    start_at: datetime
+    end_at: datetime
+    venue_name: str | None
+    venue_city: str | None
+    venue_country: str | None
+    custom_venue_name: str | None
+    custom_address_text: str | None
+    organizer_name: str | None
+    price_summary: EventPriceSummaryResponse | None
+
+
+class EventDiscoveryDetailResponse(EventDiscoveryItemResponse):
+    long_description: str | None
+
+
 class EventRefundBatchResponse(BaseModel):
     id: int
     event_id: int
