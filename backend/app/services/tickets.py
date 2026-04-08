@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload, object_session
 from app.models.event import Event
 from app.models.enums import EventStatus, OrderStatus, TicketStatus, TransferInviteStatus
 from app.models.order import Order
+from app.models.order_item import OrderItem
 from app.models.ticket import Ticket
 from app.models.ticket_check_in_attempt import TicketCheckInAttempt
 from app.models.ticket_transfer_invite import TicketTransferInvite
@@ -183,17 +184,16 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
     with tx_ctx:
         locked_order = (
-            db.execute(
-                select(Order)
-                .options(joinedload(Order.order_items))
-                .where(Order.id == order.id)
-                .with_for_update()
-            )
-            .unique()
+            db.execute(select(Order).where(Order.id == order.id).with_for_update())
             .scalar_one()
         )
+        order_items = (
+            db.execute(select(OrderItem).where(OrderItem.order_id == locked_order.id).order_by(OrderItem.id.asc()))
+            .scalars()
+            .all()
+        )
 
-        expected_total = sum(item.quantity for item in locked_order.order_items)
+        expected_total = sum(item.quantity for item in order_items)
         existing_tickets = (
             db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
             .scalars()
@@ -209,7 +209,7 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
 
         now = get_guyana_now()
         tickets_to_create: list[Ticket] = []
-        for item in locked_order.order_items:
+        for item in order_items:
             for _ in range(item.quantity):
                 ticket_code = _generate_ticket_code()
                 tickets_to_create.append(
