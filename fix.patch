@@ -1,98 +1,71 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/screens/CheckoutMethodScreen.tsx b/mobile/src/navigation/screens/CheckoutMethodScreen.tsx
-index 0945cc4fb5047611840de16b950035955de8ed5c..16f09e207145ec977a97c39de4137b95479b2b95 100644
---- a/mobile/src/navigation/screens/CheckoutMethodScreen.tsx
-+++ b/mobile/src/navigation/screens/CheckoutMethodScreen.tsx
-@@ -1,66 +1,86 @@
--import { Alert, StyleSheet, Text, View } from 'react-native';
--import * as Linking from 'expo-linking';
-+import { Alert, Linking, StyleSheet, Text, View } from 'react-native';
- 
- import { ApiError } from '../../api/client';
--import { getOrder, initiateMmgAgentCheckout, initiateMmgCheckout } from '../../api/orders';
-+import { completeDevTestCheckout, getOrder, initiateMmgAgentCheckout, initiateMmgCheckout } from '../../api/orders';
- import { Screen } from '../../components/Screen';
- import { ThemedButton } from '../../components/ThemedButton';
- import { theme } from '../../theme';
- import { useState } from 'react';
-+import { env } from '../../config/env';
- 
- type Props = {
-   orderId: number;
-   onOpenAgent: (referenceCode: string) => void;
-   onResult: (title: string, message: string) => void;
- };
- 
- export function CheckoutMethodScreen({ orderId, onOpenAgent, onResult }: Props) {
-   const [loading, setLoading] = useState(false);
- 
-   async function handleMmg() {
-     setLoading(true);
-     try {
-       const checkout = await initiateMmgCheckout(orderId);
-       if (checkout.checkout_url) {
-         await Linking.openURL(checkout.checkout_url);
-       }
-       const order = await getOrder(orderId);
-       onResult('Payment initiated', `Reference: ${order.reference_code}. Complete payment to confirm tickets.`);
-     } catch (err) {
-       const message = err instanceof ApiError ? err.message : 'Unable to initiate MMG checkout.';
-       Alert.alert('Checkout error', message);
-     } finally {
-       setLoading(false);
-     }
-   }
- 
-   async function handleAgent() {
-     setLoading(true);
-     try {
-       const initiated = await initiateMmgAgentCheckout(orderId);
-       onOpenAgent(initiated.payment_reference);
-     } catch (err) {
-       const message = err instanceof ApiError ? err.message : 'Unable to start MMG agent flow.';
-       Alert.alert('Checkout error', message);
-     } finally {
-       setLoading(false);
-     }
-   }
- 
-+  async function handleDevTestCheckout() {
-+    setLoading(true);
-+    try {
-+      const completed = await completeDevTestCheckout(orderId);
-+      onResult('Test checkout completed', completed.message);
-+    } catch (err) {
-+      const message = err instanceof ApiError ? err.message : 'Unable to complete test checkout.';
-+      Alert.alert('Checkout error', message);
-+    } finally {
-+      setLoading(false);
-+    }
-+  }
+diff --git a/backend/tests/test_orders_api.py b/backend/tests/test_orders_api.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f1a8b44cfb09984427fa40b32934d027cf214075
+--- /dev/null
++++ b/backend/tests/test_orders_api.py
+@@ -0,0 +1,61 @@
++import os
++from types import SimpleNamespace
 +
-   return (
-     <Screen>
-       <View style={styles.content}>
-         <Text style={styles.title}>Choose payment method</Text>
-         <Text style={styles.meta}>Every order has a reference code for support and reconciliation.</Text>
-         <ThemedButton label={loading ? 'Please wait...' : 'MMG Checkout'} onPress={handleMmg} disabled={loading} />
-         <ThemedButton label={loading ? 'Please wait...' : 'MMG Agent Checkout'} variant="secondary" onPress={handleAgent} disabled={loading} />
-+        {env.enableDevTestCheckout ? (
-+          <>
-+            <Text style={styles.devLabel}>Dev/Test only</Text>
-+            <ThemedButton label={loading ? 'Please wait...' : 'Dev Test Checkout'} variant="secondary" onPress={handleDevTestCheckout} disabled={loading} />
-+          </>
-+        ) : null}
-       </View>
-     </Screen>
-   );
- }
- 
- const styles = StyleSheet.create({
-   content: { gap: theme.spacing.md },
-   title: { color: theme.colors.textPrimary, fontSize: theme.typography.heading, fontWeight: '700' },
-   meta: { color: theme.colors.textSecondary },
-+  devLabel: { color: theme.colors.primary, fontWeight: '600' },
- });
++os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
++
++from app.api.orders import complete_dev_test_checkout
++from app.core.config import settings
++from app.main import app
++
++
++def test_dev_test_checkout_route_registered() -> None:
++    route_paths = {route.path for route in app.routes}
++
++    assert "/orders/{order_id}/payments/dev-test/complete" in route_paths
++
++
++def test_dev_test_checkout_route_is_post_and_defaults_to_http_200() -> None:
++    target_route = next(route for route in app.routes if route.path == "/orders/{order_id}/payments/dev-test/complete")
++
++    assert "POST" in target_route.methods
++    assert target_route.status_code is None
++
++
++def test_dev_test_checkout_handler_returns_payload_when_enabled(monkeypatch) -> None:
++    previous_enabled = settings.enable_dev_test_checkout
++    previous_env = settings.env
++
++    settings.enable_dev_test_checkout = True
++    settings.env = "development"
++
++    def _fake_complete_checkout(db, *, order_id: int, user_id: int):
++        assert order_id == 77
++        assert user_id == 123
++        return SimpleNamespace(
++            order_id=order_id,
++            order_reference="ORD-77",
++            provider="dev_test",
++            payment_method="dev_test",
++            payment_reference="pay-ref-77",
++            status="completed",
++            payment_verification_status="verified",
++            message="Dev test checkout completed.",
++        )
++
++    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
++    monkeypatch.setattr("app.api.orders.complete_dev_test_checkout_for_order", _fake_complete_checkout)
++
++    try:
++        response = complete_dev_test_checkout(
++            order_id=77,
++            db=object(),
++            current_user=SimpleNamespace(id=123),
++            client_ip="127.0.0.1",
++        )
++    finally:
++        settings.enable_dev_test_checkout = previous_enabled
++        settings.env = previous_env
++
++    assert response.order_id == 77
++    assert response.provider == "dev_test"
++    assert response.payment_reference == "pay-ref-77"
  
 EOF
 )

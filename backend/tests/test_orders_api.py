@@ -1,0 +1,61 @@
+import os
+from types import SimpleNamespace
+
+os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+
+from app.api.orders import complete_dev_test_checkout
+from app.core.config import settings
+from app.main import app
+
+
+def test_dev_test_checkout_route_registered() -> None:
+    route_paths = {route.path for route in app.routes}
+
+    assert "/orders/{order_id}/payments/dev-test/complete" in route_paths
+
+
+def test_dev_test_checkout_route_is_post_and_defaults_to_http_200() -> None:
+    target_route = next(route for route in app.routes if route.path == "/orders/{order_id}/payments/dev-test/complete")
+
+    assert "POST" in target_route.methods
+    assert target_route.status_code is None
+
+
+def test_dev_test_checkout_handler_returns_payload_when_enabled(monkeypatch) -> None:
+    previous_enabled = settings.enable_dev_test_checkout
+    previous_env = settings.env
+
+    settings.enable_dev_test_checkout = True
+    settings.env = "development"
+
+    def _fake_complete_checkout(db, *, order_id: int, user_id: int):
+        assert order_id == 77
+        assert user_id == 123
+        return SimpleNamespace(
+            order_id=order_id,
+            order_reference="ORD-77",
+            provider="dev_test",
+            payment_method="dev_test",
+            payment_reference="pay-ref-77",
+            status="completed",
+            payment_verification_status="verified",
+            message="Dev test checkout completed.",
+        )
+
+    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
+    monkeypatch.setattr("app.api.orders.complete_dev_test_checkout_for_order", _fake_complete_checkout)
+
+    try:
+        response = complete_dev_test_checkout(
+            order_id=77,
+            db=object(),
+            current_user=SimpleNamespace(id=123),
+            client_ip="127.0.0.1",
+        )
+    finally:
+        settings.enable_dev_test_checkout = previous_enabled
+        settings.env = previous_env
+
+    assert response.order_id == 77
+    assert response.provider == "dev_test"
+    assert response.payment_reference == "pay-ref-77"
