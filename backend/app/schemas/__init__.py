@@ -10,8 +10,8 @@ from app.schemas.mmg import (
     CreateOrderMMGAgentResponse,
     CreateOrderMMGCheckoutResponse,
     MMGCallbackResponse,
-    SubmitMMGAgentPaymentRequest,
-    SubmitMMGAgentPaymentResponse,
+    CompleteMMGAgentPaymentRequest,
+    CompleteMMGAgentPaymentResponse,
 )
 from app.schemas.event import EventCancelRequest, EventResponse
 from app.schemas.notification import (
@@ -53,8 +53,8 @@ __all__ = [
     "OrderRefundRequest",
     "CreateOrderMMGCheckoutResponse",
     "CreateOrderMMGAgentResponse",
-    "SubmitMMGAgentPaymentRequest",
-    "SubmitMMGAgentPaymentResponse",
+    "CompleteMMGAgentPaymentRequest",
+    "CompleteMMGAgentPaymentResponse",
     "MMGCallbackResponse",
     "TicketResponse",
     "TicketTransferRequest",
