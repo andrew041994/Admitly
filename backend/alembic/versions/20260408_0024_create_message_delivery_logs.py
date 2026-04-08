@@ -2,6 +2,7 @@
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import text
 
 
 revision = "20260408_0024"
@@ -20,12 +21,14 @@ message_template_type = sa.Enum(
     "event_day_update",
     "organizer_broadcast",
     name="message_template_type",
+    create_type=False,
 )
 
 message_channel = sa.Enum(
     "email",
     "push",
     name="message_channel",
+    create_type=False,
 )
 
 message_delivery_status = sa.Enum(
@@ -33,14 +36,42 @@ message_delivery_status = sa.Enum(
     "failed",
     "skipped",
     name="message_delivery_status",
+    create_type=False,
 )
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    message_template_type.create(bind, checkfirst=True)
-    message_channel.create(bind, checkfirst=True)
-    message_delivery_status.create(bind, checkfirst=True)
+    conn = op.get_bind()
+
+    conn.execute(
+        text(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'message_template_type') THEN
+                    CREATE TYPE message_template_type AS ENUM (
+                        'order_confirmation',
+                        'ticket_issued',
+                        'transfer_invite',
+                        'transfer_accepted',
+                        'refund_processed',
+                        'reminder',
+                        'event_day_update',
+                        'organizer_broadcast'
+                    );
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'message_channel') THEN
+                    CREATE TYPE message_channel AS ENUM ('email', 'push');
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'message_delivery_status') THEN
+                    CREATE TYPE message_delivery_status AS ENUM ('sent', 'failed', 'skipped');
+                END IF;
+            END$$;
+            """
+        )
+    )
 
     op.create_table(
         "message_delivery_logs",
@@ -59,11 +90,23 @@ def upgrade() -> None:
         sa.Column("is_manual_resend", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("resend_of_message_id", sa.Integer(), nullable=True),
         sa.Column("actor_user_id", sa.Integer(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.ForeignKeyConstraint(["actor_user_id"], ["users.id"], name=op.f("fk_message_delivery_logs_actor_user_id_users")),
-        sa.ForeignKeyConstraint(["recipient_user_id"], ["users.id"], name=op.f("fk_message_delivery_logs_recipient_user_id_users")),
-        sa.ForeignKeyConstraint(["resend_of_message_id"], ["message_delivery_logs.id"], name=op.f("fk_message_delivery_logs_resend_of_message_id_message_delivery_logs")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.ForeignKeyConstraint(
+            ["actor_user_id"],
+            ["users.id"],
+            name=op.f("fk_message_delivery_logs_actor_user_id_users"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["recipient_user_id"],
+            ["users.id"],
+            name=op.f("fk_message_delivery_logs_recipient_user_id_users"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["resend_of_message_id"],
+            ["message_delivery_logs.id"],
+            name=op.f("fk_message_delivery_logs_resend_of_message_id_message_delivery_logs"),
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_message_delivery_logs")),
     )
 
