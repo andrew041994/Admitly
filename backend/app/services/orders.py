@@ -110,20 +110,21 @@ def create_pending_order_from_holds(
 
     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
     with tx_ctx:
-        holds = (
-            db.execute(
-                select(TicketHold)
-                .options(joinedload(TicketHold.ticket_tier))
-                .where(TicketHold.id.in_(unique_hold_ids))
-                .with_for_update()
-            )
-            .unique()
-            .scalars()
-            .all()
-        )
+        holds = db.execute(
+            select(TicketHold)
+            .where(TicketHold.id.in_(unique_hold_ids))
+            .with_for_update()
+        ).scalars().all()
 
         if len(holds) != len(unique_hold_ids):
             raise HoldNotFoundError("One or more holds were not found.")
+
+        tiers_by_id = {
+            tier.id: tier
+            for tier in db.execute(
+                select(TicketTier).where(TicketTier.id.in_({hold.ticket_tier_id for hold in holds}))
+            ).scalars()
+        }
 
         event_ids: set[int] = set()
         currencies: set[str] = set()
@@ -138,11 +139,15 @@ def create_pending_order_from_holds(
             if hold.order_id is not None:
                 raise HoldAlreadyAttachedError(f"Hold {hold.id} has already been used in an order.")
 
+            tier = tiers_by_id.get(hold.ticket_tier_id)
+            if tier is None:
+                raise HoldNotFoundError(f"Ticket tier for hold {hold.id} was not found.")
+
             event_ids.add(hold.event_id)
-            tier_currency = hold.ticket_tier.currency
+            tier_currency = tier.currency
             currencies.add(tier_currency)
             tier_ids.append(hold.ticket_tier_id)
-            subtotal_amount += Decimal(hold.quantity) * Decimal(hold.ticket_tier.price_amount)
+            subtotal_amount += Decimal(hold.quantity) * Decimal(tier.price_amount)
 
         if len(event_ids) != 1:
             raise HoldEventMismatchError("All holds must belong to the same event.")
@@ -187,12 +192,13 @@ def create_pending_order_from_holds(
             db.flush()
 
         for hold in holds:
+            tier = tiers_by_id[hold.ticket_tier_id]
             db.add(
                 OrderItem(
                     order_id=order.id,
                     ticket_tier_id=hold.ticket_tier_id,
                     quantity=hold.quantity,
-                    unit_price=hold.ticket_tier.price_amount,
+                    unit_price=tier.price_amount,
                 )
             )
             hold.order_id = order.id

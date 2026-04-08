@@ -1,107 +1,162 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/ticket_holds.py b/backend/app/services/ticket_holds.py
-index 71755530e5675c1600e63695779ca14c5fedae7a..6e32798c7d38c7bf5050937ad27643e15d07082e 100644
---- a/backend/app/services/ticket_holds.py
-+++ b/backend/app/services/ticket_holds.py
-@@ -1,34 +1,35 @@
- from __future__ import annotations
- 
- from dataclasses import dataclass
- from datetime import datetime, time, timedelta, timezone
- from zoneinfo import ZoneInfo
- 
- from sqlalchemy import func, select
--from sqlalchemy.orm import Session, joinedload
-+from sqlalchemy.orm import Session
- 
-+from app.models.event import Event
- from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus
- from app.models.order import Order
- from app.models.order_item import OrderItem
- from app.models.ticket_hold import TicketHold
- from app.models.ticket_tier import TicketTier
- 
- GUYANA_TZ = ZoneInfo("America/Guyana")
+diff --git a/backend/app/services/orders.py b/backend/app/services/orders.py
+index 1bc4df0ce0e2e8b630b4d75b4385085bdf5dac01..c5f63863162f62bf79f71fe5424afa165e045b27 100644
+--- a/backend/app/services/orders.py
++++ b/backend/app/services/orders.py
+@@ -88,133 +88,139 @@ class OrderRefundError(OrderFlowError):
+     """Raised when refund request is invalid."""
  
  
- class TicketHoldError(ValueError):
-     """Base business-rule error for ticket holds."""
+ def _to_aware(dt: datetime) -> datetime:
+     if dt.tzinfo is None:
+         return dt.replace(tzinfo=timezone.utc)
+     return dt
  
  
- class TicketHoldWindowClosedError(TicketHoldError):
-     """Raised when event start is inside hold restriction window."""
- 
- 
- class InsufficientAvailabilityError(TicketHoldError):
-     """Raised when requested ticket quantity exceeds current availability."""
- 
- 
- @dataclass(slots=True)
- class HoldCreationResult:
-     hold: TicketHold
-     availability_remaining: int
-@@ -130,58 +131,59 @@ def get_event_ticket_tier_capacity_summaries(
-     now: datetime | None = None,
- ) -> list[TicketTierCapacitySummary]:
-     tier_ids = db.execute(
-         select(TicketTier.id).where(TicketTier.event_id == event_id).order_by(TicketTier.sort_order.asc(), TicketTier.id.asc())
-     ).scalars().all()
-     return [get_ticket_tier_capacity_summary(db, ticket_tier_id=tier_id, now=now) for tier_id in tier_ids]
- 
- 
- def create_ticket_hold(
+ def create_pending_order_from_holds(
      db: Session,
      *,
      user_id: int,
-     ticket_tier_id: int,
-     quantity: int,
+     hold_ids: list[int],
+     promo_code_text: str | None = None,
      now: datetime | None = None,
- ) -> HoldCreationResult:
-     if quantity <= 0:
-         raise TicketHoldError("Quantity must be greater than 0.")
+ ) -> Order:
+     if not hold_ids:
+         raise EmptyHoldSelectionError("At least one hold id is required.")
  
+     unique_hold_ids = list(dict.fromkeys(hold_ids))
      reference_now = _to_aware(now) if now is not None else get_guyana_now()
  
      tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
      with tx_ctx:
-         ticket_tier = db.execute(
-             select(TicketTier)
--            .options(joinedload(TicketTier.event))
-             .where(TicketTier.id == ticket_tier_id)
-             .with_for_update()
-         ).scalar_one_or_none()
+-        holds = (
+-            db.execute(
+-                select(TicketHold)
+-                .options(joinedload(TicketHold.ticket_tier))
+-                .where(TicketHold.id.in_(unique_hold_ids))
+-                .with_for_update()
+-            )
+-            .unique()
+-            .scalars()
+-            .all()
+-        )
++        holds = db.execute(
++            select(TicketHold)
++            .where(TicketHold.id.in_(unique_hold_ids))
++            .with_for_update()
++        ).scalars().all()
  
-         if ticket_tier is None:
-             raise TicketHoldError("Ticket tier not found.")
+         if len(holds) != len(unique_hold_ids):
+             raise HoldNotFoundError("One or more holds were not found.")
  
--        event = ticket_tier.event
-+        event = db.execute(select(Event).where(Event.id == ticket_tier.event_id)).scalar_one_or_none()
-+        if event is None:
-+            raise TicketHoldError("Event not found.")
-         if not ticket_tier.is_active:
-             raise TicketHoldError("Ticket tier is not active.")
-         if event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
-             raise TicketHoldError("Event is not currently sellable.")
++        tiers_by_id = {
++            tier.id: tier
++            for tier in db.execute(
++                select(TicketTier).where(TicketTier.id.in_({hold.ticket_tier_id for hold in holds}))
++            ).scalars()
++        }
++
+         event_ids: set[int] = set()
+         currencies: set[str] = set()
+         subtotal_amount = Decimal("0.00")
+         tier_ids: list[int] = []
  
-         availability_summary = get_ticket_tier_capacity_summary(db, ticket_tier_id=ticket_tier_id, now=reference_now)
-         availability = availability_summary.available_quantity
-         if quantity > availability:
-             raise InsufficientAvailabilityError("Insufficient availability for requested quantity.")
+         for hold in holds:
+             if hold.user_id != user_id:
+                 raise HoldOwnershipError(f"Hold {hold.id} does not belong to the authenticated user.")
+             if _to_aware(hold.expires_at) <= reference_now:
+                 raise HoldExpiredError(f"Hold {hold.id} is expired.")
+             if hold.order_id is not None:
+                 raise HoldAlreadyAttachedError(f"Hold {hold.id} has already been used in an order.")
  
-         expires_at = calculate_ticket_hold_expiry(event.start_at, now=reference_now)
++            tier = tiers_by_id.get(hold.ticket_tier_id)
++            if tier is None:
++                raise HoldNotFoundError(f"Ticket tier for hold {hold.id} was not found.")
++
+             event_ids.add(hold.event_id)
+-            tier_currency = hold.ticket_tier.currency
++            tier_currency = tier.currency
+             currencies.add(tier_currency)
+             tier_ids.append(hold.ticket_tier_id)
+-            subtotal_amount += Decimal(hold.quantity) * Decimal(hold.ticket_tier.price_amount)
++            subtotal_amount += Decimal(hold.quantity) * Decimal(tier.price_amount)
  
-         hold = TicketHold(
-             event_id=event.id,
-             ticket_tier_id=ticket_tier.id,
+         if len(event_ids) != 1:
+             raise HoldEventMismatchError("All holds must belong to the same event.")
+         if len(currencies) != 1:
+             raise HoldCurrencyMismatchError("All holds must share the same currency.")
+ 
+         event = db.execute(select(Event).where(Event.id == next(iter(event_ids)))).scalar_one_or_none()
+         if event is None or event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
+             raise OrderNotPayableError("Event is not currently sellable.")
+ 
+         pricing = standard_pricing(subtotal_amount)
+         if promo_code_text:
+             pricing = apply_promo_code_to_order_pricing_context(
+                 db,
+                 event_id=next(iter(event_ids)),
+                 user_id=user_id,
+                 tier_ids=tier_ids,
+                 subtotal_amount=subtotal_amount,
+                 promo_code_text=promo_code_text,
+                 now=reference_now,
+             )
+ 
+         order = Order(
              user_id=user_id,
-             quantity=quantity,
-             expires_at=expires_at,
+             event_id=next(iter(event_ids)),
+             status=OrderStatus.AWAITING_PAYMENT,
+             subtotal_amount=pricing.subtotal_amount,
+             discount_amount=pricing.discount_amount,
+             total_amount=pricing.total_amount,
+             currency=next(iter(currencies)),
+             promo_code_id=pricing.promo_code_id,
+             promo_code_text=pricing.promo_code_text,
+             discount_type=pricing.discount_type,
+             discount_value_snapshot=pricing.discount_value_snapshot,
+             pricing_source=pricing.pricing_source,
+             is_comp=False,
          )
-         db.add(hold)
+         db.add(order)
+         db.flush()
+         if not order.reference_code:
+             order.reference_code = format_order_reference(order.id)
+             db.flush()
+ 
+         for hold in holds:
++            tier = tiers_by_id[hold.ticket_tier_id]
+             db.add(
+                 OrderItem(
+                     order_id=order.id,
+                     ticket_tier_id=hold.ticket_tier_id,
+                     quantity=hold.quantity,
+-                    unit_price=hold.ticket_tier.price_amount,
++                    unit_price=tier.price_amount,
+                 )
+             )
+             hold.order_id = order.id
+ 
          db.flush()
  
-     db.refresh(hold)
-     return HoldCreationResult(hold=hold, availability_remaining=availability - quantity)
+     return (
+         db.execute(
+             select(Order)
+             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds))
+             .where(Order.id == order.id)
+         )
+         .unique()
+         .scalar_one()
+     )
+ 
+ 
+ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | None:
+     return (
+         db.execute(
+             select(Order)
+             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds), joinedload(Order.tickets))
+             .where(Order.id == order_id, Order.user_id == user_id)
+         )
+         .unique()
  
 EOF
 )
