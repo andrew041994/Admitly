@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.api.rate_limit import apply_rate_limit, request_client_ip
 from app.api.auth import get_current_user
+from app.api.ticket_holds import get_current_user_id
 from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.mmg import (
@@ -361,17 +362,17 @@ def complete_agent_payment(
 def resend_order_confirmation_notification(
     order_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    user_id: int = Depends(get_current_user_id),
     client_ip: str = Depends(request_client_ip),
 ) -> NotificationDispatchResponse:
     apply_rate_limit(
         scope="resend_confirmation",
-        key=f"{current_user.id}:{order_id}:{client_ip}",
+        key=f"{user_id}:{order_id}:{client_ip}",
         limit=settings.rate_limit_payment_submit_count,
         window_seconds=settings.rate_limit_payment_submit_window_seconds,
     )
     try:
-        result = resend_order_confirmation(db, order_id=order_id, actor_user_id=current_user.id)
+        result = resend_order_confirmation(db, order_id=order_id, actor_user_id=user_id)
     except OrderNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except OrderAuthorizationError as exc:

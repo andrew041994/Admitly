@@ -1,92 +1,93 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/models/ticket_transfer_invite.py b/backend/app/models/ticket_transfer_invite.py
-index 411888b7b63540b83998e75f6ac7a4e666c60ab1..fe5c5511f7bdf82063d6091ddd47b2dcee646e1a 100644
---- a/backend/app/models/ticket_transfer_invite.py
-+++ b/backend/app/models/ticket_transfer_invite.py
-@@ -1,50 +1,71 @@
- from __future__ import annotations
+diff --git a/backend/app/api/orders.py b/backend/app/api/orders.py
+index 5bdc268a1f7ae701cdf357d045e65a6cb36f34e2..6b9eeb76aea1ce05f100133979388fee7cf2b7e2 100644
+--- a/backend/app/api/orders.py
++++ b/backend/app/api/orders.py
+@@ -1,35 +1,36 @@
+ from fastapi import APIRouter, Depends, HTTPException, status
+ from sqlalchemy.orm import Session
+ from app.models.user import User
+ from app.services.ticket_holds import create_ticket_hold
+ from app.models.event import Event
+ from app.models.ticket_tier import TicketTier
+ from sqlalchemy import select
  
- from datetime import datetime
- from typing import TYPE_CHECKING
+ from app.api.rate_limit import apply_rate_limit, request_client_ip
+ from app.api.auth import get_current_user
++from app.api.ticket_holds import get_current_user_id
+ from app.core.config import settings
+ from app.db.session import get_db
+ from app.schemas.mmg import (
+     CreateOrderMMGAgentResponse,
+     CreateOrderMMGCheckoutResponse,
+     CompleteMMGAgentPaymentRequest,
+     CompleteMMGAgentPaymentResponse,
+ )
+ from app.schemas.notification import NotificationDispatchResponse
+ from app.schemas.order import (
+     CreateOrderFromSelectionRequest,
+     CreatePendingOrderFromHoldsRequest,
+     OrderCancelRequest,
+     OrderItemResponse,
+     OrderRefundRequest,
+     OrderResponse,
+ )
+ from app.services.orders import (
+     EmptyHoldSelectionError,
+     HoldAlreadyAttachedError,
+     HoldEventMismatchError,
+     HoldExpiredError,
+     HoldNotFoundError,
+     HoldOwnershipError,
+     OrderAuthorizationError,
+@@ -339,44 +340,44 @@ def complete_agent_payment(
+             user_id=current_user.id,
+             submitted_reference_code=payload.submitted_reference_code,
+         )
+     except PaymentAuthorizationError as exc:
+         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+     except (OrderNotPayableError, PaymentMethodMismatchError) as exc:
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+     except PaymentError as exc:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
  
--from sqlalchemy import DateTime, Enum, ForeignKey, String
-+from sqlalchemy import DateTime, ForeignKey, String
- from sqlalchemy.orm import Mapped, mapped_column, relationship
- 
- from app.db.base import Base
- from app.models.enums import TransferInviteStatus
- from app.models.mixins import TimestampMixin
-+from app.models.sa_enum import db_enum
- 
- if TYPE_CHECKING:
-     from app.models.ticket import Ticket
-     from app.models.user import User
- 
- 
- class TicketTransferInvite(TimestampMixin, Base):
-     __tablename__ = "ticket_transfer_invites"
- 
-     id: Mapped[int] = mapped_column(primary_key=True)
--    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True)
--    sender_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
--    recipient_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
-+    ticket_id: Mapped[int] = mapped_column(
-+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True
-+    )
-+    sender_user_id: Mapped[int] = mapped_column(
-+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-+    )
-+    recipient_user_id: Mapped[int | None] = mapped_column(
-+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
-+    )
-     recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
-     recipient_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
--    invite_token: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
-+    invite_token: Mapped[str] = mapped_column(
-+        String(128), nullable=False, unique=True, index=True
-+    )
-     status: Mapped[TransferInviteStatus] = mapped_column(
--        Enum(TransferInviteStatus, name="transfer_invite_status"),
-+        db_enum(TransferInviteStatus, name="transfer_invite_status"),
-         nullable=False,
-         default=TransferInviteStatus.PENDING,
-         index=True,
+     return CompleteMMGAgentPaymentResponse(
+         order_id=snapshot.order_id,
+         provider=snapshot.provider,
+         payment_method=snapshot.payment_method,
+         payment_reference=snapshot.payment_reference,
+         status=snapshot.status,
+         payment_verification_status=snapshot.payment_verification_status,
+         message=snapshot.message or "Payment submission accepted.",
      )
--    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
--    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
--    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
--    accepted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
--    revoked_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-+    expires_at: Mapped[datetime | None] = mapped_column(
-+        DateTime(timezone=True), nullable=True
-+    )
-+    accepted_at: Mapped[datetime | None] = mapped_column(
-+        DateTime(timezone=True), nullable=True
-+    )
-+    revoked_at: Mapped[datetime | None] = mapped_column(
-+        DateTime(timezone=True), nullable=True
-+    )
-+    accepted_by_user_id: Mapped[int | None] = mapped_column(
-+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-+    )
-+    revoked_by_user_id: Mapped[int | None] = mapped_column(
-+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-+    )
  
-     ticket: Mapped["Ticket"] = relationship(back_populates="transfer_invites")
--    sender: Mapped["User"] = relationship(back_populates="sent_transfer_invites", foreign_keys=[sender_user_id])
-+    sender: Mapped["User"] = relationship(
-+        back_populates="sent_transfer_invites", foreign_keys=[sender_user_id]
-+    )
-     recipient: Mapped["User | None"] = relationship(
-         back_populates="received_transfer_invites", foreign_keys=[recipient_user_id]
+ 
+ @router.post("/{order_id}/resend-confirmation", response_model=NotificationDispatchResponse)
+ def resend_order_confirmation_notification(
+     order_id: int,
+     db: Session = Depends(get_db),
+-    current_user: User = Depends(get_current_user),
++    user_id: int = Depends(get_current_user_id),
+     client_ip: str = Depends(request_client_ip),
+ ) -> NotificationDispatchResponse:
+     apply_rate_limit(
+         scope="resend_confirmation",
+-        key=f"{current_user.id}:{order_id}:{client_ip}",
++        key=f"{user_id}:{order_id}:{client_ip}",
+         limit=settings.rate_limit_payment_submit_count,
+         window_seconds=settings.rate_limit_payment_submit_window_seconds,
      )
-     accepted_by: Mapped["User | None"] = relationship(
-         back_populates="accepted_transfer_invites", foreign_keys=[accepted_by_user_id]
-     )
-     revoked_by: Mapped["User | None"] = relationship(
-         back_populates="revoked_transfer_invites", foreign_keys=[revoked_by_user_id]
-     )
+     try:
+-        result = resend_order_confirmation(db, order_id=order_id, actor_user_id=current_user.id)
++        result = resend_order_confirmation(db, order_id=order_id, actor_user_id=user_id)
+     except OrderNotFoundError as exc:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+     except OrderAuthorizationError as exc:
+         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+     except OrderResendError as exc:
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+ 
+     return NotificationDispatchResponse(success=result.success, channel_results=result.channel_results)
  
 EOF
 )
