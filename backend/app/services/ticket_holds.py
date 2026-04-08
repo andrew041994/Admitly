@@ -102,7 +102,7 @@ def get_ticket_tier_capacity_summary(
                 | (
                     (TicketHold.order_id.is_not(None))
                     & (TicketHold.expires_at > reference_now)
-                    & (Order.status == OrderStatus.PENDING)
+                    & (Order.status.in_([OrderStatus.PENDING, OrderStatus.AWAITING_PAYMENT, OrderStatus.PAYMENT_SUBMITTED, OrderStatus.FAILED]))
                 ),
             )
         ).scalar_one()

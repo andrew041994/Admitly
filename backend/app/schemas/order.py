@@ -49,3 +49,19 @@ class OrderResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemResponse]
+
+
+class TicketSelectionItemRequest(BaseModel):
+    ticket_tier_id: int
+    quantity: int = Field(gt=0)
+
+
+class CreateOrderFromSelectionRequest(BaseModel):
+    event_id: int
+    items: list[TicketSelectionItemRequest] = Field(min_length=1)
+
+
+class OrderStatusResponse(OrderResponse):
+    reference_code: str
+    payment_method: str | None = None
+    payment_verification_status: str | None = None

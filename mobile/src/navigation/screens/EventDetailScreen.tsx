@@ -10,9 +10,10 @@ import { textStyles, theme } from '../../theme';
 
 type EventDetailScreenProps = {
   eventId: number;
+  onGetTickets: (event: EventDiscoveryDetail) => void;
 };
 
-export function EventDetailScreen({ eventId }: EventDetailScreenProps) {
+export function EventDetailScreen({ eventId, onGetTickets }: EventDetailScreenProps) {
   const [event, setEvent] = useState<EventDiscoveryDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,8 +83,8 @@ export function EventDetailScreen({ eventId }: EventDetailScreenProps) {
 
           <View style={styles.ctaPanel}>
             <Text style={styles.ctaTitle}>Tickets</Text>
-            <Text style={styles.ctaSubtitle}>Tickets will be available in the next phase.</Text>
-            <ThemedButton label="Get Tickets" onPress={() => undefined} disabled />
+            <Text style={styles.ctaSubtitle}>Choose tickets and complete checkout.</Text>
+            <ThemedButton label="Get Tickets" onPress={() => onGetTickets(event)} disabled={!event.ticket_tiers?.some((tier) => tier.is_active && tier.available_quantity > 0)} />
           </View>
         </View>
       </ScrollView>

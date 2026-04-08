@@ -3,6 +3,9 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { useSession } from '../context/SessionContext';
 import { theme } from '../theme';
+import { useEffect, useState } from 'react';
+import { ApiError } from '../api/client';
+import { EventDiscoveryDetail, getDiscoverableEventDetail } from '../api/events';
 import { AppStackParamList, AuthStackParamList } from './types';
 import { BootScreen } from './screens/BootScreen';
 import { EventDetailScreen } from './screens/EventDetailScreen';
@@ -12,6 +15,10 @@ import { PlaceholderScreen } from './screens/PlaceholderScreen';
 import { ResetPasswordScreen } from './screens/ResetPasswordScreen';
 import { SignInScreen } from './screens/SignInScreen';
 import { SignUpScreen } from './screens/SignUpScreen';
+import { PurchaseResultScreen } from './screens/PurchaseResultScreen';
+import { MmgAgentCheckoutScreen } from './screens/MmgAgentCheckoutScreen';
+import { CheckoutMethodScreen } from './screens/CheckoutMethodScreen';
+import { TicketSelectionScreen } from './screens/TicketSelectionScreen';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
@@ -64,6 +71,20 @@ function AuthNavigator() {
   );
 }
 
+function TicketSelectionRoute({ eventId, onOrderCreated }: { eventId: number; onOrderCreated: (orderId: number) => void }) {
+  const [event, setEvent] = useState<EventDiscoveryDetail | null>(null);
+
+  useEffect(() => {
+    getDiscoverableEventDetail(eventId).then(setEvent).catch((err) => {
+      const message = err instanceof ApiError ? err.message : 'Unable to load ticket tiers.';
+      throw new Error(message);
+    });
+  }, [eventId]);
+
+  if (!event) return <BootScreen />;
+  return <TicketSelectionScreen event={event} onOrderCreated={onOrderCreated} />;
+}
+
 function SignedInNavigator() {
   const { signOut } = useSession();
 
@@ -85,7 +106,47 @@ function SignedInNavigator() {
         )}
       </AppStack.Screen>
       <AppStack.Screen name="EventDetail">
-        {({ route }) => <EventDetailScreen eventId={route.params.eventId} />}
+        {({ route, navigation }) => (
+          <EventDetailScreen
+            eventId={route.params.eventId}
+            onGetTickets={(event) => navigation.navigate('TicketSelection', { eventId: event.id })}
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen name="TicketSelection" options={{ title: 'Select tickets' }}>
+        {({ route, navigation }) => (
+          <TicketSelectionRoute
+            eventId={route.params.eventId}
+            onOrderCreated={(orderId) => navigation.navigate('CheckoutMethod', { eventId: route.params.eventId, orderId })}
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen name="CheckoutMethod" options={{ title: 'Checkout' }}>
+        {({ route, navigation }) => (
+          <CheckoutMethodScreen
+            orderId={route.params.orderId}
+            onOpenAgent={(referenceCode) =>
+              navigation.navigate('MmgAgentCheckout', { eventId: route.params.eventId, orderId: route.params.orderId, referenceCode })
+            }
+            onResult={(title, message) =>
+              navigation.navigate('PurchaseResult', { eventId: route.params.eventId, orderId: route.params.orderId, title, message })
+            }
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen name="MmgAgentCheckout" options={{ title: 'MMG Agent' }}>
+        {({ route, navigation }) => (
+          <MmgAgentCheckoutScreen
+            orderId={route.params.orderId}
+            referenceCode={route.params.referenceCode}
+            onResult={(title, message) =>
+              navigation.navigate('PurchaseResult', { eventId: route.params.eventId, orderId: route.params.orderId, title, message })
+            }
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen name="PurchaseResult" options={{ title: 'Purchase status' }}>
+        {({ route, navigation }) => <PurchaseResultScreen title={route.params.title} message={route.params.message} onDone={() => navigation.navigate('Home')} />}
       </AppStack.Screen>
       <AppStack.Screen
         name="MyTickets"

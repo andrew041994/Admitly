@@ -16,6 +16,7 @@ from app.schemas.event import (
     EventPriceSummaryResponse,
     EventRefundBatchResponse,
     EventResponse,
+    EventDiscoveryTicketTierResponse,
     EventStaffCreateRequest,
     EventStaffResponse,
     EventStaffUpdateRequest,
@@ -30,6 +31,7 @@ from app.services.event_staff import (
     remove_event_staff,
     update_event_staff_role,
 )
+from app.services.ticket_holds import get_ticket_tier_capacity_summary
 from app.services.events import (
     EventAuthorizationError,
     EventCancellationError,
@@ -87,9 +89,23 @@ def _to_discovery_item(event: Event) -> EventDiscoveryItemResponse:
     )
 
 
-def _to_discovery_detail(event: Event) -> EventDiscoveryDetailResponse:
+def _to_discovery_detail(event: Event, db: Session) -> EventDiscoveryDetailResponse:
     item = _to_discovery_item(event)
-    return EventDiscoveryDetailResponse(**item.model_dump(), long_description=event.long_description)
+    tiers = []
+    for tier in sorted(event.ticket_tiers, key=lambda t: (t.sort_order, t.id)):
+        capacity = get_ticket_tier_capacity_summary(db, ticket_tier_id=tier.id)
+        tiers.append(EventDiscoveryTicketTierResponse(
+            id=tier.id,
+            name=tier.name,
+            description=tier.description,
+            price_amount=str(tier.price_amount),
+            currency=tier.currency,
+            min_per_order=tier.min_per_order,
+            max_per_order=tier.max_per_order,
+            available_quantity=capacity.available_quantity,
+            is_active=tier.is_active,
+        ))
+    return EventDiscoveryDetailResponse(**item.model_dump(), long_description=event.long_description, ticket_tiers=tiers)
 
 
 def _require_admin(db: Session, *, user_id: int) -> None:
@@ -223,7 +239,7 @@ def discover_event_detail(
     )
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
-    return _to_discovery_detail(event)
+    return _to_discovery_detail(event, db)
 
 
 

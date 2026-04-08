@@ -42,8 +42,21 @@ class EventDiscoveryItemResponse(BaseModel):
     price_summary: EventPriceSummaryResponse | None
 
 
+class EventDiscoveryTicketTierResponse(BaseModel):
+    id: int
+    name: str
+    description: str | None
+    price_amount: str
+    currency: str
+    min_per_order: int
+    max_per_order: int
+    available_quantity: int
+    is_active: bool
+
+
 class EventDiscoveryDetailResponse(EventDiscoveryItemResponse):
     long_description: str | None
+    ticket_tiers: list[EventDiscoveryTicketTierResponse]
 
 
 class EventRefundBatchResponse(BaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import secrets
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from app.models.promo_code import PromoCode
     from app.models.promo_code_redemption import PromoCodeRedemption
     from app.models.support_case import SupportCase
+    from app.models.payment_attempt import PaymentAttempt
 
 
 class Order(TimestampMixin, Base):
@@ -76,6 +78,7 @@ class Order(TimestampMixin, Base):
     payout_included_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payout_paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payout_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference_code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True, index=True, default=lambda: f"ORD-{secrets.token_hex(4).upper()}")
 
     user: Mapped["User"] = relationship(foreign_keys=[user_id])
     event: Mapped["Event"] = relationship(back_populates="orders")
@@ -87,3 +90,4 @@ class Order(TimestampMixin, Base):
     promo_code: Mapped["PromoCode | None"] = relationship(back_populates="orders")
     promo_code_redemption: Mapped["PromoCodeRedemption | None"] = relationship(back_populates="order", uselist=False)
     support_cases: Mapped[list["SupportCase"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    payment_attempts: Mapped[list["PaymentAttempt"]] = relationship(back_populates="order", cascade="all, delete-orphan")

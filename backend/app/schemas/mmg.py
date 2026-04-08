@@ -29,11 +29,11 @@ class CreateOrderMMGAgentResponse(BaseModel):
     instructions: str | None = None
 
 
-class SubmitMMGAgentPaymentRequest(BaseModel):
+class CompleteMMGAgentPaymentRequest(BaseModel):
     submitted_reference_code: str
 
 
-class SubmitMMGAgentPaymentResponse(BaseModel):
+class CompleteMMGAgentPaymentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     order_id: int

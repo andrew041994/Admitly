@@ -1,9 +1,9 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
-index 6871c9e402b37556c10bf8646329703d82d25377..358760a34739224366aeabd4af077c3473c225db 100644
+index 358760a34739224366aeabd4af077c3473c225db..4937a8ece897137c3a8ec86aa3eec3ed13931bab 100644
 --- a/mobile/src/navigation/types.ts
 +++ b/mobile/src/navigation/types.ts
-@@ -1,13 +1,13 @@
+@@ -1,13 +1,17 @@
  export type AuthStackParamList = {
    SignIn: undefined;
    SignUp: undefined;
@@ -13,8 +13,11 @@ index 6871c9e402b37556c10bf8646329703d82d25377..358760a34739224366aeabd4af077c34
  
  export type AppStackParamList = {
    Home: undefined;
--  EventDetail: undefined;
-+  EventDetail: { eventId: number };
+   EventDetail: { eventId: number };
++  TicketSelection: { eventId: number };
++  CheckoutMethod: { eventId: number; orderId: number };
++  MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
++  PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
    MyTickets: undefined;
    Profile: undefined;
  };

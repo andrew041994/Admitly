@@ -1,18 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from app.models.user import User
+from app.services.ticket_holds import create_ticket_hold
+from app.models.event import Event
+from app.models.ticket_tier import TicketTier
+from sqlalchemy import select
 
 from app.api.rate_limit import apply_rate_limit, request_client_ip
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_user
 from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.mmg import (
     CreateOrderMMGAgentResponse,
     CreateOrderMMGCheckoutResponse,
-    SubmitMMGAgentPaymentRequest,
-    SubmitMMGAgentPaymentResponse,
+    CompleteMMGAgentPaymentRequest,
+    CompleteMMGAgentPaymentResponse,
 )
 from app.schemas.notification import NotificationDispatchResponse
 from app.schemas.order import (
+    CreateOrderFromSelectionRequest,
     CreatePendingOrderFromHoldsRequest,
     OrderCancelRequest,
     OrderItemResponse,
@@ -81,6 +87,9 @@ def _to_order_response(order) -> OrderResponse:
         refunded_by_user_id=order.refunded_by_user_id,
         refund_reason=order.refund_reason,
         created_at=order.created_at,
+        reference_code=order.reference_code,
+        payment_method=order.payment_method,
+        payment_verification_status=order.payment_verification_status,
         updated_at=order.updated_at,
         items=[
             OrderItemResponse(
@@ -94,23 +103,63 @@ def _to_order_response(order) -> OrderResponse:
     )
 
 
-@router.post("/from-holds", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
-def create_order_from_holds(
-    payload: CreatePendingOrderFromHoldsRequest,
+
+
+@router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
+def create_order_from_selection(
+    payload: CreateOrderFromSelectionRequest,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
     client_ip: str = Depends(request_client_ip),
 ) -> OrderResponse:
     apply_rate_limit(
         scope="order_create",
-        key=f"{user_id}:{client_ip}",
+        key=f"{current_user.id}:{client_ip}",
+        limit=settings.rate_limit_order_create_count,
+        window_seconds=settings.rate_limit_order_create_window_seconds,
+    )
+
+    hold_ids: list[int] = []
+    event = db.execute(select(Event).where(Event.id == payload.event_id)).scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+
+    for item in payload.items:
+        tier = db.execute(select(TicketTier).where(TicketTier.id == item.ticket_tier_id)).scalar_one_or_none()
+        if tier is None or tier.event_id != payload.event_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ticket tier selection.")
+        if item.quantity < tier.min_per_order or item.quantity > tier.max_per_order:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ticket quantity is outside allowed range.")
+
+        hold_result = create_ticket_hold(
+            db,
+            user_id=current_user.id,
+            ticket_tier_id=item.ticket_tier_id,
+            quantity=item.quantity,
+        )
+        hold_ids.append(hold_result.hold.id)
+
+    order = create_pending_order_from_holds(db, user_id=current_user.id, hold_ids=hold_ids)
+    return _to_order_response(order)
+
+
+@router.post("/from-holds", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
+def create_order_from_holds(
+    payload: CreatePendingOrderFromHoldsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    client_ip: str = Depends(request_client_ip),
+) -> OrderResponse:
+    apply_rate_limit(
+        scope="order_create",
+        key=f"{current_user.id}:{client_ip}",
         limit=settings.rate_limit_order_create_count,
         window_seconds=settings.rate_limit_order_create_window_seconds,
     )
     try:
         order = create_pending_order_from_holds(
             db,
-            user_id=user_id,
+            user_id=current_user.id,
             hold_ids=payload.hold_ids,
             promo_code_text=payload.promo_code_text,
         )
@@ -137,9 +186,9 @@ def create_order_from_holds(
 def get_order(
     order_id: int,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ) -> OrderResponse:
-    order = get_order_for_user(db, order_id=order_id, user_id=user_id)
+    order = get_order_for_user(db, order_id=order_id, user_id=current_user.id)
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found.")
 
@@ -151,13 +200,13 @@ def cancel_order(
     order_id: int,
     payload: OrderCancelRequest,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ) -> OrderResponse:
     try:
         order = cancel_pending_order(
             db,
             order_id=order_id,
-            actor_user_id=user_id,
+            actor_user_id=current_user.id,
             reason=payload.reason,
         )
     except OrderNotFoundError as exc:
@@ -175,13 +224,13 @@ def refund_order(
     order_id: int,
     payload: OrderRefundRequest,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ) -> OrderResponse:
     try:
         order = refund_completed_order(
             db,
             order_id=order_id,
-            actor_user_id=user_id,
+            actor_user_id=current_user.id,
             reason=payload.reason,
         )
     except OrderNotFoundError as exc:
@@ -198,18 +247,18 @@ def refund_order(
 def initiate_mmg_checkout(
     order_id: int,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
     client_ip: str = Depends(request_client_ip),
 ) -> CreateOrderMMGCheckoutResponse:
     _require_mmg_enabled()
     apply_rate_limit(
         scope="payment_initiate",
-        key=f"{user_id}:{order_id}:{client_ip}",
+        key=f"{current_user.id}:{order_id}:{client_ip}",
         limit=settings.rate_limit_payment_initiate_count,
         window_seconds=settings.rate_limit_payment_initiate_window_seconds,
     )
     try:
-        snapshot = create_mmg_checkout_for_order(db, order_id=order_id, user_id=user_id)
+        snapshot = create_mmg_checkout_for_order(db, order_id=order_id, user_id=current_user.id)
     except PaymentAuthorizationError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except (OrderNotPayableError, PaymentMethodMismatchError) as exc:
@@ -236,18 +285,18 @@ def initiate_mmg_checkout(
 def initiate_mmg_agent_checkout(
     order_id: int,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
     client_ip: str = Depends(request_client_ip),
 ) -> CreateOrderMMGAgentResponse:
     _require_mmg_enabled()
     apply_rate_limit(
         scope="payment_initiate",
-        key=f"{user_id}:{order_id}:{client_ip}",
+        key=f"{current_user.id}:{order_id}:{client_ip}",
         limit=settings.rate_limit_payment_initiate_count,
         window_seconds=settings.rate_limit_payment_initiate_window_seconds,
     )
     try:
-        snapshot = create_mmg_agent_checkout_for_order(db, order_id=order_id, user_id=user_id)
+        snapshot = create_mmg_agent_checkout_for_order(db, order_id=order_id, user_id=current_user.id)
     except PaymentAuthorizationError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except (OrderNotPayableError, PaymentMethodMismatchError) as exc:
@@ -268,18 +317,18 @@ def initiate_mmg_agent_checkout(
     )
 
 
-@router.post("/{order_id}/payments/mmg-agent/submit", response_model=SubmitMMGAgentPaymentResponse)
-def submit_agent_payment(
+@router.post("/{order_id}/payments/mmg-agent/complete", response_model=CompleteMMGAgentPaymentResponse)
+def complete_agent_payment(
     order_id: int,
-    payload: SubmitMMGAgentPaymentRequest,
+    payload: CompleteMMGAgentPaymentRequest,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
     client_ip: str = Depends(request_client_ip),
-) -> SubmitMMGAgentPaymentResponse:
+) -> CompleteMMGAgentPaymentResponse:
     _require_mmg_enabled()
     apply_rate_limit(
         scope="payment_submit",
-        key=f"{user_id}:{order_id}:{client_ip}",
+        key=f"{current_user.id}:{order_id}:{client_ip}",
         limit=settings.rate_limit_payment_submit_count,
         window_seconds=settings.rate_limit_payment_submit_window_seconds,
     )
@@ -287,7 +336,7 @@ def submit_agent_payment(
         snapshot = submit_mmg_agent_payment(
             db,
             order_id=order_id,
-            user_id=user_id,
+            user_id=current_user.id,
             submitted_reference_code=payload.submitted_reference_code,
         )
     except PaymentAuthorizationError as exc:
@@ -297,7 +346,7 @@ def submit_agent_payment(
     except PaymentError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    return SubmitMMGAgentPaymentResponse(
+    return CompleteMMGAgentPaymentResponse(
         order_id=snapshot.order_id,
         provider=snapshot.provider,
         payment_method=snapshot.payment_method,
@@ -312,17 +361,17 @@ def submit_agent_payment(
 def resend_order_confirmation_notification(
     order_id: int,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
     client_ip: str = Depends(request_client_ip),
 ) -> NotificationDispatchResponse:
     apply_rate_limit(
         scope="resend_confirmation",
-        key=f"{user_id}:{order_id}:{client_ip}",
+        key=f"{current_user.id}:{order_id}:{client_ip}",
         limit=settings.rate_limit_payment_submit_count,
         window_seconds=settings.rate_limit_payment_submit_window_seconds,
     )
     try:
-        result = resend_order_confirmation(db, order_id=order_id, actor_user_id=user_id)
+        result = resend_order_confirmation(db, order_id=order_id, actor_user_id=current_user.id)
     except OrderNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except OrderAuthorizationError as exc:

@@ -8,6 +8,7 @@ from app.models.organizer_balance_adjustment import OrganizerBalanceAdjustment
 from app.models.refund import Refund
 from app.models.order import Order
 from app.models.order_item import OrderItem
+from app.models.payment_attempt import PaymentAttempt
 from app.models.organizer_profile import OrganizerProfile
 from app.models.promo_code import PromoCode
 from app.models.promo_code_redemption import PromoCodeRedemption
@@ -41,6 +42,7 @@ __all__ = [
     "TicketTier",
     "Order",
     "OrderItem",
+    "PaymentAttempt",
     "Refund",
     "Dispute",
     "FinancialEntry",

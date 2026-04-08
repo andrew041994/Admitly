@@ -137,7 +137,7 @@ def test_create_pending_order_from_single_active_hold(db_session: Session) -> No
 
     order = create_pending_order_from_holds(db_session, user_id=user.id, hold_ids=[hold.id], now=now)
 
-    assert order.status == OrderStatus.PENDING
+    assert order.status == OrderStatus.AWAITING_PAYMENT
     assert order.total_amount == Decimal("300.00")
     assert len(order.order_items) == 1
     assert order.order_items[0].quantity == 2
@@ -179,7 +179,7 @@ def test_create_pending_order_from_multiple_holds_same_event(db_session: Session
         now=now,
     )
 
-    assert order.status == OrderStatus.PENDING
+    assert order.status == OrderStatus.AWAITING_PAYMENT
     assert order.total_amount == Decimal("600.00")
     assert len(order.order_items) == 2
 
@@ -247,7 +247,7 @@ def test_create_pending_order_rejects_already_attached_hold(db_session: Session)
     existing_order = Order(
         user_id=user.id,
         event_id=event.id,
-        status=OrderStatus.PENDING,
+        status=OrderStatus.AWAITING_PAYMENT,
         total_amount=Decimal("100.00"),
         currency="GYD",
     )

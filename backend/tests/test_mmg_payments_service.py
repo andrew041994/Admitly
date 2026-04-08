@@ -87,7 +87,7 @@ def _seed_order_with_hold(db: Session, *, user_email: str = "u@example.com") -> 
     order = Order(
         user_id=user.id,
         event_id=event.id,
-        status=OrderStatus.PENDING,
+        status=OrderStatus.AWAITING_PAYMENT,
         total_amount=Decimal("200.00"),
         currency="GYD",
     )
@@ -155,7 +155,7 @@ def test_mmg_checkout_initiation_is_idempotent_and_pending_not_sold(db_session: 
     assert first.checkout_url
     assert first.payment_reference == second.payment_reference
     assert first.checkout_url == second.checkout_url
-    assert first.status == "pending"
+    assert first.status == "awaiting_payment"
     assert before == after
 
 
@@ -195,7 +195,7 @@ def test_mmg_agent_submit_pending_and_rejected_paths(db_session: Session) -> Non
         submitted_reference_code=initiated.payment_reference,
     )
     assert pending.payment_verification_status == "pending_verification"
-    assert pending.status == "pending"
+    assert pending.status == "payment_submitted"
 
     settings.mmg_agent_auto_verify_enabled = True
     order2, _, user2 = _seed_order_with_hold(db_session, user_email="reject@example.com")
@@ -207,7 +207,7 @@ def test_mmg_agent_submit_pending_and_rejected_paths(db_session: Session) -> Non
         submitted_reference_code=f"{initiated2.payment_reference}-FAIL",
     )
     assert rejected.payment_verification_status == "rejected"
-    assert rejected.status == "pending"
+    assert rejected.status == "failed"
 
 
 def test_manual_agent_verify_hook_and_callback_scaffold(db_session: Session) -> None:
@@ -296,7 +296,7 @@ def test_callback_cannot_complete_order_after_hold_expiration(db_session: Sessio
         )
 
     db_session.refresh(checkout_order)
-    assert checkout_order.status == OrderStatus.PENDING
+    assert checkout_order.status == OrderStatus.AWAITING_PAYMENT
 
 
 def test_live_mode_missing_config_fails_clearly(db_session: Session) -> None:

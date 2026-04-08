@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import json
 import logging
 
 from sqlalchemy import select
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.enums import OrderStatus
 from app.models.order import Order
+from app.models.payment_attempt import PaymentAttempt
 from app.services.orders import (
     OrderNotPayableError,
     complete_paid_order,
@@ -56,6 +58,31 @@ class OrderPaymentSnapshot:
     checkout_url: str | None = None
     instructions: str | None = None
     message: str | None = None
+
+
+def _record_payment_attempt(
+    db: Session,
+    *,
+    order: Order,
+    payment_method: str,
+    status: str,
+    verification_status: str,
+    provider_reference: str | None = None,
+    request_payload: dict | None = None,
+    response_payload: dict | None = None,
+) -> None:
+    db.add(
+        PaymentAttempt(
+            order_id=order.id,
+            provider="mmg",
+            payment_method=payment_method,
+            status=status,
+            verification_status=verification_status,
+            provider_reference=provider_reference,
+            request_payload=json.dumps(request_payload) if request_payload else None,
+            response_payload=json.dumps(response_payload) if response_payload else None,
+        )
+    )
 
 
 def _load_order_for_payment(db: Session, *, order_id: int) -> Order:
@@ -109,7 +136,18 @@ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -
         order.payment_method = "mmg_checkout"
         order.payment_reference = checkout.payment_reference
         order.payment_checkout_url = checkout.checkout_url
+        order.status = OrderStatus.AWAITING_PAYMENT
         order.payment_verification_status = "pending"
+
+        _record_payment_attempt(
+            db,
+            order=order,
+            payment_method="mmg_checkout",
+            status=order.status.value,
+            verification_status=order.payment_verification_status,
+            provider_reference=order.payment_reference,
+            response_payload={"checkout_url": order.payment_checkout_url},
+        )
         db.flush()
 
         return OrderPaymentSnapshot(
@@ -146,7 +184,17 @@ def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: 
         order.payment_method = "mmg_agent"
         order.payment_reference = payment_reference
         order.payment_checkout_url = None
+        order.status = OrderStatus.AWAITING_PAYMENT
         order.payment_verification_status = "pending"
+
+        _record_payment_attempt(
+            db,
+            order=order,
+            payment_method="mmg_agent",
+            status=order.status.value,
+            verification_status=order.payment_verification_status,
+            provider_reference=order.payment_reference,
+        )
         db.flush()
 
         return OrderPaymentSnapshot(
@@ -158,7 +206,7 @@ def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: 
             currency=order.currency,
             status=order.status.value,
             payment_verification_status=order.payment_verification_status,
-            instructions="Pay at any MMG agent, then submit this reference in Admitly.",
+            instructions="Pay at any MMG agent, then tap Complete Payment in Admitly.",
         )
 
 
@@ -193,6 +241,7 @@ def submit_mmg_agent_payment(
             raise PaymentMethodMismatchError("Order is not configured for MMG agent payments.")
 
         order.payment_submitted_at = get_guyana_now()
+        order.status = OrderStatus.PAYMENT_SUBMITTED
 
         outcome = verify_agent_payment_reference(
             order_reference=order.payment_reference,
@@ -205,8 +254,18 @@ def submit_mmg_agent_payment(
             order.payment_verification_status = "verified"
             complete_paid_order(db, order, paid_at=get_guyana_now(), payment_reference=order.payment_reference)
         elif outcome.status == MMGVerificationResult.REJECTED:
-            order.status = OrderStatus.PENDING
+            order.status = OrderStatus.FAILED
 
+        _record_payment_attempt(
+            db,
+            order=order,
+            payment_method="mmg_agent",
+            status=order.status.value,
+            verification_status=order.payment_verification_status,
+            provider_reference=order.payment_reference,
+            request_payload={"submitted_reference_code": submitted_reference_code},
+            response_payload={"message": outcome.message},
+        )
         db.flush()
         return OrderPaymentSnapshot(
             order_id=order.id,
@@ -261,8 +320,18 @@ def handle_mmg_callback(db: Session, *, payload: dict) -> OrderPaymentSnapshot:
             if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
                 logger.info("Out-of-order unpaid callback ignored for finalized order", extra={"order_id": order.id})
             else:
+                order.status = OrderStatus.PAYMENT_SUBMITTED
                 order.payment_verification_status = "pending_verification"
 
+        _record_payment_attempt(
+            db,
+            order=order,
+            payment_method=order.payment_method or "mmg_checkout",
+            status=order.status.value,
+            verification_status=order.payment_verification_status,
+            provider_reference=order.payment_reference or parsed.payment_reference,
+            response_payload=payload,
+        )
         db.flush()
         return OrderPaymentSnapshot(
             order_id=order.id,

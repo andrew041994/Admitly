@@ -29,7 +29,10 @@ class EventStaffRole(str, Enum):
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
+    AWAITING_PAYMENT = "awaiting_payment"
+    PAYMENT_SUBMITTED = "payment_submitted"
     COMPLETED = "completed"
+    FAILED = "failed"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
 

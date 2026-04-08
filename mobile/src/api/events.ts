@@ -23,8 +23,21 @@ export type EventDiscoveryItem = {
   price_summary: EventPriceSummary | null;
 };
 
+export type EventDiscoveryTicketTier = {
+  id: number;
+  name: string;
+  description: string | null;
+  price_amount: string;
+  currency: string;
+  min_per_order: number;
+  max_per_order: number;
+  available_quantity: number;
+  is_active: boolean;
+};
+
 export type EventDiscoveryDetail = EventDiscoveryItem & {
   long_description: string | null;
+  ticket_tiers: EventDiscoveryTicketTier[];
 };
 
 export type DiscoveryFilters = {

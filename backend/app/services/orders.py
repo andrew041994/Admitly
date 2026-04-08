@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import secrets
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -34,6 +35,17 @@ from app.services.tickets import invalidate_order_tickets, issue_tickets_for_com
 from app.services.ticket_holds import get_guyana_now, get_ticket_tier_capacity_summary
 
 GYT = ZoneInfo("America/Guyana")
+
+
+
+
+def generate_order_reference_code(db: Session) -> str:
+    for _ in range(8):
+        candidate = f"ORD-{secrets.token_hex(4).upper()}"
+        exists = db.execute(select(Order.id).where(Order.reference_code == candidate)).scalar_one_or_none()
+        if exists is None:
+            return candidate
+    raise OrderFlowError("Unable to allocate unique order reference code.")
 
 
 class OrderFlowError(ValueError):
@@ -168,7 +180,7 @@ def create_pending_order_from_holds(
         order = Order(
             user_id=user_id,
             event_id=next(iter(event_ids)),
-            status=OrderStatus.PENDING,
+            status=OrderStatus.AWAITING_PAYMENT,
             subtotal_amount=pricing.subtotal_amount,
             discount_amount=pricing.discount_amount,
             total_amount=pricing.total_amount,
@@ -179,6 +191,7 @@ def create_pending_order_from_holds(
             discount_value_snapshot=pricing.discount_value_snapshot,
             pricing_source=pricing.pricing_source,
             is_comp=False,
+            reference_code=generate_order_reference_code(db),
         )
         db.add(order)
         db.flush()
@@ -235,8 +248,8 @@ def validate_order_still_payable(order: Order | None, now: datetime | None = Non
     if order is None:
         raise OrderNotFoundError("Order not found.")
 
-    if order.status != OrderStatus.PENDING:
-        raise OrderNotPayableError("Only pending orders can be paid.")
+    if order.status not in {OrderStatus.PENDING, OrderStatus.AWAITING_PAYMENT, OrderStatus.PAYMENT_SUBMITTED, OrderStatus.FAILED}:
+        raise OrderNotPayableError("Order is not in a payable state.")
 
     if not order.ticket_holds:
         return
@@ -396,7 +409,7 @@ def cancel_pending_order(
             raise OrderAuthorizationError("Only the order owner can cancel a pending order.")
         if order.status == OrderStatus.CANCELLED:
             raise OrderCancellationError("Order is already cancelled.")
-        if order.status != OrderStatus.PENDING:
+        if order.status not in {OrderStatus.PENDING, OrderStatus.AWAITING_PAYMENT, OrderStatus.PAYMENT_SUBMITTED, OrderStatus.FAILED}:
             raise OrderCancellationError("Only pending orders can be cancelled.")
 
         now = get_guyana_now()
