@@ -44,11 +44,11 @@ EVENT_C_SLUG = "admitly-live-past-showcase-seed"
 
 @dataclass
 class SeedSummary:
-    users: list[User]
-    organizer_profile: OrganizerProfile
-    venue: Venue
-    events: list[Event]
-    tiers: list[TicketTier]
+    users: list[dict]
+    organizer: dict
+    venue: dict
+    events: list[dict]
+    tiers: list[dict]
 
 
 def get_or_create_user(
@@ -403,11 +403,26 @@ def seed() -> SeedSummary:
         db.commit()
 
         return SeedSummary(
-            users=[admin_user, organizer_user, buyer_user],
-            organizer_profile=organizer_profile,
-            venue=venue,
-            events=[event_a, event_b, event_c],
-            tiers=tiers,
+            users=[
+                {"id": admin_user.id, "email": admin_user.email, "is_admin": admin_user.is_admin},
+                {
+                    "id": organizer_user.id,
+                    "email": organizer_user.email,
+                    "is_admin": organizer_user.is_admin,
+                },
+                {"id": buyer_user.id, "email": buyer_user.email, "is_admin": buyer_user.is_admin},
+            ],
+            organizer={"id": organizer_profile.id},
+            venue={"id": venue.id, "name": venue.name},
+            events=[
+                {"id": event_a.id, "title": event_a.title, "slug": event_a.slug},
+                {"id": event_b.id, "title": event_b.title, "slug": event_b.slug},
+                {"id": event_c.id, "title": event_c.title, "slug": event_c.slug},
+            ],
+            tiers=[
+                {"id": tier.id, "event_id": tier.event_id, "name": tier.name, "tier_code": tier.tier_code}
+                for tier in tiers
+            ],
         )
 
 
@@ -416,24 +431,24 @@ def print_summary(summary: SeedSummary) -> None:
     print(f"Test password (all seeded users): {SEED_PASSWORD}")
     print("\nUsers:")
     for user in summary.users:
-        role = "admin" if user.is_admin else "standard"
-        print(f"  - {user.email} (id={user.id}, role={role})")
+        role = "admin" if user["is_admin"] else "standard"
+        print(f"  - {user['email']} (id={user['id']}, role={role})")
 
     print("\nOrganizer / Venue:")
-    print(f"  - organizer_profile_id={summary.organizer_profile.id}")
-    print(f"  - venue_id={summary.venue.id} ({summary.venue.name})")
+    print(f"  - organizer_profile_id={summary.organizer['id']}")
+    print(f"  - venue_id={summary.venue['id']} ({summary.venue['name']})")
 
     print("\nEvents:")
     for event in summary.events:
-        print(f"  - id={event.id} | {event.title} | slug={event.slug}")
+        print(f"  - id={event['id']} | {event['title']} | slug={event['slug']}")
 
     print("\nTicket tiers:")
     for tier in summary.tiers:
-        print(f"  - id={tier.id} | event_id={tier.event_id} | {tier.name} ({tier.tier_code})")
+        print(f"  - id={tier['id']} | event_id={tier['event_id']} | {tier['name']} ({tier['tier_code']})")
 
     print("\nSuggested frontend paths:")
     for event in summary.events:
-        print(f"  - /events/{event.id}")
+        print(f"  - /events/{event['id']}")
 
 
 if __name__ == "__main__":
