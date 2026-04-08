@@ -5,8 +5,9 @@ from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
+from app.models.event import Event
 from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus
 from app.models.order import Order
 from app.models.order_item import OrderItem
@@ -152,7 +153,6 @@ def create_ticket_hold(
     with tx_ctx:
         ticket_tier = db.execute(
             select(TicketTier)
-            .options(joinedload(TicketTier.event))
             .where(TicketTier.id == ticket_tier_id)
             .with_for_update()
         ).scalar_one_or_none()
@@ -160,7 +160,9 @@ def create_ticket_hold(
         if ticket_tier is None:
             raise TicketHoldError("Ticket tier not found.")
 
-        event = ticket_tier.event
+        event = db.execute(select(Event).where(Event.id == ticket_tier.event_id)).scalar_one_or_none()
+        if event is None:
+            raise TicketHoldError("Event not found.")
         if not ticket_tier.is_active:
             raise TicketHoldError("Ticket tier is not active.")
         if event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:

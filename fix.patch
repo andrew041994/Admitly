@@ -1,157 +1,107 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/scripts/seed_test_data.py b/backend/scripts/seed_test_data.py
-index 0fff7ffb80a079ded45880be80257d81e1bf73f3..d38e22d7f6ee673f195d2f23c749a201ef6ac48e 100644
---- a/backend/scripts/seed_test_data.py
-+++ b/backend/scripts/seed_test_data.py
-@@ -22,55 +22,55 @@ from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility
- from app.models.event import Event
- from app.models.organizer_profile import OrganizerProfile
+diff --git a/backend/app/services/ticket_holds.py b/backend/app/services/ticket_holds.py
+index 71755530e5675c1600e63695779ca14c5fedae7a..6e32798c7d38c7bf5050937ad27643e15d07082e 100644
+--- a/backend/app/services/ticket_holds.py
++++ b/backend/app/services/ticket_holds.py
+@@ -1,34 +1,35 @@
+ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+ from datetime import datetime, time, timedelta, timezone
+ from zoneinfo import ZoneInfo
+ 
+ from sqlalchemy import func, select
+-from sqlalchemy.orm import Session, joinedload
++from sqlalchemy.orm import Session
+ 
++from app.models.event import Event
+ from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus
+ from app.models.order import Order
+ from app.models.order_item import OrderItem
+ from app.models.ticket_hold import TicketHold
  from app.models.ticket_tier import TicketTier
- from app.models.user import User
- from app.models.venue import Venue
- from app.services.ticket_holds import get_guyana_now
  
- SEED_PASSWORD = "Password123!"
- 
- ADMIN_EMAIL = "admin+seed@admitly.local"
- ORGANIZER_EMAIL = "organizer+seed@admitly.local"
- BUYER_EMAIL = "buyer+seed@admitly.local"
- 
- VENUE_NAME = "Georgetown Event Arena"
- 
- EVENT_A_TITLE = "Admitly Live: Launch Night"
- EVENT_A_SLUG = "admitly-live-launch-night-seed"
- EVENT_B_TITLE = "Admitly Live: Closed Sales Demo"
- EVENT_B_SLUG = "admitly-live-closed-sales-demo-seed"
- EVENT_C_TITLE = "Admitly Live: Past Showcase"
- EVENT_C_SLUG = "admitly-live-past-showcase-seed"
+ GUYANA_TZ = ZoneInfo("America/Guyana")
  
  
- @dataclass
- class SeedSummary:
--    users: list[User]
--    organizer_profile: OrganizerProfile
--    venue: Venue
--    events: list[Event]
--    tiers: list[TicketTier]
-+    users: list[dict]
-+    organizer: dict
-+    venue: dict
-+    events: list[dict]
-+    tiers: list[dict]
+ class TicketHoldError(ValueError):
+     """Base business-rule error for ticket holds."""
  
  
- def get_or_create_user(
+ class TicketHoldWindowClosedError(TicketHoldError):
+     """Raised when event start is inside hold restriction window."""
+ 
+ 
+ class InsufficientAvailabilityError(TicketHoldError):
+     """Raised when requested ticket quantity exceeds current availability."""
+ 
+ 
+ @dataclass(slots=True)
+ class HoldCreationResult:
+     hold: TicketHold
+     availability_remaining: int
+@@ -130,58 +131,59 @@ def get_event_ticket_tier_capacity_summaries(
+     now: datetime | None = None,
+ ) -> list[TicketTierCapacitySummary]:
+     tier_ids = db.execute(
+         select(TicketTier.id).where(TicketTier.event_id == event_id).order_by(TicketTier.sort_order.asc(), TicketTier.id.asc())
+     ).scalars().all()
+     return [get_ticket_tier_capacity_summary(db, ticket_tier_id=tier_id, now=now) for tier_id in tier_ids]
+ 
+ 
+ def create_ticket_hold(
      db: Session,
      *,
-     email: str,
-     full_name: str,
-     phone: str,
-     is_admin: bool,
- ) -> User:
-     normalized = normalize_email(email)
-     user = db.execute(select(User).where(User.email == normalized)).scalar_one_or_none()
-     if user is None:
-         user = User(
-             email=normalized,
-             full_name=full_name,
-             phone=phone,
-             is_admin=is_admin,
-             is_active=True,
-             is_verified=True,
-             auth_provider="local",
-             hashed_password=hash_password(SEED_PASSWORD),
+     user_id: int,
+     ticket_tier_id: int,
+     quantity: int,
+     now: datetime | None = None,
+ ) -> HoldCreationResult:
+     if quantity <= 0:
+         raise TicketHoldError("Quantity must be greater than 0.")
+ 
+     reference_now = _to_aware(now) if now is not None else get_guyana_now()
+ 
+     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+     with tx_ctx:
+         ticket_tier = db.execute(
+             select(TicketTier)
+-            .options(joinedload(TicketTier.event))
+             .where(TicketTier.id == ticket_tier_id)
+             .with_for_update()
+         ).scalar_one_or_none()
+ 
+         if ticket_tier is None:
+             raise TicketHoldError("Ticket tier not found.")
+ 
+-        event = ticket_tier.event
++        event = db.execute(select(Event).where(Event.id == ticket_tier.event_id)).scalar_one_or_none()
++        if event is None:
++            raise TicketHoldError("Event not found.")
+         if not ticket_tier.is_active:
+             raise TicketHoldError("Ticket tier is not active.")
+         if event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
+             raise TicketHoldError("Event is not currently sellable.")
+ 
+         availability_summary = get_ticket_tier_capacity_summary(db, ticket_tier_id=ticket_tier_id, now=reference_now)
+         availability = availability_summary.available_quantity
+         if quantity > availability:
+             raise InsufficientAvailabilityError("Insufficient availability for requested quantity.")
+ 
+         expires_at = calculate_ticket_hold_expiry(event.start_at, now=reference_now)
+ 
+         hold = TicketHold(
+             event_id=event.id,
+             ticket_tier_id=ticket_tier.id,
+             user_id=user_id,
+             quantity=quantity,
+             expires_at=expires_at,
          )
-         db.add(user)
+         db.add(hold)
          db.flush()
-@@ -381,60 +381,75 @@ def seed() -> SeedSummary:
-                 quantity_held=0,
-                 sales_start_at=event_b.sales_start_at,
-                 sales_end_at=event_b.sales_end_at,
-                 is_active=False,
-                 sort_order=1,
-             ),
-             get_or_create_ticket_tier(
-                 db,
-                 event=event_c,
-                 name="Archive Pass",
-                 tier_code="ARCHIVE",
-                 price_amount=Decimal("2500.00"),
-                 quantity_total=90,
-                 quantity_sold=57,
-                 quantity_held=0,
-                 sales_start_at=event_c.sales_start_at,
-                 sales_end_at=event_c.sales_end_at,
-                 is_active=True,
-                 sort_order=1,
-             ),
-         ]
  
-         db.commit()
- 
-         return SeedSummary(
--            users=[admin_user, organizer_user, buyer_user],
--            organizer_profile=organizer_profile,
--            venue=venue,
--            events=[event_a, event_b, event_c],
--            tiers=tiers,
-+            users=[
-+                {"id": admin_user.id, "email": admin_user.email, "is_admin": admin_user.is_admin},
-+                {
-+                    "id": organizer_user.id,
-+                    "email": organizer_user.email,
-+                    "is_admin": organizer_user.is_admin,
-+                },
-+                {"id": buyer_user.id, "email": buyer_user.email, "is_admin": buyer_user.is_admin},
-+            ],
-+            organizer={"id": organizer_profile.id},
-+            venue={"id": venue.id, "name": venue.name},
-+            events=[
-+                {"id": event_a.id, "title": event_a.title, "slug": event_a.slug},
-+                {"id": event_b.id, "title": event_b.title, "slug": event_b.slug},
-+                {"id": event_c.id, "title": event_c.title, "slug": event_c.slug},
-+            ],
-+            tiers=[
-+                {"id": tier.id, "event_id": tier.event_id, "name": tier.name, "tier_code": tier.tier_code}
-+                for tier in tiers
-+            ],
-         )
- 
- 
- def print_summary(summary: SeedSummary) -> None:
-     print("\n✅ Admitly local/dev seed data ready")
-     print(f"Test password (all seeded users): {SEED_PASSWORD}")
-     print("\nUsers:")
-     for user in summary.users:
--        role = "admin" if user.is_admin else "standard"
--        print(f"  - {user.email} (id={user.id}, role={role})")
-+        role = "admin" if user["is_admin"] else "standard"
-+        print(f"  - {user['email']} (id={user['id']}, role={role})")
- 
-     print("\nOrganizer / Venue:")
--    print(f"  - organizer_profile_id={summary.organizer_profile.id}")
--    print(f"  - venue_id={summary.venue.id} ({summary.venue.name})")
-+    print(f"  - organizer_profile_id={summary.organizer['id']}")
-+    print(f"  - venue_id={summary.venue['id']} ({summary.venue['name']})")
- 
-     print("\nEvents:")
-     for event in summary.events:
--        print(f"  - id={event.id} | {event.title} | slug={event.slug}")
-+        print(f"  - id={event['id']} | {event['title']} | slug={event['slug']}")
- 
-     print("\nTicket tiers:")
-     for tier in summary.tiers:
--        print(f"  - id={tier.id} | event_id={tier.event_id} | {tier.name} ({tier.tier_code})")
-+        print(f"  - id={tier['id']} | event_id={tier['event_id']} | {tier['name']} ({tier['tier_code']})")
- 
-     print("\nSuggested frontend paths:")
-     for event in summary.events:
--        print(f"  - /events/{event.id}")
-+        print(f"  - /events/{event['id']}")
- 
- 
- if __name__ == "__main__":
-     print_summary(seed())
+     db.refresh(hold)
+     return HoldCreationResult(hold=hold, availability_remaining=availability - quantity)
  
 EOF
 )
