@@ -88,7 +88,7 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
         <View style={styles.header}>
           <View>
             <Text style={styles.kicker}>DISCOVER</Text>
-            <Text style={styles.title}>Admitly Nights</Text>
+            <Text style={styles.title}>Admitly</Text>
           </View>
           <View style={styles.headerLinks}><Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable><Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable></View>
         </View>
