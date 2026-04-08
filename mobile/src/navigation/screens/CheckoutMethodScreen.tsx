@@ -1,12 +1,12 @@
-import { Alert, StyleSheet, Text, View } from 'react-native';
-import * as Linking from 'expo-linking';
+import { Alert, Linking, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../../api/client';
-import { getOrder, initiateMmgAgentCheckout, initiateMmgCheckout } from '../../api/orders';
+import { completeDevTestCheckout, getOrder, initiateMmgAgentCheckout, initiateMmgCheckout } from '../../api/orders';
 import { Screen } from '../../components/Screen';
 import { ThemedButton } from '../../components/ThemedButton';
 import { theme } from '../../theme';
 import { useState } from 'react';
+import { env } from '../../config/env';
 
 type Props = {
   orderId: number;
@@ -47,6 +47,19 @@ export function CheckoutMethodScreen({ orderId, onOpenAgent, onResult }: Props) 
     }
   }
 
+  async function handleDevTestCheckout() {
+    setLoading(true);
+    try {
+      const completed = await completeDevTestCheckout(orderId);
+      onResult('Test checkout completed', completed.message);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Unable to complete test checkout.';
+      Alert.alert('Checkout error', message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <Screen>
       <View style={styles.content}>
@@ -54,6 +67,12 @@ export function CheckoutMethodScreen({ orderId, onOpenAgent, onResult }: Props) 
         <Text style={styles.meta}>Every order has a reference code for support and reconciliation.</Text>
         <ThemedButton label={loading ? 'Please wait...' : 'MMG Checkout'} onPress={handleMmg} disabled={loading} />
         <ThemedButton label={loading ? 'Please wait...' : 'MMG Agent Checkout'} variant="secondary" onPress={handleAgent} disabled={loading} />
+        {env.enableDevTestCheckout ? (
+          <>
+            <Text style={styles.devLabel}>Dev/Test only</Text>
+            <ThemedButton label={loading ? 'Please wait...' : 'Dev Test Checkout'} variant="secondary" onPress={handleDevTestCheckout} disabled={loading} />
+          </>
+        ) : null}
       </View>
     </Screen>
   );
@@ -63,4 +82,5 @@ const styles = StyleSheet.create({
   content: { gap: theme.spacing.md },
   title: { color: theme.colors.textPrimary, fontSize: theme.typography.heading, fontWeight: '700' },
   meta: { color: theme.colors.textSecondary },
+  devLabel: { color: theme.colors.primary, fontWeight: '600' },
 });

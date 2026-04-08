@@ -17,7 +17,8 @@
       "bundler": "metro"
     },
     "extra": {
-      "apiBaseUrl": "http://192.168.1.123:8000"
+      "apiBaseUrl": "http://192.168.1.123:8000",
+      "enableDevTestCheckout": "false"
     }
   }
 }

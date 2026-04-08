@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     mmg_agent_manual_fallback_enabled: bool = Field(
         default=True, alias="MMG_AGENT_MANUAL_FALLBACK_ENABLED"
     )
+    enable_dev_test_checkout: bool = Field(default=False, alias="ENABLE_DEV_TEST_CHECKOUT")
 
     email_notifications_enabled: bool = Field(default=False, alias="EMAIL_NOTIFICATIONS_ENABLED")
     email_provider: str = Field(default="noop", alias="EMAIL_PROVIDER")

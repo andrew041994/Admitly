@@ -18,6 +18,12 @@ Set the API URL with Expo public env vars:
 EXPO_PUBLIC_API_BASE_URL=http://localhost:8000 npm run start
 ```
 
+Enable local-only dev checkout button:
+
+```bash
+EXPO_PUBLIC_ENABLE_DEV_TEST_CHECKOUT=true
+```
+
 Fallback config is defined in `app.json` under `expo.extra.apiBaseUrl`.
 
 ## Included in Phase 1

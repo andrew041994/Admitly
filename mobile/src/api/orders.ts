@@ -46,6 +46,22 @@ export type MmgAgentResponse = {
   payment_verification_status: string;
 };
 
+export type CompleteMmgAgentResponse = {
+  order_id: number;
+  payment_reference: string;
+  status: string;
+  payment_verification_status: string;
+  message: string;
+};
+
+export type DevTestCheckoutResponse = {
+  order_id: number;
+  payment_reference: string;
+  status: string;
+  payment_verification_status: string;
+  message: string;
+};
+
 export async function createOrderFromSelection(eventId: number, items: PurchaseSelectionItem[]): Promise<Order> {
   return apiRequest<Order>({ path: '/orders', method: 'POST', body: JSON.stringify({ event_id: eventId, items }) });
 }
@@ -58,8 +74,8 @@ export async function initiateMmgAgentCheckout(orderId: number): Promise<MmgAgen
   return apiRequest<MmgAgentResponse>({ path: `/orders/${orderId}/payments/mmg-agent/initiate`, method: 'POST' });
 }
 
-export async function completeMmgAgentPayment(orderId: number, submittedReferenceCode: string): Promise<MmgAgentResponse> {
-  return apiRequest<MmgAgentResponse>({
+export async function completeMmgAgentPayment(orderId: number, submittedReferenceCode: string): Promise<CompleteMmgAgentResponse> {
+  return apiRequest<CompleteMmgAgentResponse>({
     path: `/orders/${orderId}/payments/mmg-agent/complete`,
     method: 'POST',
     body: JSON.stringify({ submitted_reference_code: submittedReferenceCode }),
@@ -68,4 +84,8 @@ export async function completeMmgAgentPayment(orderId: number, submittedReferenc
 
 export async function getOrder(orderId: number): Promise<Order> {
   return apiRequest<Order>({ path: `/orders/${orderId}`, method: 'GET' });
+}
+
+export async function completeDevTestCheckout(orderId: number): Promise<DevTestCheckoutResponse> {
+  return apiRequest<DevTestCheckoutResponse>({ path: `/orders/${orderId}/payments/dev-test/complete`, method: 'POST' });
 }

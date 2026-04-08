@@ -48,6 +48,19 @@ class CompleteMMGAgentPaymentResponse(BaseModel):
     message: str
 
 
+class CompleteDevTestCheckoutResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    order_id: int
+    order_reference: str
+    provider: str
+    payment_method: str
+    payment_reference: str
+    status: str
+    payment_verification_status: str
+    message: str
+
+
 class MMGCallbackResponse(BaseModel):
     order_id: int
     status: str

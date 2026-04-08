@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.enums import OrderStatus
 from app.models.order import Order
 from app.models.payment_attempt import PaymentAttempt
+from app.core.config import settings
 from app.services.orders import (
     OrderNotPayableError,
     complete_paid_order,
@@ -71,11 +72,12 @@ def _record_payment_attempt(
     provider_reference: str | None = None,
     request_payload: dict | None = None,
     response_payload: dict | None = None,
+    provider: str = "mmg",
 ) -> None:
     db.add(
         PaymentAttempt(
             order_id=order.id,
-            provider="mmg",
+            provider=provider,
             payment_method=payment_method,
             status=status,
             verification_status=verification_status,
@@ -162,6 +164,89 @@ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -
             currency=order.currency,
             status=order.status.value,
             payment_verification_status=order.payment_verification_status,
+        )
+
+
+def _is_production_env() -> bool:
+    return (settings.env or "").strip().lower() in {"prod", "production"}
+
+
+def _ensure_dev_test_checkout_enabled() -> None:
+    if not settings.enable_dev_test_checkout or _is_production_env():
+        raise PaymentError("Dev test checkout is unavailable.")
+
+
+def complete_dev_test_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
+    _ensure_dev_test_checkout_enabled()
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        order = _load_order_for_payment(db, order_id=order_id)
+        _assert_order_owner(order, user_id=user_id)
+
+        if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
+            logger.info(
+                "Duplicate dev-test checkout complete ignored for finalized order",
+                extra={"order_id": order.id, "order_reference": order.reference_code, "user_id": order.user_id, "env": settings.env},
+            )
+            return OrderPaymentSnapshot(
+                order_id=order.id,
+                order_reference=order.reference_code,
+                provider=order.payment_provider or "dev_test",
+                payment_method=order.payment_method or "dev_test",
+                payment_reference=order.payment_reference or f"DEV-{order.reference_code}",
+                amount=order.total_amount,
+                currency=order.currency,
+                status=order.status.value,
+                payment_verification_status=order.payment_verification_status,
+                message="Payment already completed.",
+            )
+
+        validate_order_still_payable(order)
+
+        if order.payment_method in {"mmg_checkout", "mmg_agent"}:
+            raise PaymentMethodMismatchError("Order is already configured for MMG checkout.")
+
+        payment_reference = order.payment_reference or f"DEV-{order.reference_code}"
+        order.payment_provider = "dev_test"
+        order.payment_method = "dev_test"
+        order.payment_reference = payment_reference
+        order.payment_checkout_url = None
+        order.payment_verification_status = "verified"
+        complete_paid_order(db, order, paid_at=get_guyana_now(), payment_reference=payment_reference)
+
+        _record_payment_attempt(
+            db,
+            order=order,
+            payment_method="dev_test",
+            status=order.status.value,
+            verification_status=order.payment_verification_status,
+            provider_reference=order.payment_reference,
+            response_payload={"mode": "dev_test", "message": "Dev test checkout completed."},
+            provider="dev_test",
+        )
+        logger.info(
+            "Dev test checkout completed",
+            extra={
+                "order_id": order.id,
+                "order_reference": order.reference_code,
+                "user_id": order.user_id,
+                "payment_reference": order.payment_reference,
+                "env": settings.env,
+                "checkout_mode": "dev_test",
+            },
+        )
+        db.flush()
+        return OrderPaymentSnapshot(
+            order_id=order.id,
+            order_reference=order.reference_code,
+            provider=order.payment_provider or "dev_test",
+            payment_method=order.payment_method or "dev_test",
+            payment_reference=order.payment_reference or payment_reference,
+            amount=order.total_amount,
+            currency=order.currency,
+            status=order.status.value,
+            payment_verification_status=order.payment_verification_status,
+            message="Dev test checkout completed.",
         )
 
 
@@ -380,6 +465,7 @@ __all__ = [
     "OrderPaymentSnapshot",
     "create_mmg_checkout_for_order",
     "create_mmg_agent_checkout_for_order",
+    "complete_dev_test_checkout_for_order",
     "submit_mmg_agent_payment",
     "mark_agent_payment_verified",
     "handle_mmg_callback",

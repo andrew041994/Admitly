@@ -12,6 +12,7 @@ from app.api.ticket_holds import get_current_user_id
 from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.mmg import (
+    CompleteDevTestCheckoutResponse,
     CreateOrderMMGAgentResponse,
     CreateOrderMMGCheckoutResponse,
     CompleteMMGAgentPaymentRequest,
@@ -51,6 +52,7 @@ from app.services.payments import (
     PaymentAuthorizationError,
     PaymentError,
     PaymentMethodMismatchError,
+    complete_dev_test_checkout_for_order,
     create_mmg_agent_checkout_for_order,
     create_mmg_checkout_for_order,
     submit_mmg_agent_payment,
@@ -65,6 +67,12 @@ def _require_mmg_enabled() -> None:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="MMG payments are currently disabled.",
         )
+
+
+def _require_dev_test_checkout_enabled() -> None:
+    env = (settings.env or "").strip().lower()
+    if not settings.enable_dev_test_checkout or env in {"prod", "production"}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
 
 
 def _to_order_response(order) -> OrderResponse:
@@ -358,6 +366,45 @@ def complete_agent_payment(
         status=snapshot.status,
         payment_verification_status=snapshot.payment_verification_status,
         message=snapshot.message or "Payment submission accepted.",
+    )
+
+
+@router.post("/{order_id}/payments/dev-test/complete", response_model=CompleteDevTestCheckoutResponse)
+def complete_dev_test_checkout(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    client_ip: str = Depends(request_client_ip),
+) -> CompleteDevTestCheckoutResponse:
+    _require_dev_test_checkout_enabled()
+    apply_rate_limit(
+        scope="payment_submit",
+        key=f"{current_user.id}:{order_id}:{client_ip}",
+        limit=settings.rate_limit_payment_submit_count,
+        window_seconds=settings.rate_limit_payment_submit_window_seconds,
+    )
+    try:
+        snapshot = complete_dev_test_checkout_for_order(
+            db,
+            order_id=order_id,
+            user_id=current_user.id,
+        )
+    except PaymentAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except (OrderNotPayableError, PaymentMethodMismatchError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PaymentError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return CompleteDevTestCheckoutResponse(
+        order_id=snapshot.order_id,
+        order_reference=snapshot.order_reference,
+        provider=snapshot.provider,
+        payment_method=snapshot.payment_method,
+        payment_reference=snapshot.payment_reference,
+        status=snapshot.status,
+        payment_verification_status=snapshot.payment_verification_status,
+        message=snapshot.message or "Dev test checkout completed.",
     )
 
 

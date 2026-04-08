@@ -1,162 +1,98 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/orders.py b/backend/app/services/orders.py
-index 1bc4df0ce0e2e8b630b4d75b4385085bdf5dac01..c5f63863162f62bf79f71fe5424afa165e045b27 100644
---- a/backend/app/services/orders.py
-+++ b/backend/app/services/orders.py
-@@ -88,133 +88,139 @@ class OrderRefundError(OrderFlowError):
-     """Raised when refund request is invalid."""
+diff --git a/mobile/src/navigation/screens/CheckoutMethodScreen.tsx b/mobile/src/navigation/screens/CheckoutMethodScreen.tsx
+index 0945cc4fb5047611840de16b950035955de8ed5c..16f09e207145ec977a97c39de4137b95479b2b95 100644
+--- a/mobile/src/navigation/screens/CheckoutMethodScreen.tsx
++++ b/mobile/src/navigation/screens/CheckoutMethodScreen.tsx
+@@ -1,66 +1,86 @@
+-import { Alert, StyleSheet, Text, View } from 'react-native';
+-import * as Linking from 'expo-linking';
++import { Alert, Linking, StyleSheet, Text, View } from 'react-native';
  
+ import { ApiError } from '../../api/client';
+-import { getOrder, initiateMmgAgentCheckout, initiateMmgCheckout } from '../../api/orders';
++import { completeDevTestCheckout, getOrder, initiateMmgAgentCheckout, initiateMmgCheckout } from '../../api/orders';
+ import { Screen } from '../../components/Screen';
+ import { ThemedButton } from '../../components/ThemedButton';
+ import { theme } from '../../theme';
+ import { useState } from 'react';
++import { env } from '../../config/env';
  
- def _to_aware(dt: datetime) -> datetime:
-     if dt.tzinfo is None:
-         return dt.replace(tzinfo=timezone.utc)
-     return dt
+ type Props = {
+   orderId: number;
+   onOpenAgent: (referenceCode: string) => void;
+   onResult: (title: string, message: string) => void;
+ };
  
+ export function CheckoutMethodScreen({ orderId, onOpenAgent, onResult }: Props) {
+   const [loading, setLoading] = useState(false);
  
- def create_pending_order_from_holds(
-     db: Session,
-     *,
-     user_id: int,
-     hold_ids: list[int],
-     promo_code_text: str | None = None,
-     now: datetime | None = None,
- ) -> Order:
-     if not hold_ids:
-         raise EmptyHoldSelectionError("At least one hold id is required.")
+   async function handleMmg() {
+     setLoading(true);
+     try {
+       const checkout = await initiateMmgCheckout(orderId);
+       if (checkout.checkout_url) {
+         await Linking.openURL(checkout.checkout_url);
+       }
+       const order = await getOrder(orderId);
+       onResult('Payment initiated', `Reference: ${order.reference_code}. Complete payment to confirm tickets.`);
+     } catch (err) {
+       const message = err instanceof ApiError ? err.message : 'Unable to initiate MMG checkout.';
+       Alert.alert('Checkout error', message);
+     } finally {
+       setLoading(false);
+     }
+   }
  
-     unique_hold_ids = list(dict.fromkeys(hold_ids))
-     reference_now = _to_aware(now) if now is not None else get_guyana_now()
+   async function handleAgent() {
+     setLoading(true);
+     try {
+       const initiated = await initiateMmgAgentCheckout(orderId);
+       onOpenAgent(initiated.payment_reference);
+     } catch (err) {
+       const message = err instanceof ApiError ? err.message : 'Unable to start MMG agent flow.';
+       Alert.alert('Checkout error', message);
+     } finally {
+       setLoading(false);
+     }
+   }
  
-     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-     with tx_ctx:
--        holds = (
--            db.execute(
--                select(TicketHold)
--                .options(joinedload(TicketHold.ticket_tier))
--                .where(TicketHold.id.in_(unique_hold_ids))
--                .with_for_update()
--            )
--            .unique()
--            .scalars()
--            .all()
--        )
-+        holds = db.execute(
-+            select(TicketHold)
-+            .where(TicketHold.id.in_(unique_hold_ids))
-+            .with_for_update()
-+        ).scalars().all()
- 
-         if len(holds) != len(unique_hold_ids):
-             raise HoldNotFoundError("One or more holds were not found.")
- 
-+        tiers_by_id = {
-+            tier.id: tier
-+            for tier in db.execute(
-+                select(TicketTier).where(TicketTier.id.in_({hold.ticket_tier_id for hold in holds}))
-+            ).scalars()
-+        }
++  async function handleDevTestCheckout() {
++    setLoading(true);
++    try {
++      const completed = await completeDevTestCheckout(orderId);
++      onResult('Test checkout completed', completed.message);
++    } catch (err) {
++      const message = err instanceof ApiError ? err.message : 'Unable to complete test checkout.';
++      Alert.alert('Checkout error', message);
++    } finally {
++      setLoading(false);
++    }
++  }
 +
-         event_ids: set[int] = set()
-         currencies: set[str] = set()
-         subtotal_amount = Decimal("0.00")
-         tier_ids: list[int] = []
+   return (
+     <Screen>
+       <View style={styles.content}>
+         <Text style={styles.title}>Choose payment method</Text>
+         <Text style={styles.meta}>Every order has a reference code for support and reconciliation.</Text>
+         <ThemedButton label={loading ? 'Please wait...' : 'MMG Checkout'} onPress={handleMmg} disabled={loading} />
+         <ThemedButton label={loading ? 'Please wait...' : 'MMG Agent Checkout'} variant="secondary" onPress={handleAgent} disabled={loading} />
++        {env.enableDevTestCheckout ? (
++          <>
++            <Text style={styles.devLabel}>Dev/Test only</Text>
++            <ThemedButton label={loading ? 'Please wait...' : 'Dev Test Checkout'} variant="secondary" onPress={handleDevTestCheckout} disabled={loading} />
++          </>
++        ) : null}
+       </View>
+     </Screen>
+   );
+ }
  
-         for hold in holds:
-             if hold.user_id != user_id:
-                 raise HoldOwnershipError(f"Hold {hold.id} does not belong to the authenticated user.")
-             if _to_aware(hold.expires_at) <= reference_now:
-                 raise HoldExpiredError(f"Hold {hold.id} is expired.")
-             if hold.order_id is not None:
-                 raise HoldAlreadyAttachedError(f"Hold {hold.id} has already been used in an order.")
- 
-+            tier = tiers_by_id.get(hold.ticket_tier_id)
-+            if tier is None:
-+                raise HoldNotFoundError(f"Ticket tier for hold {hold.id} was not found.")
-+
-             event_ids.add(hold.event_id)
--            tier_currency = hold.ticket_tier.currency
-+            tier_currency = tier.currency
-             currencies.add(tier_currency)
-             tier_ids.append(hold.ticket_tier_id)
--            subtotal_amount += Decimal(hold.quantity) * Decimal(hold.ticket_tier.price_amount)
-+            subtotal_amount += Decimal(hold.quantity) * Decimal(tier.price_amount)
- 
-         if len(event_ids) != 1:
-             raise HoldEventMismatchError("All holds must belong to the same event.")
-         if len(currencies) != 1:
-             raise HoldCurrencyMismatchError("All holds must share the same currency.")
- 
-         event = db.execute(select(Event).where(Event.id == next(iter(event_ids)))).scalar_one_or_none()
-         if event is None or event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
-             raise OrderNotPayableError("Event is not currently sellable.")
- 
-         pricing = standard_pricing(subtotal_amount)
-         if promo_code_text:
-             pricing = apply_promo_code_to_order_pricing_context(
-                 db,
-                 event_id=next(iter(event_ids)),
-                 user_id=user_id,
-                 tier_ids=tier_ids,
-                 subtotal_amount=subtotal_amount,
-                 promo_code_text=promo_code_text,
-                 now=reference_now,
-             )
- 
-         order = Order(
-             user_id=user_id,
-             event_id=next(iter(event_ids)),
-             status=OrderStatus.AWAITING_PAYMENT,
-             subtotal_amount=pricing.subtotal_amount,
-             discount_amount=pricing.discount_amount,
-             total_amount=pricing.total_amount,
-             currency=next(iter(currencies)),
-             promo_code_id=pricing.promo_code_id,
-             promo_code_text=pricing.promo_code_text,
-             discount_type=pricing.discount_type,
-             discount_value_snapshot=pricing.discount_value_snapshot,
-             pricing_source=pricing.pricing_source,
-             is_comp=False,
-         )
-         db.add(order)
-         db.flush()
-         if not order.reference_code:
-             order.reference_code = format_order_reference(order.id)
-             db.flush()
- 
-         for hold in holds:
-+            tier = tiers_by_id[hold.ticket_tier_id]
-             db.add(
-                 OrderItem(
-                     order_id=order.id,
-                     ticket_tier_id=hold.ticket_tier_id,
-                     quantity=hold.quantity,
--                    unit_price=hold.ticket_tier.price_amount,
-+                    unit_price=tier.price_amount,
-                 )
-             )
-             hold.order_id = order.id
- 
-         db.flush()
- 
-     return (
-         db.execute(
-             select(Order)
-             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds))
-             .where(Order.id == order.id)
-         )
-         .unique()
-         .scalar_one()
-     )
- 
- 
- def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | None:
-     return (
-         db.execute(
-             select(Order)
-             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds), joinedload(Order.tickets))
-             .where(Order.id == order_id, Order.user_id == user_id)
-         )
-         .unique()
+ const styles = StyleSheet.create({
+   content: { gap: theme.spacing.md },
+   title: { color: theme.colors.textPrimary, fontSize: theme.typography.heading, fontWeight: '700' },
+   meta: { color: theme.colors.textSecondary },
++  devLabel: { color: theme.colors.primary, fontWeight: '600' },
+ });
  
 EOF
 )

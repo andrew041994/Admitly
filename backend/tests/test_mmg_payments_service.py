@@ -12,6 +12,8 @@ from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, 
 from app.services.orders import OrderNotPayableError, validate_order_still_payable
 from app.services.payments import (
     PaymentAuthorizationError,
+    PaymentError,
+    complete_dev_test_checkout_for_order,
     create_mmg_agent_checkout_for_order,
     create_mmg_checkout_for_order,
     handle_mmg_callback,
@@ -19,6 +21,7 @@ from app.services.payments import (
     submit_mmg_agent_payment,
 )
 from app.services.ticket_holds import get_ticket_type_availability
+from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
 
 
 @pytest.fixture
@@ -325,3 +328,71 @@ def test_mmg_checkout_uses_discounted_total_amount(db_session: Session) -> None:
 
     snapshot = create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     assert snapshot.amount == Decimal("150.00")
+
+
+def test_dev_test_checkout_disabled_by_default(db_session: Session) -> None:
+    settings.enable_dev_test_checkout = False
+    order, _, user = _seed_order_with_hold(db_session, user_email="dev-disabled@example.com")
+    with pytest.raises(PaymentError, match="Dev test checkout is unavailable"):
+        complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+
+
+def test_dev_test_checkout_hard_disabled_in_production_env(db_session: Session) -> None:
+    settings.enable_dev_test_checkout = True
+    settings.env = "production"
+    order, _, user = _seed_order_with_hold(db_session, user_email="dev-prod-guard@example.com")
+    with pytest.raises(PaymentError, match="Dev test checkout is unavailable"):
+        complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+    settings.env = "development"
+    settings.enable_dev_test_checkout = False
+
+
+def test_dev_test_checkout_completes_order_issues_tickets_and_wallet_payload(db_session: Session) -> None:
+    settings.enable_dev_test_checkout = True
+    order, _, user = _seed_order_with_hold(db_session, user_email="dev-success@example.com")
+
+    snapshot = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+    db_session.refresh(order)
+
+    assert snapshot.status == "completed"
+    assert snapshot.payment_verification_status == "verified"
+    assert snapshot.provider == "dev_test"
+    assert snapshot.payment_method == "dev_test"
+    assert snapshot.payment_reference.startswith("DEV-")
+    assert order.status == OrderStatus.COMPLETED
+    assert order.payment_provider == "dev_test"
+    assert order.payment_method == "dev_test"
+    assert order.payment_verification_status == "verified"
+    assert len(order.tickets) == 2
+    assert all(ticket.issued_at is not None for ticket in order.tickets)
+    assert all(ticket.ticket_code for ticket in order.tickets)
+    assert all(ticket.qr_payload for ticket in order.tickets)
+
+    wallet = list_wallet_tickets(db_session, user_id=user.id)
+    assert len(wallet) == 2
+    detail = get_wallet_ticket(db_session, user_id=user.id, ticket_id=wallet[0].ticket.id)
+    assert detail is not None
+    assert detail.ticket.qr_payload
+    settings.enable_dev_test_checkout = False
+
+
+def test_dev_test_checkout_rejects_wrong_user(db_session: Session) -> None:
+    settings.enable_dev_test_checkout = True
+    order, _, _ = _seed_order_with_hold(db_session, user_email="dev-owner@example.com")
+    with pytest.raises(PaymentAuthorizationError):
+        complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=999)
+    settings.enable_dev_test_checkout = False
+
+
+def test_dev_test_checkout_is_idempotent_and_does_not_duplicate_tickets(db_session: Session) -> None:
+    settings.enable_dev_test_checkout = True
+    order, _, user = _seed_order_with_hold(db_session, user_email="dev-idempotent@example.com")
+
+    first = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+    second = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+    db_session.refresh(order)
+
+    assert first.status == "completed"
+    assert second.status == "completed"
+    assert len(order.tickets) == 2
+    settings.enable_dev_test_checkout = False
