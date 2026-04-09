@@ -651,7 +651,7 @@ def accept_ticket_transfer_invite(
             raise TicketNotFoundError("Transfer invite not found.")
         accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
         if accepting_user is None:
-            raise TicketAuthorizationError("Accepting user not found.")
+            raise TicketTransferError("Accepting user not found.")
         if (
             invite.status == TransferInviteStatus.ACCEPTED
             and invite.recipient_user_id == accepting_user_id
