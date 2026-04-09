@@ -199,7 +199,7 @@ def test_acceptance_requires_matching_email_or_phone(db_session: Session) -> Non
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
     correct = User(email="claim@example.com", full_name="Claim User", phone="+59270066")
     wrong_email = User(email="wrong@example.com", full_name="Wrong Email", phone="+59270066")
-    wrong_phone = User(email="claim@example.com", full_name="Wrong Phone", phone="+59212345")
+    wrong_phone = User(email="claim2@example.com", full_name="Wrong Phone", phone="+59212345")
     db_session.add_all([correct, wrong_email, wrong_phone])
     db_session.commit()
     db_session.refresh(correct)

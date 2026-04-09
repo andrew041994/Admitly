@@ -676,11 +676,11 @@ def accept_ticket_transfer_invite(
         validate_ticket_transferable(ticket, current_user_id=invite.sender_user_id)
 
         if invite.recipient_user_id is not None and invite.recipient_user_id != accepting_user_id:
-            raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
+            raise TicketTransferError("This transfer invite is assigned to a different user.")
         if invite.recipient_email is not None and normalize_email(accepting_user.email) != invite.recipient_email:
-            raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
+            raise TicketTransferError("This transfer invite is assigned to a different email.")
         if invite.recipient_phone is not None and _normalize_phone(accepting_user.phone) != invite.recipient_phone:
-            raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
+            raise TicketTransferError("This transfer invite is assigned to a different phone number.")
 
         ticket.owner_user_id = accepting_user_id
         ticket.user_id = accepting_user_id
