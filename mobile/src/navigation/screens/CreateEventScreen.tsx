@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import DateTimePicker, { DateTimePickerAndroid, type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 
 import { ApiError } from '../../api/client';
@@ -33,10 +33,13 @@ type DateTimeField = {
   time: Date | null;
 };
 
-type IosPickerState = {
+type DateTimeFieldKey = 'start_at' | 'end_at' | 'sales_start_at' | 'sales_end_at';
+
+type PickerSession = {
+  field: DateTimeFieldKey | 'doors_open_at';
   mode: 'date' | 'time';
   value: Date;
-  onPick: (date: Date) => void;
+  selectedDate?: Date;
 } | null;
 
 const formatDate = (value: Date) =>
@@ -69,7 +72,8 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const [doorsOpenAt, setDoorsOpenAt] = useState<Date | null>(null);
   const [salesStartAt, setSalesStartAt] = useState<DateTimeField>({ date: null, time: null });
   const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
-  const [iosPicker, setIosPicker] = useState<IosPickerState>(null);
+  const [pickerSession, setPickerSession] = useState<PickerSession>(null);
+  const [iosDraftValue, setIosDraftValue] = useState<Date>(new Date());
   const [venueName, setVenueName] = useState('');
   const [addressText, setAddressText] = useState('');
   const [refundPolicyText, setRefundPolicyText] = useState('');
@@ -91,20 +95,126 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
     setTiers((current) => current.map((tier, idx) => (idx === index ? { ...tier, ...patch } : tier)));
   };
 
-  const showPicker = (mode: 'date' | 'time', value: Date, onPick: (date: Date) => void) => {
+  const openPicker = (nextSession: Exclude<PickerSession, null>) => {
     if (Platform.OS === 'android') {
       DateTimePickerAndroid.open({
-        value,
-        mode,
+        value: nextSession.value,
+        mode: nextSession.mode,
         is24Hour: false,
         onChange: (event: DateTimePickerEvent, selectedDate) => {
           if (event.type !== 'set' || !selectedDate) return;
-          onPick(selectedDate);
+          if (nextSession.field === 'doors_open_at') {
+            setDoorsOpenAt(selectedDate);
+            return;
+          }
+
+          if (nextSession.mode === 'date') {
+            const nextTimeValue =
+              nextSession.field === 'start_at'
+                ? startAt.time ?? selectedDate
+                : nextSession.field === 'end_at'
+                  ? endAt.time ?? startAt.time ?? selectedDate
+                  : nextSession.field === 'sales_start_at'
+                    ? salesStartAt.time ?? selectedDate
+                    : salesEndAt.time ?? selectedDate;
+
+            openPicker({
+              field: nextSession.field,
+              mode: 'time',
+              value: nextTimeValue,
+              selectedDate,
+            });
+            return;
+          }
+
+          const finalDate = nextSession.selectedDate;
+          if (!finalDate) return;
+
+          if (nextSession.field === 'start_at') {
+            setStartAt({ date: finalDate, time: selectedDate });
+            return;
+          }
+          if (nextSession.field === 'end_at') {
+            setEndAt({ date: finalDate, time: selectedDate });
+            return;
+          }
+          if (nextSession.field === 'sales_start_at') {
+            setSalesStartAt({ date: finalDate, time: selectedDate });
+            return;
+          }
+          setSalesEndAt({ date: finalDate, time: selectedDate });
         },
       });
       return;
     }
-    setIosPicker({ mode, value, onPick });
+
+    setIosDraftValue(nextSession.value);
+    setPickerSession(nextSession);
+  };
+
+  const startDateTimeFlow = (field: DateTimeFieldKey) => {
+    const now = new Date();
+    if (field === 'start_at') {
+      openPicker({ field, mode: 'date', value: startAt.date ?? now });
+      return;
+    }
+    if (field === 'end_at') {
+      openPicker({ field, mode: 'date', value: endAt.date ?? startAt.date ?? now });
+      return;
+    }
+    if (field === 'sales_start_at') {
+      openPicker({ field, mode: 'date', value: salesStartAt.date ?? now });
+      return;
+    }
+    openPicker({ field, mode: 'date', value: salesEndAt.date ?? now });
+  };
+
+  const completeIosSelection = () => {
+    if (!pickerSession) return;
+
+    if (pickerSession.field === 'doors_open_at') {
+      setDoorsOpenAt(iosDraftValue);
+      setPickerSession(null);
+      return;
+    }
+
+    if (pickerSession.mode === 'date') {
+      const nextTimeValue =
+        pickerSession.field === 'start_at'
+          ? startAt.time ?? iosDraftValue
+          : pickerSession.field === 'end_at'
+            ? endAt.time ?? startAt.time ?? iosDraftValue
+            : pickerSession.field === 'sales_start_at'
+              ? salesStartAt.time ?? iosDraftValue
+              : salesEndAt.time ?? iosDraftValue;
+
+      setPickerSession({
+        field: pickerSession.field,
+        mode: 'time',
+        value: nextTimeValue,
+        selectedDate: iosDraftValue,
+      });
+      setIosDraftValue(nextTimeValue);
+      return;
+    }
+
+    const finalDate = pickerSession.selectedDate;
+    if (!finalDate) {
+      setPickerSession(null);
+      return;
+    }
+
+    if (pickerSession.field === 'start_at') {
+      setStartAt({ date: finalDate, time: iosDraftValue });
+    } else if (pickerSession.field === 'end_at') {
+      setEndAt({ date: finalDate, time: iosDraftValue });
+    } else if (pickerSession.field === 'sales_start_at') {
+      setSalesStartAt({ date: finalDate, time: iosDraftValue });
+    } else if (pickerSession.field === 'sales_end_at') {
+      setSalesEndAt({ date: finalDate, time: iosDraftValue });
+    }
+
+    setPickerSession(null);
   };
 
   const submitValidationError = useMemo(() => {
@@ -180,155 +290,148 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Create Event</Text>
+    <>
+      <ScrollView contentContainerStyle={styles.container}>
+        <Text style={styles.title}>Create Event</Text>
 
-      <Text style={styles.sectionTitle}>Basic Info</Text>
-      <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Event title" placeholderTextColor={theme.colors.textSecondary} />
-      <TextInput style={styles.input} value={shortDescription} onChangeText={setShortDescription} placeholder="Short description" placeholderTextColor={theme.colors.textSecondary} />
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        multiline
-        numberOfLines={4}
-        value={longDescription}
-        onChangeText={setLongDescription}
-        placeholder="Long description"
-        placeholderTextColor={theme.colors.textSecondary}
-      />
-      <TextInput style={styles.input} value={category} onChangeText={setCategory} placeholder="Category" placeholderTextColor={theme.colors.textSecondary} />
+        <Text style={styles.sectionTitle}>Basic Info</Text>
+        <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Event title" placeholderTextColor={theme.colors.textSecondary} />
+        <TextInput style={styles.input} value={shortDescription} onChangeText={setShortDescription} placeholder="Short description" placeholderTextColor={theme.colors.textSecondary} />
+        <TextInput
+          style={[styles.input, styles.multiline]}
+          multiline
+          numberOfLines={4}
+          value={longDescription}
+          onChangeText={setLongDescription}
+          placeholder="Long description"
+          placeholderTextColor={theme.colors.textSecondary}
+        />
+        <TextInput style={styles.input} value={category} onChangeText={setCategory} placeholder="Category" placeholderTextColor={theme.colors.textSecondary} />
 
-      <Text style={styles.sectionTitle}>Timing</Text>
-      <View style={styles.timingCard}>
-        <Text style={styles.timingLabel}>Start</Text>
-        <View style={styles.row}>
-          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('date', startAt.date ?? new Date(), (date) => setStartAt((current) => ({ ...current, date })))}>
-            <Text style={styles.pickerValue}>{startAt.date ? formatDate(startAt.date) : 'Pick date'}</Text>
-          </Pressable>
-          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('time', startAt.time ?? new Date(), (time) => setStartAt((current) => ({ ...current, time })))}>
-            <Text style={styles.pickerValue}>{startAt.time ? formatTime(startAt.time) : 'Pick time'}</Text>
+        <Text style={styles.sectionTitle}>Timing</Text>
+        <View style={styles.timingCard}>
+          <Text style={styles.timingLabel}>Start</Text>
+          <Pressable style={styles.input} onPress={() => startDateTimeFlow('start_at')}>
+            <Text style={styles.pickerValue}>{formatDateTimeValue(startAt)}</Text>
           </Pressable>
         </View>
-        <Text style={styles.helperText}>{formatDateTimeValue(startAt)}</Text>
-      </View>
 
-      <View style={styles.timingCard}>
-        <Text style={styles.timingLabel}>End</Text>
-        <View style={styles.row}>
-          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('date', endAt.date ?? startAt.date ?? new Date(), (date) => setEndAt((current) => ({ ...current, date })))}>
-            <Text style={styles.pickerValue}>{endAt.date ? formatDate(endAt.date) : 'Pick date'}</Text>
-          </Pressable>
-          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('time', endAt.time ?? startAt.time ?? new Date(), (time) => setEndAt((current) => ({ ...current, time })))}>
-            <Text style={styles.pickerValue}>{endAt.time ? formatTime(endAt.time) : 'Pick time'}</Text>
+        <View style={styles.timingCard}>
+          <Text style={styles.timingLabel}>End</Text>
+          <Pressable style={styles.input} onPress={() => startDateTimeFlow('end_at')}>
+            <Text style={styles.pickerValue}>{formatDateTimeValue(endAt)}</Text>
           </Pressable>
         </View>
-        <Text style={styles.helperText}>{formatDateTimeValue(endAt)}</Text>
-      </View>
 
-      <View style={styles.timingCard}>
-        <Text style={styles.timingLabel}>Doors open (optional)</Text>
-        <Pressable style={styles.input} onPress={() => showPicker('time', doorsOpenAt ?? startAt.time ?? new Date(), (time) => setDoorsOpenAt(time))}>
-          <Text style={styles.pickerValue}>{doorsOpenAt ? formatTime(doorsOpenAt) : 'Pick time'}</Text>
+        <View style={styles.timingCard}>
+          <Text style={styles.timingLabel}>Doors open (optional)</Text>
+          <Pressable style={styles.input} onPress={() => openPicker({ field: 'doors_open_at', mode: 'time', value: doorsOpenAt ?? startAt.time ?? new Date() })}>
+            <Text style={styles.pickerValue}>{doorsOpenAt ? formatTime(doorsOpenAt) : 'Pick time'}</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.timingCard}>
+          <Text style={styles.timingLabel}>Sales start (optional)</Text>
+          <Pressable style={styles.input} onPress={() => startDateTimeFlow('sales_start_at')}>
+            <Text style={styles.pickerValue}>{formatDateTimeValue(salesStartAt)}</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.timingCard}>
+          <Text style={styles.timingLabel}>Sales end (optional)</Text>
+          <Pressable style={styles.input} onPress={() => startDateTimeFlow('sales_end_at')}>
+            <Text style={styles.pickerValue}>{formatDateTimeValue(salesEndAt)}</Text>
+          </Pressable>
+        </View>
+
+        <Text style={styles.sectionTitle}>Venue / Location</Text>
+        <TextInput style={styles.input} value={venueName} onChangeText={setVenueName} placeholder="Venue name" placeholderTextColor={theme.colors.textSecondary} />
+        <TextInput
+          style={[styles.input, styles.multiline]}
+          multiline
+          numberOfLines={3}
+          value={addressText}
+          onChangeText={setAddressText}
+          placeholder="Address"
+          placeholderTextColor={theme.colors.textSecondary}
+        />
+
+        <Text style={styles.sectionTitle}>Ticket Tiers</Text>
+        {tiers.map((tier, index) => (
+          <View key={`tier-${index}`} style={styles.tierCard}>
+            <Text style={styles.tierTitle}>Tier {index + 1}</Text>
+            <TextInput style={styles.input} value={tier.name} onChangeText={(value) => updateTier(index, { name: value })} placeholder="Tier name" placeholderTextColor={theme.colors.textSecondary} />
+            <TextInput style={styles.input} value={tier.description} onChangeText={(value) => updateTier(index, { description: value })} placeholder="Description" placeholderTextColor={theme.colors.textSecondary} />
+            <View style={styles.row}>
+              <TextInput style={[styles.input, styles.half]} value={tier.priceAmount} onChangeText={(value) => updateTier(index, { priceAmount: value })} placeholder="Price" placeholderTextColor={theme.colors.textSecondary} keyboardType="decimal-pad" />
+              <TextInput style={[styles.input, styles.half]} value={tier.currency} onChangeText={(value) => updateTier(index, { currency: value })} placeholder="Currency" placeholderTextColor={theme.colors.textSecondary} autoCapitalize="characters" />
+            </View>
+            <View style={styles.row}>
+              <TextInput style={[styles.input, styles.half]} value={tier.quantityTotal} onChangeText={(value) => updateTier(index, { quantityTotal: value })} placeholder="Quantity" placeholderTextColor={theme.colors.textSecondary} keyboardType="number-pad" />
+              <TextInput style={[styles.input, styles.half]} value={tier.minPerOrder} onChangeText={(value) => updateTier(index, { minPerOrder: value })} placeholder="Min/order" placeholderTextColor={theme.colors.textSecondary} keyboardType="number-pad" />
+            </View>
+            <TextInput style={styles.input} value={tier.maxPerOrder} onChangeText={(value) => updateTier(index, { maxPerOrder: value })} placeholder="Max/order" placeholderTextColor={theme.colors.textSecondary} keyboardType="number-pad" />
+            {canRemoveTier ? (
+              <Pressable onPress={() => removeTier(index)} style={styles.removeButton}>
+                <Text style={styles.removeButtonText}>Remove Tier</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ))}
+        <Pressable onPress={addTier} style={styles.secondaryButton}>
+          <Text style={styles.secondaryButtonText}>Add Tier</Text>
         </Pressable>
-      </View>
 
-      <View style={styles.timingCard}>
-        <Text style={styles.timingLabel}>Sales start (optional)</Text>
-        <View style={styles.row}>
-          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('date', salesStartAt.date ?? new Date(), (date) => setSalesStartAt((current) => ({ ...current, date })))}>
-            <Text style={styles.pickerValue}>{salesStartAt.date ? formatDate(salesStartAt.date) : 'Pick date'}</Text>
-          </Pressable>
-          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('time', salesStartAt.time ?? new Date(), (time) => setSalesStartAt((current) => ({ ...current, time })))}>
-            <Text style={styles.pickerValue}>{salesStartAt.time ? formatTime(salesStartAt.time) : 'Pick time'}</Text>
-          </Pressable>
-        </View>
-        <Text style={styles.helperText}>{formatDateTimeValue(salesStartAt)}</Text>
-      </View>
+        <Text style={styles.sectionTitle}>Policies</Text>
+        <TextInput
+          style={[styles.input, styles.multiline]}
+          multiline
+          numberOfLines={3}
+          value={refundPolicyText}
+          onChangeText={setRefundPolicyText}
+          placeholder="Refund policy"
+          placeholderTextColor={theme.colors.textSecondary}
+        />
+        <TextInput
+          style={[styles.input, styles.multiline]}
+          multiline
+          numberOfLines={3}
+          value={termsText}
+          onChangeText={setTermsText}
+          placeholder="Terms"
+          placeholderTextColor={theme.colors.textSecondary}
+        />
 
-      <View style={styles.timingCard}>
-        <Text style={styles.timingLabel}>Sales end (optional)</Text>
-        <View style={styles.row}>
-          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('date', salesEndAt.date ?? new Date(), (date) => setSalesEndAt((current) => ({ ...current, date })))}>
-            <Text style={styles.pickerValue}>{salesEndAt.date ? formatDate(salesEndAt.date) : 'Pick date'}</Text>
-          </Pressable>
-          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('time', salesEndAt.time ?? new Date(), (time) => setSalesEndAt((current) => ({ ...current, time })))}>
-            <Text style={styles.pickerValue}>{salesEndAt.time ? formatTime(salesEndAt.time) : 'Pick time'}</Text>
-          </Pressable>
-        </View>
-        <Text style={styles.helperText}>{formatDateTimeValue(salesEndAt)}</Text>
-      </View>
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+        <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
+          <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
+        </Pressable>
+      </ScrollView>
 
-      {iosPicker ? (
-        <View style={styles.iosPickerContainer}>
-          <DateTimePicker value={iosPicker.value} mode={iosPicker.mode} onChange={(_, date) => date && iosPicker.onPick(date)} />
-          <Pressable style={styles.secondaryButton} onPress={() => setIosPicker(null)}>
-            <Text style={styles.secondaryButtonText}>Done</Text>
-          </Pressable>
-        </View>
+      {Platform.OS === 'ios' && pickerSession ? (
+        <Modal transparent animationType="slide" visible onRequestClose={() => setPickerSession(null)}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalSheet}>
+              <View style={styles.modalActions}>
+                <Pressable onPress={() => setPickerSession(null)}>
+                  <Text style={styles.modalActionText}>Cancel</Text>
+                </Pressable>
+                <Pressable onPress={completeIosSelection}>
+                  <Text style={styles.modalActionText}>Done</Text>
+                </Pressable>
+              </View>
+              <DateTimePicker
+                value={iosDraftValue}
+                mode={pickerSession.mode}
+                onChange={(_, date) => {
+                  if (date) setIosDraftValue(date);
+                }}
+              />
+            </View>
+          </View>
+        </Modal>
       ) : null}
-
-      <Text style={styles.sectionTitle}>Venue / Location</Text>
-      <TextInput style={styles.input} value={venueName} onChangeText={setVenueName} placeholder="Venue name" placeholderTextColor={theme.colors.textSecondary} />
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        multiline
-        numberOfLines={3}
-        value={addressText}
-        onChangeText={setAddressText}
-        placeholder="Address"
-        placeholderTextColor={theme.colors.textSecondary}
-      />
-
-      <Text style={styles.sectionTitle}>Ticket Tiers</Text>
-      {tiers.map((tier, index) => (
-        <View key={`tier-${index}`} style={styles.tierCard}>
-          <Text style={styles.tierTitle}>Tier {index + 1}</Text>
-          <TextInput style={styles.input} value={tier.name} onChangeText={(value) => updateTier(index, { name: value })} placeholder="Tier name" placeholderTextColor={theme.colors.textSecondary} />
-          <TextInput style={styles.input} value={tier.description} onChangeText={(value) => updateTier(index, { description: value })} placeholder="Description" placeholderTextColor={theme.colors.textSecondary} />
-          <View style={styles.row}>
-            <TextInput style={[styles.input, styles.half]} value={tier.priceAmount} onChangeText={(value) => updateTier(index, { priceAmount: value })} placeholder="Price" placeholderTextColor={theme.colors.textSecondary} keyboardType="decimal-pad" />
-            <TextInput style={[styles.input, styles.half]} value={tier.currency} onChangeText={(value) => updateTier(index, { currency: value })} placeholder="Currency" placeholderTextColor={theme.colors.textSecondary} autoCapitalize="characters" />
-          </View>
-          <View style={styles.row}>
-            <TextInput style={[styles.input, styles.half]} value={tier.quantityTotal} onChangeText={(value) => updateTier(index, { quantityTotal: value })} placeholder="Quantity" placeholderTextColor={theme.colors.textSecondary} keyboardType="number-pad" />
-            <TextInput style={[styles.input, styles.half]} value={tier.minPerOrder} onChangeText={(value) => updateTier(index, { minPerOrder: value })} placeholder="Min/order" placeholderTextColor={theme.colors.textSecondary} keyboardType="number-pad" />
-          </View>
-          <TextInput style={styles.input} value={tier.maxPerOrder} onChangeText={(value) => updateTier(index, { maxPerOrder: value })} placeholder="Max/order" placeholderTextColor={theme.colors.textSecondary} keyboardType="number-pad" />
-          {canRemoveTier ? (
-            <Pressable onPress={() => removeTier(index)} style={styles.removeButton}>
-              <Text style={styles.removeButtonText}>Remove Tier</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      ))}
-      <Pressable onPress={addTier} style={styles.secondaryButton}>
-        <Text style={styles.secondaryButtonText}>Add Tier</Text>
-      </Pressable>
-
-      <Text style={styles.sectionTitle}>Policies</Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        multiline
-        numberOfLines={3}
-        value={refundPolicyText}
-        onChangeText={setRefundPolicyText}
-        placeholder="Refund policy"
-        placeholderTextColor={theme.colors.textSecondary}
-      />
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        multiline
-        numberOfLines={3}
-        value={termsText}
-        onChangeText={setTermsText}
-        placeholder="Terms"
-        placeholderTextColor={theme.colors.textSecondary}
-      />
-
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
-        <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
-      </Pressable>
-    </ScrollView>
+    </>
   );
 }
 
@@ -366,15 +469,6 @@ const styles = StyleSheet.create({
   },
   timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
   pickerValue: { color: theme.colors.textPrimary },
-  helperText: { color: theme.colors.textSecondary, fontSize: 12 },
-  iosPickerContainer: {
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.sm,
-    gap: theme.spacing.sm,
-  },
   secondaryButton: {
     borderWidth: 1,
     borderColor: theme.colors.primary,
@@ -395,4 +489,28 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.7 },
   buttonText: { color: '#111', fontWeight: '700', textAlign: 'center' },
   error: { color: theme.colors.error },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  modalSheet: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: theme.radius.lg,
+    borderTopRightRadius: theme.radius.lg,
+    paddingBottom: theme.spacing.lg,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  modalActionText: {
+    color: theme.colors.primary,
+    fontWeight: '700',
+    fontSize: 16,
+  },
 });
