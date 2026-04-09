@@ -107,3 +107,14 @@ class TicketQrResponse(BaseModel):
     public_ticket_url: str
     qr_image_url: str
     qr_data_uri: str
+
+
+class TicketScanRequest(BaseModel):
+    payload: dict[str, object]
+
+
+class TicketScanResponse(BaseModel):
+    status: str
+    ticket_id: int | None = None
+    checked_in_at: datetime | None = None
+    message: str | None = None

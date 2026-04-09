@@ -8,11 +8,19 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload, object_session
 
 from app.models.event import Event
-from app.models.enums import EventStatus, OrderStatus, TicketStatus, TransferInviteStatus
+from app.models.enums import (
+    CheckInStatus,
+    EventStatus,
+    OrderStatus,
+    TicketScanStatus,
+    TicketStatus,
+    TransferInviteStatus,
+)
 from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.ticket import Ticket
 from app.models.ticket_check_in_attempt import TicketCheckInAttempt
+from app.models.ticket_scan_log import TicketScanLog
 from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.user import User
 from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
@@ -25,7 +33,7 @@ from app.services.notifications import (
     notify_tickets_issued,
 )
 from app.services.ticket_holds import get_guyana_now
-from app.services.ticket_qr import extract_ticket_lookup_value
+from app.services.ticket_qr import extract_ticket_lookup_value, validate_ticket_qr_signature
 from app.services.integrations import build_checkin_payload, build_transfer_payload, publish_webhook_event
 
 
@@ -112,6 +120,14 @@ class TicketCheckInAttemptRow:
     method: str | None
     source: str | None
     notes: str | None
+
+
+@dataclass
+class TicketScanResult:
+    status: str
+    ticket_id: int | None = None
+    checked_in_at: datetime | None = None
+    message: str | None = None
 
 
 def _generate_ticket_code() -> str:
@@ -675,6 +691,15 @@ def can_check_in_event_tickets(db: Session, *, user_id: int, event_id: int) -> b
     return can_actor_check_in_event(db, user_id=user_id, event_id=event_id)
 
 
+def can_scan_event(db: Session, *, user: User, event: Event) -> bool:
+    return has_event_permission_by_id(
+        db,
+        user_id=user.id,
+        event_id=event.id,
+        action=EventPermissionAction.CHECKIN_TICKETS,
+    )
+
+
 def get_ticket_by_qr_payload(db: Session, *, qr_payload: str) -> Ticket | None:
     lookup = extract_ticket_lookup_value(qr_payload)
     if not lookup:
@@ -727,6 +752,25 @@ def _record_check_in_attempt(
             method=method,
             source=source,
             notes=_normalize_optional(notes),
+        )
+    )
+
+
+def _record_ticket_scan_log(
+    db: Session,
+    *,
+    ticket: Ticket | None,
+    scanned_by: int | None,
+    status: TicketScanStatus,
+    note: str | None = None,
+) -> None:
+    db.add(
+        TicketScanLog(
+            ticket_id=ticket.id if ticket else None,
+            scanned_by=scanned_by,
+            scanned_at=get_guyana_now(),
+            status=status,
+            note=_normalize_optional(note),
         )
     )
 
@@ -979,6 +1023,7 @@ def check_in_ticket(
         ticket.status = TicketStatus.CHECKED_IN
         ticket.checked_in_at = now
         ticket.checked_in_by_user_id = scanner_user_id
+        ticket.check_in_status = CheckInStatus.CHECKED_IN
         ticket.check_in_method = method
         ticket.updated_at = now
         _record_check_in_attempt(
@@ -1098,6 +1143,7 @@ def override_ticket_check_in(
                 ticket.status = TicketStatus.CHECKED_IN
                 ticket.checked_in_at = now
                 ticket.checked_in_by_user_id = actor_user_id
+                ticket.check_in_status = CheckInStatus.CHECKED_IN
                 ticket.check_in_method = CHECK_IN_METHOD_OVERRIDE
                 ticket.updated_at = now
                 result = TicketCheckInValidationResult(
@@ -1199,6 +1245,170 @@ def check_in_ticket_for_event(
     if result.ticket is None:
         raise TicketNotFoundError("Ticket not found.")
     return result.ticket
+
+
+def scan_ticket(
+    db: Session,
+    *,
+    payload: dict[str, object],
+    user_id: int,
+) -> TicketScanResult:
+    if not validate_ticket_qr_signature(payload):
+        _record_ticket_scan_log(
+            db,
+            ticket=None,
+            scanned_by=user_id,
+            status=TicketScanStatus.INVALID,
+            note="Invalid ticket payload signature.",
+        )
+        db.flush()
+        return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid QR payload.")
+
+    ticket_id = payload.get("ticket_id")
+    payload_event_id = payload.get("event_id")
+    if not isinstance(ticket_id, int) or not isinstance(payload_event_id, int):
+        _record_ticket_scan_log(
+            db,
+            ticket=None,
+            scanned_by=user_id,
+            status=TicketScanStatus.INVALID,
+            note="QR payload is missing required identifiers.",
+        )
+        db.flush()
+        return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid QR payload.")
+
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        ticket = (
+            db.execute(
+                select(Ticket)
+                .options(joinedload(Ticket.event), joinedload(Ticket.order))
+                .where(Ticket.id == ticket_id)
+                .with_for_update()
+            )
+            .unique()
+            .scalars()
+            .first()
+        )
+        if ticket is None:
+            _record_ticket_scan_log(
+                db,
+                ticket=None,
+                scanned_by=user_id,
+                status=TicketScanStatus.INVALID,
+                note="Ticket not found.",
+            )
+            db.flush()
+            return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid ticket.")
+
+        user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+        if user is None or not can_scan_event(db, user=user, event=ticket.event):
+            _record_ticket_scan_log(
+                db,
+                ticket=ticket,
+                scanned_by=user_id,
+                status=TicketScanStatus.INVALID,
+                note="Unauthorized scan attempt.",
+            )
+            db.flush()
+            return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Not authorized to scan this event.")
+
+        if ticket.event_id != payload_event_id:
+            _record_ticket_scan_log(
+                db,
+                ticket=ticket,
+                scanned_by=user_id,
+                status=TicketScanStatus.WRONG_EVENT,
+                note="Payload event does not match ticket event.",
+            )
+            db.flush()
+            return TicketScanResult(status=TicketScanStatus.WRONG_EVENT.value, message="Ticket is for a different event.")
+
+        now = get_guyana_now()
+        event_end_at = ticket.event.end_at if ticket.event else None
+        compare_now = now
+        if event_end_at is not None and event_end_at.tzinfo is None:
+            compare_now = now.replace(tzinfo=None)
+        if event_end_at is not None and event_end_at < compare_now:
+            _record_ticket_scan_log(
+                db,
+                ticket=ticket,
+                scanned_by=user_id,
+                status=TicketScanStatus.INVALID,
+                note="Event has already ended.",
+            )
+            db.flush()
+            return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Ticket is expired.")
+
+        if ticket.check_in_status == CheckInStatus.CHECKED_IN or ticket.status == TicketStatus.CHECKED_IN:
+            _record_ticket_scan_log(
+                db,
+                ticket=ticket,
+                scanned_by=user_id,
+                status=TicketScanStatus.ALREADY_USED,
+                note="Ticket already checked in.",
+            )
+            db.flush()
+            return TicketScanResult(
+                status=TicketScanStatus.ALREADY_USED.value,
+                ticket_id=ticket.id,
+                checked_in_at=ticket.checked_in_at,
+                message="Ticket already used.",
+            )
+
+        if ticket.status != TicketStatus.ISSUED or not _is_order_admittable(ticket.order):
+            _record_ticket_scan_log(
+                db,
+                ticket=ticket,
+                scanned_by=user_id,
+                status=TicketScanStatus.INVALID,
+                note="Ticket is cancelled, refunded, or otherwise not admittable.",
+            )
+            db.flush()
+            return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Ticket is not valid for entry.")
+
+        ticket.checked_in_at = now
+        ticket.checked_in_by_user_id = user_id
+        ticket.check_in_status = CheckInStatus.CHECKED_IN
+        ticket.check_in_method = CHECK_IN_METHOD_QR
+        ticket.status = TicketStatus.CHECKED_IN
+        ticket.updated_at = now
+
+        _record_ticket_scan_log(
+            db,
+            ticket=ticket,
+            scanned_by=user_id,
+            status=TicketScanStatus.SUCCESS,
+            note="Ticket checked in successfully.",
+        )
+        db.flush()
+        return TicketScanResult(
+            status=TicketScanStatus.SUCCESS.value,
+            ticket_id=ticket.id,
+            checked_in_at=ticket.checked_in_at,
+            message="Ticket checked in successfully.",
+        )
+
+
+def check_in_ticket_manually(
+    db: Session,
+    *,
+    ticket_id: int,
+    user_id: int,
+) -> TicketScanResult:
+    ticket = db.execute(select(Ticket).where(Ticket.id == ticket_id)).scalar_one_or_none()
+    if ticket is None:
+        return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid ticket.")
+    payload = {
+        "ticket_id": ticket.id,
+        "event_id": ticket.event_id,
+        "hash": "",
+    }
+    # Reuse scan flow for all validation + logging while bypassing QR transport details.
+    from app.services.ticket_qr import generate_ticket_qr_payload
+
+    payload["hash"] = str(generate_ticket_qr_payload(ticket)["hash"])
+    return scan_ticket(db, payload=payload, user_id=user_id)
 
 
 def resend_ticket_notification(

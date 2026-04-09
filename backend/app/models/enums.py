@@ -58,6 +58,18 @@ class TicketStatus(str, Enum):
     VOIDED = "voided"
 
 
+class CheckInStatus(str, Enum):
+    NOT_CHECKED_IN = "not_checked_in"
+    CHECKED_IN = "checked_in"
+
+
+class TicketScanStatus(str, Enum):
+    SUCCESS = "success"
+    ALREADY_USED = "already_used"
+    INVALID = "invalid"
+    WRONG_EVENT = "wrong_event"
+
+
 class TransferInviteStatus(str, Enum):
     PENDING = "pending"
     ACCEPTED = "accepted"

@@ -1,155 +1,220 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/payments/__init__.py b/backend/app/services/payments/__init__.py
-index e61ecef2b34fe9da60a103b804e5d5b7c0281d7a..922239c62a0328e96a869ddac799ee1b7672bfa8 100644
---- a/backend/app/services/payments/__init__.py
-+++ b/backend/app/services/payments/__init__.py
-@@ -160,120 +160,131 @@ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -
-         return OrderPaymentSnapshot(
-             order_id=order.id,
-             order_reference=order.reference_code,
-             provider="mmg",
-             payment_method=order.payment_method,
-             payment_reference=order.payment_reference,
-             checkout_url=order.payment_checkout_url,
-             amount=order.total_amount,
-             currency=order.currency,
-             status=order.status.value,
-             payment_verification_status=order.payment_verification_status,
-         )
+diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
+index 1ea0130e15a496a24a431469648c2eb4b4e197dd..c3c38b39b95a6f62be594798df5aaa0503cf1042 100644
+--- a/backend/tests/test_tickets_service.py
++++ b/backend/tests/test_tickets_service.py
+@@ -1,81 +1,89 @@
+ from __future__ import annotations
+ 
+ from concurrent.futures import ThreadPoolExecutor
+ 
+ from fastapi import HTTPException
+ from datetime import datetime, timedelta, timezone
+ from decimal import Decimal
+ from pathlib import Path
+ 
+ import pytest
+ from sqlalchemy import create_engine, select
+ from sqlalchemy.exc import OperationalError
+ from sqlalchemy.orm import Session, sessionmaker
+ 
+ from app.db.base import Base
+-from app.models import Event, EventStaff, OrganizerProfile, Order, OrderItem, Ticket, TicketTier, User, Venue
++from app.models import Event, EventStaff, OrganizerProfile, Order, OrderItem, Ticket, TicketScanLog, TicketTier, User, Venue
+ from app.models.enums import (
++    CheckInStatus,
+     EventApprovalStatus,
+     EventStaffRole,
+     EventStatus,
+     EventVisibility,
+     OrderStatus,
+     TicketStatus,
+ )
+ from app.api.tickets import get_ticket_qr_by_ticket_id
+ from app.services.orders import complete_paid_order
+-from app.services.ticket_qr import build_ticket_qr_payload, generate_qr_png_bytes, get_ticket_public_url
++from app.services.ticket_qr import (
++    build_ticket_qr_payload,
++    generate_qr_png_bytes,
++    generate_signed_ticket_qr_payload,
++    generate_ticket_qr_payload,
++    get_ticket_public_url,
++)
+ from app.services.tickets import (
+     CHECK_IN_METHOD_MANUAL,
+     CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
+     CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+     CHECK_IN_STATUS_CANCELED_EVENT,
+     CHECK_IN_STATUS_NOT_FOUND,
+     CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
+     CHECK_IN_STATUS_VALID,
+     CHECK_IN_STATUS_WRONG_EVENT,
+     TicketAuthorizationError,
+     TicketCheckInConflictError,
+     TicketCrossEventError,
+     TicketIssuanceError,
+     TicketNotFoundError,
+     TicketTransferError,
+     TicketVoidError,
+     check_in_ticket,
+     can_check_in_event_tickets,
+     can_void_event_ticket,
+     check_in_ticket_for_event,
+     get_event_check_in_summary,
+     issue_tickets_for_completed_order,
+     list_recent_check_in_attempts,
+     list_tickets_for_order_owner,
+     list_tickets_for_user,
+     override_ticket_check_in,
+     transfer_ticket_to_user,
+     validate_ticket_for_check_in,
+     void_ticket,
++    scan_ticket,
+ )
+ from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
  
  
- def _is_production_env() -> bool:
-     return (settings.env or "").strip().lower() in {"prod", "production"}
+ @pytest.fixture
+ def db_session() -> Session:
+     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+     Base.metadata.create_all(engine)
+     SessionLocal = sessionmaker(bind=engine, future=True)
+     with SessionLocal() as session:
+         yield session
  
  
- def _ensure_dev_test_checkout_enabled() -> None:
-     if not settings.enable_dev_test_checkout or _is_production_env():
-         raise PaymentError("Dev test checkout is unavailable.")
+ def _seed_order(
+     db: Session,
+     *,
+     user_email: str = "buyer@example.com",
+     quantity: int = 3,
+     status: OrderStatus = OrderStatus.COMPLETED,
+     payment_verification_status: str = "verified",
+ ) -> tuple[Order, OrderItem, TicketTier, User, Event]:
+     now = datetime.now(timezone.utc)
+     user = User(email=user_email, full_name="Buyer")
+     db.add(user)
+     db.flush()
+@@ -1029,25 +1037,119 @@ def test_wallet_transferred_acceptance_behavior(db_session: Session) -> None:
+     transfer_ticket_to_user(db_session, ticket_id=ticket.id, from_user_id=buyer.id, to_user_id=new_owner.id)
+ 
+     assert list_wallet_tickets(db_session, user_id=buyer.id) == []
+     recipient_wallet = list_wallet_tickets(db_session, user_id=new_owner.id)
+     assert len(recipient_wallet) == 1
+     assert recipient_wallet[0].ticket.id == ticket.id
  
  
- def complete_dev_test_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
-     _ensure_dev_test_checkout_enabled()
--    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
--    with tx_ctx:
-+    try:
-         order = _load_order_for_payment(db, order_id=order_id)
-         _assert_order_owner(order, user_id=user_id)
+ def test_wallet_entry_payload_exists_and_stable(db_session: Session) -> None:
+     order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
  
-         if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
-             logger.info(
-                 "Duplicate dev-test checkout complete ignored for finalized order",
-                 extra={"order_id": order.id, "order_reference": order.reference_code, "user_id": order.user_id, "env": settings.env},
-             )
-             return OrderPaymentSnapshot(
-                 order_id=order.id,
-                 order_reference=order.reference_code,
-                 provider=order.payment_provider or "dev_test",
-                 payment_method=order.payment_method or "dev_test",
-                 payment_reference=order.payment_reference or f"DEV-{order.reference_code}",
-                 amount=order.total_amount,
-                 currency=order.currency,
-                 status=order.status.value,
-                 payment_verification_status=order.payment_verification_status,
-                 message="Payment already completed.",
-             )
+     first = get_wallet_ticket(db_session, user_id=buyer.id, ticket_id=ticket.id)
+     second = get_wallet_ticket(db_session, user_id=buyer.id, ticket_id=ticket.id)
+     assert first is not None and second is not None
+     assert first.ticket.qr_payload
+     assert first.ticket.qr_payload == second.ticket.qr_payload
+     assert first.ticket.ticket_code == second.ticket.ticket_code
  
-         validate_order_still_payable(order)
  
-         if order.payment_method in {"mmg_checkout", "mmg_agent"}:
-             raise PaymentMethodMismatchError("Order is already configured for MMG checkout.")
- 
-         payment_reference = order.payment_reference or f"DEV-{order.reference_code}"
-         order.payment_provider = "dev_test"
-         order.payment_method = "dev_test"
-         order.payment_reference = payment_reference
-         order.payment_checkout_url = None
-         order.payment_verification_status = "verified"
--        complete_paid_order(db, order, paid_at=get_guyana_now(), payment_reference=payment_reference)
-+        complete_paid_order(
-+            db,
-+            order,
-+            paid_at=get_guyana_now(),
-+            payment_reference=payment_reference,
-+            emit_noncritical_side_effects=False,
-+        )
- 
-         _record_payment_attempt(
-             db,
-             order=order,
-             payment_method="dev_test",
-             status=order.status.value,
-             verification_status=order.payment_verification_status,
-             provider_reference=order.payment_reference,
-             response_payload={"mode": "dev_test", "message": "Dev test checkout completed."},
-             provider="dev_test",
-         )
-         logger.info(
-             "Dev test checkout completed",
-             extra={
-                 "order_id": order.id,
-                 "order_reference": order.reference_code,
-                 "user_id": order.user_id,
-                 "payment_reference": order.payment_reference,
-                 "env": settings.env,
-                 "checkout_mode": "dev_test",
-             },
-         )
-         db.flush()
--        return OrderPaymentSnapshot(
--            order_id=order.id,
--            order_reference=order.reference_code,
--            provider=order.payment_provider or "dev_test",
--            payment_method=order.payment_method or "dev_test",
--            payment_reference=order.payment_reference or payment_reference,
--            amount=order.total_amount,
--            currency=order.currency,
--            status=order.status.value,
--            payment_verification_status=order.payment_verification_status,
--            message="Dev test checkout completed.",
--        )
-+        db.commit()
-+    except Exception:
-+        db.rollback()
-+        raise
+ def test_wallet_uses_issued_tickets_not_only_orders(db_session: Session) -> None:
+     order, _, _, buyer, _ = _seed_order(db_session, quantity=2)
+     assert list_wallet_tickets(db_session, user_id=buyer.id) == []
+     issue_tickets_for_completed_order(db_session, order)
+     assert len(list_wallet_tickets(db_session, user_id=buyer.id)) == 2
 +
-+    db.refresh(order)
-+    return OrderPaymentSnapshot(
-+        order_id=order.id,
-+        order_reference=order.reference_code,
-+        provider=order.payment_provider or "dev_test",
-+        payment_method=order.payment_method or "dev_test",
-+        payment_reference=order.payment_reference or payment_reference,
-+        amount=order.total_amount,
-+        currency=order.currency,
-+        status=order.status.value,
-+        payment_verification_status=order.payment_verification_status,
-+        message="Dev test checkout completed.",
++def _add_checkin_staff(db: Session, *, event: Event, owner_user_id: int, email: str = "scanner@example.com") -> User:
++    scanner = User(email=email, full_name="Scanner")
++    db.add(scanner)
++    db.flush()
++    db.add(
++        EventStaff(
++            event_id=event.id,
++            user_id=scanner.id,
++            role=EventStaffRole.CHECKIN,
++            invited_by_user_id=owner_user_id,
++        )
 +    )
- 
- 
- def create_mmg_agent_checkout_for_order(db: Session, *, order_id: int, user_id: int) -> OrderPaymentSnapshot:
-     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-     with tx_ctx:
-         order = _load_order_for_payment(db, order_id=order_id)
-         _assert_order_owner(order, user_id=user_id)
-         validate_mmg_provider_config()
-         reference_now = _derive_reference_now_from_order(order)
-         validate_order_still_payable(order, now=reference_now)
- 
-         if order.payment_method == "mmg_checkout":
-             raise PaymentMethodMismatchError("Order has already started MMG checkout.")
- 
-         payment_reference = create_agent_payment_reference(
-             order_id=order.id,
-             existing_reference=order.payment_reference if order.payment_method == "mmg_agent" else None,
-         )
- 
-         order.payment_provider = "mmg"
-         order.payment_method = "mmg_agent"
-         order.payment_reference = payment_reference
-         order.payment_checkout_url = None
-         order.status = OrderStatus.AWAITING_PAYMENT
-         order.payment_verification_status = "pending"
++    db.commit()
++    db.refresh(scanner)
++    return scanner
++
++
++def test_scan_valid_ticket(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-valid@example.com")
++
++    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
++
++    assert result.status == "success"
++    assert result.ticket_id == ticket.id
++    db_session.refresh(ticket)
++    assert ticket.check_in_status == CheckInStatus.CHECKED_IN
++    assert ticket.checked_in_by_user_id == scanner.id
++
++
++def test_scan_already_used_ticket(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-used@example.com")
++
++    first = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
++    second = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
++
++    assert first.status == "success"
++    assert second.status == "already_used"
++
++
++def test_scan_invalid_signature(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-invalid@example.com")
++
++    payload = generate_ticket_qr_payload(ticket)
++    payload["hash"] = "bad-signature"
++
++    result = scan_ticket(db_session, payload=payload, user_id=scanner.id)
++
++    assert result.status == "invalid"
++
++
++def test_scan_wrong_event(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-wrong-event@example.com")
++
++    payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id + 999)
++
++    result = scan_ticket(db_session, payload=payload, user_id=scanner.id)
++
++    assert result.status == "wrong_event"
++
++
++def test_only_authorized_can_scan(db_session: Session) -> None:
++    order, _, _, _, _ = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    outsider = User(email="outsider-scanner@example.com", full_name="Outsider Scanner")
++    db_session.add(outsider)
++    db_session.commit()
++    db_session.refresh(outsider)
++
++    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=outsider.id)
++
++    assert result.status == "invalid"
++    assert result.message == "Not authorized to scan this event."
++
++
++def test_scan_logs_created(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-logs@example.com")
++
++    scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
++    scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
++
++    logs = db_session.execute(select(TicketScanLog).where(TicketScanLog.ticket_id == ticket.id)).scalars().all()
++    assert len(logs) == 2
++    assert {row.status.value for row in logs} == {"success", "already_used"}
  
 EOF
 )

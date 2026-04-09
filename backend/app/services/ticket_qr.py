@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import json
 from io import BytesIO
 from urllib.parse import quote, urlparse
 
@@ -58,3 +61,35 @@ def generate_ticket_qr_data_uri(ticket: Ticket) -> str:
     png = generate_qr_png_bytes(build_ticket_qr_payload(ticket))
     encoded = base64.b64encode(png).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _sign_ticket_payload(ticket_id: int, event_id: int) -> str:
+    msg = f"{ticket_id}:{event_id}".encode("utf-8")
+    signature = hmac.new(settings.jwt_secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    return signature
+
+
+def generate_ticket_qr_payload(ticket: Ticket) -> dict[str, int | str]:
+    return generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id)
+
+
+def generate_signed_ticket_qr_payload(*, ticket_id: int, event_id: int) -> dict[str, int | str]:
+    return {
+        "ticket_id": ticket_id,
+        "event_id": event_id,
+        "hash": _sign_ticket_payload(ticket_id, event_id),
+    }
+
+
+def encode_ticket_qr_payload(ticket: Ticket) -> str:
+    return json.dumps(generate_ticket_qr_payload(ticket), separators=(",", ":"), sort_keys=True)
+
+
+def validate_ticket_qr_signature(payload: dict[str, object]) -> bool:
+    ticket_id = payload.get("ticket_id")
+    event_id = payload.get("event_id")
+    provided_hash = payload.get("hash")
+    if not isinstance(ticket_id, int) or not isinstance(event_id, int) or not isinstance(provided_hash, str):
+        return False
+    expected = _sign_ticket_payload(ticket_id, event_id)
+    return hmac.compare_digest(expected, provided_hash)

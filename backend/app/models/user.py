@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from app.models.push_token import PushToken
     from app.models.ticket import Ticket
     from app.models.ticket_hold import TicketHold
+    from app.models.ticket_scan_log import TicketScanLog
     from app.models.ticket_transfer_invite import TicketTransferInvite
     from app.models.verification_token import EmailVerificationToken
 
@@ -59,6 +60,10 @@ class User(TimestampMixin, Base):
     )
     checked_in_tickets: Mapped[list["Ticket"]] = relationship(
         back_populates="checked_in_by", foreign_keys="Ticket.checked_in_by_user_id"
+    )
+    ticket_scan_logs: Mapped[list["TicketScanLog"]] = relationship(
+        back_populates="scanner",
+        foreign_keys="TicketScanLog.scanned_by",
     )
     voided_tickets: Mapped[list["Ticket"]] = relationship(
         back_populates="voided_by", foreign_keys="Ticket.voided_by_user_id"

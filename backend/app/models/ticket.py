@@ -7,7 +7,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import TicketStatus
+from app.models.enums import CheckInStatus, TicketStatus
 from app.models.mixins import TimestampMixin
 from app.models.sa_enum import db_enum
 
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.models.order import Order
     from app.models.order_item import OrderItem
     from app.models.ticket_check_in_attempt import TicketCheckInAttempt
+    from app.models.ticket_scan_log import TicketScanLog
     from app.models.ticket_tier import TicketTier
     from app.models.ticket_transfer_invite import TicketTransferInvite
     from app.models.user import User
@@ -58,6 +59,12 @@ class Ticket(TimestampMixin, Base):
     checked_in_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    check_in_status: Mapped[CheckInStatus] = mapped_column(
+        db_enum(CheckInStatus, name="check_in_status"),
+        nullable=False,
+        default=CheckInStatus.NOT_CHECKED_IN,
+        index=True,
+    )
     transferred_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -98,6 +105,10 @@ class Ticket(TimestampMixin, Base):
         cascade="all, delete-orphan",
     )
     check_in_attempts: Mapped[list["TicketCheckInAttempt"]] = relationship(
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+    )
+    scan_logs: Mapped[list["TicketScanLog"]] = relationship(
         back_populates="ticket",
         cascade="all, delete-orphan",
     )

@@ -19,6 +19,7 @@ from app.models.password_reset_token import PasswordResetToken
 from app.models.ticket import Ticket
 from app.models.ticket_check_in_attempt import TicketCheckInAttempt
 from app.models.ticket_hold import TicketHold
+from app.models.ticket_scan_log import TicketScanLog
 from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.ticket_tier import TicketTier
 from app.models.support_case_note import SupportCaseNote
@@ -56,6 +57,7 @@ __all__ = [
     "Ticket",
     "TicketCheckInAttempt",
     "TicketHold",
+    "TicketScanLog",
     "TicketTransferInvite",
     "SupportCase",
     "SupportCaseNote",

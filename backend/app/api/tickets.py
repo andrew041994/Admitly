@@ -17,6 +17,8 @@ from app.schemas.ticket import (
     TicketTransferRequest,
     TicketVoidRequest,
     TicketQrResponse,
+    TicketScanRequest,
+    TicketScanResponse,
 )
 from app.schemas.ticket_wallet import (
     WalletEventSummary,
@@ -47,6 +49,8 @@ from app.services.tickets import (
     validate_ticket_for_check_in,
     void_ticket,
     resend_ticket_notification,
+    scan_ticket,
+    check_in_ticket_manually,
 )
 from app.services.ticket_wallet import WalletTicketView, get_wallet_ticket, list_wallet_tickets
 from app.services.ticket_qr import (
@@ -501,3 +505,33 @@ def get_public_ticket_qr_image(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
     png_bytes = generate_qr_png_bytes(build_ticket_qr_payload(ticket))
     return Response(content=png_bytes, media_type="image/png")
+
+
+@router.post("/tickets/scan", response_model=TicketScanResponse)
+def scan_ticket_qr(
+    payload: TicketScanRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketScanResponse:
+    result = scan_ticket(db, payload=payload.payload, user_id=user_id)
+    return TicketScanResponse(
+        status=result.status,
+        ticket_id=result.ticket_id,
+        checked_in_at=result.checked_in_at,
+        message=result.message,
+    )
+
+
+@router.post("/tickets/{ticket_id}/check-in", response_model=TicketScanResponse)
+def check_in_ticket_by_id(
+    ticket_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketScanResponse:
+    result = check_in_ticket_manually(db, ticket_id=ticket_id, user_id=user_id)
+    return TicketScanResponse(
+        status=result.status,
+        ticket_id=result.ticket_id,
+        checked_in_at=result.checked_in_at,
+        message=result.message,
+    )
