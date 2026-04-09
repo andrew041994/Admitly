@@ -86,21 +86,151 @@ def test_event_creation_and_creator_ownership(client: TestClient, db_session: Se
         "timezone": "UTC",
         "custom_venue_name": "Pop-up Stage",
         "custom_address_text": "Downtown",
+        "ticket_tiers": [
+            {
+                "name": "General Admission",
+                "description": "Standard access",
+                "price_amount": "1500.00",
+                "currency": "GYD",
+                "quantity_total": 100,
+                "min_per_order": 1,
+                "max_per_order": 6,
+            }
+        ],
     }
     response = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
     assert response.status_code == 201
     body = response.json()
     assert body["status"] == "draft"
+    assert body["slug"].startswith("organizer-launch")
+    assert body["timezone"] == "UTC"
+    assert body["ticket_tiers"][0]["name"] == "General Admission"
+    assert body["ticket_tiers"][0]["quantity_total"] == 100
     created = db_session.get(Event, body["id"])
     assert created is not None
     profile = db_session.query(OrganizerProfile).filter(OrganizerProfile.user_id == creator.id).one()
     assert created.organizer_id == profile.id
+    assert created.visibility == EventVisibility.PUBLIC
+    assert created.approval_status == EventApprovalStatus.PENDING
 
     invalid = client.post("/events", json={**payload, "end_at": payload["start_at"]}, headers={"x-user-id": str(creator.id)})
     assert invalid.status_code == 422
 
     unauth = client.post("/events", json=payload)
     assert unauth.status_code == 401
+
+
+def test_event_creation_with_multiple_tiers_and_defaults(client: TestClient, db_session: Session) -> None:
+    creator = _seed_user(db_session, "multi-tier@example.com", "Multi Tier")
+    payload = {
+        "title": "Festival Night",
+        "start_at": (datetime.now(UTC) + timedelta(days=3)).isoformat(),
+        "end_at": (datetime.now(UTC) + timedelta(days=3, hours=4)).isoformat(),
+        "custom_venue_name": "Harbor Stage",
+        "custom_address_text": "Waterfront",
+        "ticket_tiers": [
+            {
+                "name": "General",
+                "price_amount": "1000.00",
+                "currency": "GYD",
+                "quantity_total": 200,
+                "min_per_order": 1,
+                "max_per_order": 4,
+            },
+            {
+                "name": "VIP",
+                "price_amount": "3000.00",
+                "currency": "GYD",
+                "quantity_total": 50,
+                "min_per_order": 1,
+                "max_per_order": 2,
+            },
+        ],
+    }
+    response = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "draft"
+    assert body["visibility"] == "public"
+    assert body["approval_status"] == "pending"
+    assert body["timezone"] == "America/Guyana"
+    assert len(body["ticket_tiers"]) == 2
+
+    tiers = db_session.query(TicketTier).filter(TicketTier.event_id == body["id"]).order_by(TicketTier.id.asc()).all()
+    assert [tier.name for tier in tiers] == ["General", "VIP"]
+    assert all(tier.tier_code for tier in tiers)
+
+
+def test_event_creation_validation_errors(client: TestClient, db_session: Session) -> None:
+    creator = _seed_user(db_session, "invalid@example.com", "Invalid User")
+    base_payload = {
+        "title": "Bad Event",
+        "start_at": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+        "end_at": (datetime.now(UTC) + timedelta(days=2, hours=3)).isoformat(),
+        "custom_venue_name": "Test Venue",
+        "ticket_tiers": [
+            {
+                "name": "General",
+                "price_amount": "100.00",
+                "currency": "GYD",
+                "quantity_total": 10,
+                "min_per_order": 1,
+                "max_per_order": 3,
+            }
+        ],
+    }
+
+    zero_tiers = client.post("/events", json={**base_payload, "ticket_tiers": []}, headers={"x-user-id": str(creator.id)})
+    assert zero_tiers.status_code == 422
+
+    bad_times = client.post(
+        "/events",
+        json={**base_payload, "sales_start_at": base_payload["end_at"], "sales_end_at": base_payload["start_at"]},
+        headers={"x-user-id": str(creator.id)},
+    )
+    assert bad_times.status_code == 422
+
+    bad_tier = client.post(
+        "/events",
+        json={
+            **base_payload,
+            "ticket_tiers": [{**base_payload["ticket_tiers"][0], "price_amount": "-1.00"}],
+        },
+        headers={"x-user-id": str(creator.id)},
+    )
+    assert bad_tier.status_code == 422
+
+
+def test_event_creation_is_atomic_when_tier_validation_fails(client: TestClient, db_session: Session) -> None:
+    creator = _seed_user(db_session, "atomic@example.com", "Atomic User")
+    payload = {
+        "title": "Atomic Event",
+        "start_at": (datetime.now(UTC) + timedelta(days=4)).isoformat(),
+        "end_at": (datetime.now(UTC) + timedelta(days=4, hours=2)).isoformat(),
+        "custom_venue_name": "Atomic Venue",
+        "ticket_tiers": [
+            {
+                "name": "Tier A",
+                "price_amount": "500.00",
+                "currency": "GYD",
+                "quantity_total": 20,
+                "min_per_order": 1,
+                "max_per_order": 2,
+            },
+            {
+                "name": "Tier B",
+                "price_amount": "400.00",
+                "currency": "GYD",
+                "quantity_total": 20,
+                "min_per_order": 3,
+                "max_per_order": 2,
+            },
+        ],
+    }
+    before_count = db_session.query(Event).count()
+    response = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
+    assert response.status_code == 422
+    assert db_session.query(Event).count() == before_count
 
 
 def test_mine_and_active_event_listing(client: TestClient, db_session: Session) -> None:

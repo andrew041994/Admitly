@@ -1,5 +1,48 @@
 import { apiRequest } from './client';
 
+export type TicketTierCreatePayload = {
+  name: string;
+  description?: string | null;
+  price_amount: string;
+  currency: string;
+  quantity_total: number;
+  min_per_order: number;
+  max_per_order: number;
+  is_active?: boolean;
+  sort_order?: number;
+};
+
+export type CreateEventPayload = {
+  title: string;
+  short_description?: string | null;
+  long_description?: string | null;
+  category?: string | null;
+  cover_image_url?: string | null;
+  start_at: string;
+  end_at: string;
+  doors_open_at?: string | null;
+  sales_start_at?: string | null;
+  sales_end_at?: string | null;
+  timezone?: string;
+  custom_venue_name?: string | null;
+  custom_address_text?: string | null;
+  refund_policy_text?: string | null;
+  terms_text?: string | null;
+  ticket_tiers: TicketTierCreatePayload[];
+};
+
+export type CreateEventResponse = {
+  id: number;
+  organizer_id: number;
+  title: string;
+  slug: string;
+  status: string;
+  timezone: string;
+  custom_venue_name: string | null;
+  custom_address_text: string | null;
+  ticket_tiers: Array<{ id: number; name: string }>;
+};
+
 export type MyEventItem = {
   id: number;
   title: string;
@@ -61,8 +104,8 @@ export type UserSearchResult = {
   phone: string | null;
 };
 
-export async function createEvent(payload: Record<string, unknown>) {
-  return apiRequest<{ id: number }>({ path: '/events', method: 'POST', body: JSON.stringify(payload) });
+export async function createEvent(payload: CreateEventPayload): Promise<CreateEventResponse> {
+  return apiRequest<CreateEventResponse>({ path: '/events', method: 'POST', body: JSON.stringify(payload) });
 }
 
 export async function listMyEvents(activeOnly = false): Promise<MyEventItem[]> {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -9,6 +10,8 @@ from app.models.event import Event
 from app.models.event_refund_batch import EventRefundBatch
 from app.models.enums import EventRefundBatchStatus, EventStatus, OrderStatus, RefundReason
 from app.models.order import Order
+from app.models.organizer_profile import OrganizerProfile
+from app.models.ticket_tier import TicketTier
 from app.models.user import User
 from app.services.event_permissions import EventPermissionAction, has_event_permission
 from app.services.notifications import notify_event_cancelled
@@ -37,6 +40,111 @@ class EventAuthorizationError(EventFlowError):
 
 class EventCancellationError(EventFlowError):
     """Raised when event cancellation request is invalid."""
+
+
+class EventCreationValidationError(EventFlowError):
+    """Raised when event creation input is invalid."""
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:240] or "event"
+
+
+def build_event_slug(db: Session, title: str) -> str:
+    base = _slugify(title)
+    candidate = base
+    suffix = 1
+    while db.execute(select(Event.id).where(Event.slug == candidate)).scalar_one_or_none() is not None:
+        suffix += 1
+        candidate = f"{base}-{suffix}"
+    return candidate
+
+
+def _tier_code_from_name(value: str) -> str:
+    code = re.sub(r"[^A-Z0-9]+", "-", value.upper()).strip("-")
+    return code[:56] or "TIER"
+
+
+def _build_ticket_tier_code(db: Session, *, event_id: int, name: str) -> str:
+    base = _tier_code_from_name(name)
+    candidate = base
+    suffix = 1
+    while (
+        db.execute(
+            select(TicketTier.id).where(
+                TicketTier.event_id == event_id,
+                TicketTier.tier_code == candidate,
+            )
+        ).scalar_one_or_none()
+        is not None
+    ):
+        suffix += 1
+        candidate = f"{base}-{suffix}"
+    return candidate
+
+
+def create_event_with_ticket_tiers(
+    db: Session,
+    *,
+    organizer_profile: OrganizerProfile,
+    payload,  # noqa: ANN001
+) -> tuple[Event, list[TicketTier]]:
+    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    with tx_ctx:
+        if not payload.ticket_tiers:
+            raise EventCreationValidationError("At least one ticket tier is required.")
+        if payload.doors_open_at and payload.doors_open_at > payload.start_at:
+            raise EventCreationValidationError("doors_open_at must be before or at start_at.")
+
+        event = Event(
+            organizer_id=organizer_profile.id,
+            venue_id=payload.venue_id,
+            title=payload.title.strip(),
+            slug=build_event_slug(db, payload.title),
+            short_description=payload.short_description,
+            long_description=payload.long_description,
+            category=payload.category,
+            cover_image_url=payload.cover_image_url,
+            start_at=payload.start_at,
+            end_at=payload.end_at,
+            doors_open_at=payload.doors_open_at,
+            sales_start_at=payload.sales_start_at,
+            sales_end_at=payload.sales_end_at,
+            timezone=payload.timezone,
+            custom_venue_name=payload.custom_venue_name,
+            custom_address_text=payload.custom_address_text,
+            refund_policy_text=payload.refund_policy_text,
+            terms_text=payload.terms_text,
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            is_location_pinned=bool(payload.is_location_pinned) if payload.is_location_pinned is not None else False,
+        )
+        db.add(event)
+        db.flush()
+
+        tiers: list[TicketTier] = []
+        for idx, tier_payload in enumerate(payload.ticket_tiers):
+            if tier_payload.max_per_order < tier_payload.min_per_order:
+                raise EventCreationValidationError("max_per_order must be greater than or equal to min_per_order.")
+            tier = TicketTier(
+                event_id=event.id,
+                name=tier_payload.name.strip(),
+                description=tier_payload.description,
+                tier_code=_build_ticket_tier_code(db, event_id=event.id, name=tier_payload.name),
+                price_amount=tier_payload.price_amount,
+                currency=tier_payload.currency,
+                quantity_total=tier_payload.quantity_total,
+                min_per_order=tier_payload.min_per_order,
+                max_per_order=tier_payload.max_per_order,
+                is_active=True if tier_payload.is_active is None else bool(tier_payload.is_active),
+                sort_order=tier_payload.sort_order if tier_payload.sort_order is not None else idx,
+            )
+            db.add(tier)
+            tiers.append(tier)
+        db.flush()
+
+    return event, tiers
 
 
 def enqueue_event_refund_batch(

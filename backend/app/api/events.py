@@ -1,5 +1,5 @@
-import re
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, or_, select
@@ -21,6 +21,7 @@ from app.schemas.event import (
     EventCancelRequest,
     EventCreateRequest,
     EventCreateResponse,
+    EventCreateTicketTierResponse,
     EventDashboardCheckInRow,
     EventDashboardResponse,
     EventDashboardTierResponse,
@@ -49,8 +50,10 @@ from app.services.ticket_holds import get_ticket_tier_capacity_summary
 from app.services.events import (
     EventAuthorizationError,
     EventCancellationError,
+    EventCreationValidationError,
     EventNotFoundError,
     cancel_event,
+    create_event_with_ticket_tiers,
     get_event_refund_batch,
     list_event_refund_batches,
 )
@@ -144,21 +147,6 @@ def _to_batch_response(batch) -> EventRefundBatchResponse:  # noqa: ANN001
         created_at=batch.created_at,
         last_error=batch.last_error,
     )
-
-
-def _slugify(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return slug[:240] or "event"
-
-
-def _build_event_slug(db: Session, title: str) -> str:
-    base = _slugify(title)
-    candidate = base
-    suffix = 1
-    while db.execute(select(Event.id).where(Event.slug == candidate)).scalar_one_or_none() is not None:
-        suffix += 1
-        candidate = f"{base}-{suffix}"
-    return candidate
 
 
 def _ensure_organizer_profile(db: Session, *, user_id: int) -> OrganizerProfile:
@@ -335,42 +323,57 @@ def create_event(
         if venue is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venue not found.")
     organizer_profile = _ensure_organizer_profile(db, user_id=user_id)
-    visibility = EventVisibility(payload.visibility) if payload.visibility else EventVisibility.PUBLIC
-    event = Event(
-        organizer_id=organizer_profile.id,
-        venue_id=payload.venue_id,
-        title=payload.title.strip(),
-        slug=_build_event_slug(db, payload.title),
-        short_description=payload.short_description,
-        long_description=payload.long_description,
-        category=payload.category,
-        cover_image_url=payload.cover_image_url,
-        start_at=payload.start_at,
-        end_at=payload.end_at,
-        timezone=payload.timezone,
-        status=EventStatus.DRAFT,
-        visibility=visibility,
-        approval_status=EventApprovalStatus.PENDING,
-        custom_venue_name=payload.custom_venue_name,
-        custom_address_text=payload.custom_address_text,
-    )
-    db.add(event)
-    db.commit()
+    try:
+        event, tiers = create_event_with_ticket_tiers(db, organizer_profile=organizer_profile, payload=payload)
+        db.commit()
+    except EventCreationValidationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
     db.refresh(event)
+    for tier in tiers:
+        db.refresh(tier)
     return EventCreateResponse(
         id=event.id,
         organizer_id=event.organizer_id,
         title=event.title,
+        slug=event.slug,
         status=event.status.value,
         visibility=event.visibility.value,
         approval_status=event.approval_status.value,
         start_at=event.start_at,
         end_at=event.end_at,
+        doors_open_at=event.doors_open_at,
+        sales_start_at=event.sales_start_at,
+        sales_end_at=event.sales_end_at,
         timezone=event.timezone,
         venue_id=event.venue_id,
         custom_venue_name=event.custom_venue_name,
         custom_address_text=event.custom_address_text,
+        refund_policy_text=event.refund_policy_text,
+        terms_text=event.terms_text,
+        latitude=str(event.latitude) if event.latitude is not None else None,
+        longitude=str(event.longitude) if event.longitude is not None else None,
+        is_location_pinned=bool(event.is_location_pinned),
+        published_at=event.published_at,
         created_at=event.created_at,
+        ticket_tiers=[
+            EventCreateTicketTierResponse(
+                id=tier.id,
+                event_id=tier.event_id,
+                name=tier.name,
+                description=tier.description,
+                tier_code=tier.tier_code,
+                price_amount=str(Decimal(tier.price_amount)),
+                currency=tier.currency,
+                quantity_total=tier.quantity_total,
+                min_per_order=tier.min_per_order,
+                max_per_order=tier.max_per_order,
+                is_active=bool(tier.is_active),
+                sort_order=tier.sort_order,
+            )
+            for tier in tiers
+        ],
     )
 
 
