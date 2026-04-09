@@ -1,10 +1,15 @@
+from sqlalchemy import func, select
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.db.session import get_db
+from app.models.event import Event
+from app.models.event_staff import EventStaff
+from app.models.organizer_profile import OrganizerProfile
+from app.models.ticket import Ticket
 from app.models.user import User
-from app.schemas.account import ChangePasswordRequest, UpdateProfileRequest
+from app.schemas.account import AccountProfileResponse, ChangePasswordRequest, UpdateProfileRequest
 from app.schemas.auth import UserResponse
 from app.services.auth import change_password, update_profile
 
@@ -35,6 +40,36 @@ def patch_profile(
 ) -> UserResponse:
     updated = update_profile(db, user=current_user, full_name=payload.full_name, phone_number=payload.phone_number)
     return _to_user_response(updated)
+
+
+@router.get("/profile", response_model=AccountProfileResponse)
+def get_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AccountProfileResponse:
+    my_tickets_count = db.execute(select(func.count(Ticket.id)).where(Ticket.owner_user_id == current_user.id)).scalar_one()
+    my_events_count = db.execute(
+        select(func.count(Event.id))
+        .join(OrganizerProfile, OrganizerProfile.id == Event.organizer_id)
+        .where(OrganizerProfile.user_id == current_user.id)
+    ).scalar_one()
+    staff_events_count = db.execute(
+        select(func.count(EventStaff.id)).where(
+            EventStaff.user_id == current_user.id,
+            EventStaff.is_active.is_(True),
+        )
+    ).scalar_one()
+    return AccountProfileResponse(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        phone_number=current_user.phone,
+        is_active=current_user.is_active,
+        is_verified=current_user.is_verified,
+        my_tickets_count=int(my_tickets_count or 0),
+        my_events_count=int(my_events_count or 0),
+        staff_events_count=int(staff_events_count or 0),
+    )
 
 
 @router.post("/change-password")

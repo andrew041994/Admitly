@@ -1,91 +1,32 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
-index 319bd710c516ffb60f9e1a2fa71c27918a65efaa..7f9e0de607c8e9ac65595efa708696d4dab919f9 100644
---- a/backend/app/services/tickets.py
-+++ b/backend/app/services/tickets.py
-@@ -1,28 +1,29 @@
- from __future__ import annotations
+diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
+index afa28d39f7c21eed8c469c6ec5db129f85956c18..11c187f850fddc4412f27658d130f2cfbc11a605 100644
+--- a/mobile/src/navigation/types.ts
++++ b/mobile/src/navigation/types.ts
+@@ -1,19 +1,23 @@
+ export type AuthStackParamList = {
+   SignIn: undefined;
+   SignUp: undefined;
+   ForgotPassword: undefined;
+   ResetPassword: undefined;
+ };
  
- import secrets
-+from contextlib import nullcontext
- from dataclasses import dataclass
- from datetime import datetime, timedelta
- 
- from sqlalchemy import and_, or_, select
- from sqlalchemy.orm import Session, joinedload, object_session
- 
- from app.core.config import settings
- from app.core.security import normalize_email
- from app.models.event import Event
- from app.models.enums import (
-     CheckInStatus,
-     EventStatus,
-     OrderStatus,
-     TicketScanStatus,
-     TicketStatus,
-     TransferInviteStatus,
- )
- from app.models.order import Order
- from app.models.order_item import OrderItem
- from app.models.ticket import Ticket
- from app.models.ticket_check_in_attempt import TicketCheckInAttempt
- from app.models.ticket_scan_log import TicketScanLog
- from app.models.ticket_transfer_invite import TicketTransferInvite
- from app.models.user import User
- from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
-@@ -613,51 +614,51 @@ def list_ticket_transfer_invites_for_user(
-     user_id: int,
-     sent: bool = False,
- ) -> list[TicketTransferInvite]:
-     filters = [TicketTransferInvite.sender_user_id == user_id] if sent else [TicketTransferInvite.recipient_user_id == user_id]
-     invites = (
-         db.execute(
-             select(TicketTransferInvite)
-             .where(and_(*filters))
-             .order_by(TicketTransferInvite.created_at.desc(), TicketTransferInvite.id.desc())
-         )
-         .scalars()
-         .all()
-     )
-     now = get_guyana_now()
-     for invite in invites:
-         _expire_pending_invite_if_needed(db, invite, now=now)
-     return invites
- 
- 
- def accept_ticket_transfer_invite(
-     db: Session,
-     *,
-     invite_token: str,
-     accepting_user_id: int,
- ) -> Ticket:
--    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-+    tx_ctx = db.begin() if not db.in_transaction() else nullcontext()
-     with tx_ctx:
-         invite = (
-             db.execute(
-                 select(TicketTransferInvite)
-                 .options(joinedload(TicketTransferInvite.ticket), joinedload(TicketTransferInvite.sender))
-                 .where(TicketTransferInvite.invite_token == invite_token)
-                 .with_for_update()
-             )
-             .unique()
-             .scalar_one_or_none()
-         )
-         if invite is None:
-             raise TicketNotFoundError("Transfer invite not found.")
-         if (
-             invite.status == TransferInviteStatus.ACCEPTED
-             and invite.recipient_user_id == accepting_user_id
-             and invite.ticket.owner_user_id == accepting_user_id
-         ):
-             return invite.ticket
-         _expire_pending_invite_if_needed(db, invite)
-         if invite.status != TransferInviteStatus.PENDING:
-             raise TicketTransferError("Transfer invite is no longer pending.")
-         accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
-         if accepting_user is None:
-             raise TicketTransferError("Accepting user not found.")
+ export type AppStackParamList = {
+   Home: undefined;
+   EventDetail: { eventId: number };
+   TicketSelection: { eventId: number };
+   CheckoutMethod: { eventId: number; orderId: number };
+   MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
+   PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
+   MyTickets: undefined;
+   TicketDetail: { ticketId: number };
+   Scanner: undefined;
+   Profile: undefined;
++  CreateEvent: undefined;
++  MyEvents: undefined;
++  StaffManagement: undefined;
++  OrganizerDashboard: { eventId: number };
+ };
  
 EOF
 )

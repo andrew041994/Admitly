@@ -1,3 +1,6 @@
+import re
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -5,18 +8,29 @@ from sqlalchemy.orm import Session, joinedload
 from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
 from app.models.event import Event
+from app.models.event_staff import EventStaff
 from app.models.enums import EventRefundBatchStatus, EventStaffRole
 from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility
+from app.models.order import Order
+from app.models.organizer_profile import OrganizerProfile
+from app.models.ticket import Ticket
+from app.models.ticket_tier import TicketTier
 from app.models.user import User
 from app.models.venue import Venue
 from app.schemas.event import (
     EventCancelRequest,
+    EventCreateRequest,
+    EventCreateResponse,
+    EventDashboardCheckInRow,
+    EventDashboardResponse,
+    EventDashboardTierResponse,
     EventDiscoveryDetailResponse,
     EventDiscoveryItemResponse,
     EventPriceSummaryResponse,
     EventRefundBatchResponse,
     EventResponse,
     EventDiscoveryTicketTierResponse,
+    MyEventItemResponse,
     EventStaffCreateRequest,
     EventStaffResponse,
     EventStaffUpdateRequest,
@@ -40,6 +54,7 @@ from app.services.events import (
     get_event_refund_batch,
     list_event_refund_batches,
 )
+from app.services.reporting import get_event_reporting_summary, get_event_tier_summary
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -128,6 +143,58 @@ def _to_batch_response(batch) -> EventRefundBatchResponse:  # noqa: ANN001
         completed_at=batch.completed_at,
         created_at=batch.created_at,
         last_error=batch.last_error,
+    )
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:240] or "event"
+
+
+def _build_event_slug(db: Session, title: str) -> str:
+    base = _slugify(title)
+    candidate = base
+    suffix = 1
+    while db.execute(select(Event.id).where(Event.slug == candidate)).scalar_one_or_none() is not None:
+        suffix += 1
+        candidate = f"{base}-{suffix}"
+    return candidate
+
+
+def _ensure_organizer_profile(db: Session, *, user_id: int) -> OrganizerProfile:
+    profile = db.execute(select(OrganizerProfile).where(OrganizerProfile.user_id == user_id)).scalar_one_or_none()
+    if profile is not None:
+        return profile
+    user = db.execute(select(User).where(User.id == user_id)).scalar_one()
+    profile = OrganizerProfile(
+        user_id=user_id,
+        business_name=user.full_name,
+        display_name=user.full_name,
+        contact_email=user.email,
+        contact_phone=user.phone,
+    )
+    db.add(profile)
+    db.flush()
+    return profile
+
+
+def _is_event_owner(db: Session, *, event: Event, user_id: int) -> bool:
+    organizer_user_id = db.execute(
+        select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
+    ).scalar_one_or_none()
+    return organizer_user_id == user_id
+
+
+def _is_effective_staff_active(staff: EventStaff, *, event: Event | None = None) -> bool:
+    source_event = event or staff.event
+    if source_event is None:
+        return False
+    now = datetime.now(UTC)
+    return bool(
+        staff.is_active
+        and source_event.end_at > now
+        and source_event.status != EventStatus.CANCELLED
+        and source_event.cancelled_at is None
     )
 
 
@@ -252,6 +319,185 @@ def _to_event_staff_response(staff) -> EventStaffResponse:  # noqa: ANN001
         role=staff.role.value,
         created_at=staff.created_at,
         invited_by_user_id=staff.invited_by_user_id,
+        is_active=staff.is_active,
+        is_effective_active=_is_effective_staff_active(staff),
+    )
+
+
+@router.post("", response_model=EventCreateResponse, status_code=status.HTTP_201_CREATED)
+def create_event(
+    payload: EventCreateRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> EventCreateResponse:
+    if payload.venue_id is not None:
+        venue = db.execute(select(Venue).where(Venue.id == payload.venue_id)).scalar_one_or_none()
+        if venue is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venue not found.")
+    organizer_profile = _ensure_organizer_profile(db, user_id=user_id)
+    visibility = EventVisibility(payload.visibility) if payload.visibility else EventVisibility.PUBLIC
+    event = Event(
+        organizer_id=organizer_profile.id,
+        venue_id=payload.venue_id,
+        title=payload.title.strip(),
+        slug=_build_event_slug(db, payload.title),
+        short_description=payload.short_description,
+        long_description=payload.long_description,
+        category=payload.category,
+        cover_image_url=payload.cover_image_url,
+        start_at=payload.start_at,
+        end_at=payload.end_at,
+        timezone=payload.timezone,
+        status=EventStatus.DRAFT,
+        visibility=visibility,
+        approval_status=EventApprovalStatus.PENDING,
+        custom_venue_name=payload.custom_venue_name,
+        custom_address_text=payload.custom_address_text,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return EventCreateResponse(
+        id=event.id,
+        organizer_id=event.organizer_id,
+        title=event.title,
+        status=event.status.value,
+        visibility=event.visibility.value,
+        approval_status=event.approval_status.value,
+        start_at=event.start_at,
+        end_at=event.end_at,
+        timezone=event.timezone,
+        venue_id=event.venue_id,
+        custom_venue_name=event.custom_venue_name,
+        custom_address_text=event.custom_address_text,
+        created_at=event.created_at,
+    )
+
+
+def _to_my_event_item(event: Event) -> MyEventItemResponse:
+    now = datetime.now(UTC)
+    is_ended = event.end_at <= now or event.status == EventStatus.CANCELLED
+    is_upcoming = event.start_at > now and not is_ended
+    is_active = not is_ended
+    return MyEventItemResponse(
+        id=event.id,
+        title=event.title,
+        start_at=event.start_at,
+        end_at=event.end_at,
+        timezone=event.timezone,
+        status=event.status.value,
+        visibility=event.visibility.value,
+        venue_name=event.venue.name if event.venue else None,
+        venue_city=event.venue.city if event.venue else None,
+        custom_venue_name=event.custom_venue_name,
+        is_active=is_active,
+        is_upcoming=is_upcoming,
+        is_ended=is_ended,
+    )
+
+
+def _list_events_for_organizer(db: Session, *, user_id: int, active_only: bool) -> list[Event]:
+    now = datetime.now(UTC)
+    query = (
+        select(Event)
+        .join(OrganizerProfile, OrganizerProfile.id == Event.organizer_id)
+        .options(joinedload(Event.venue))
+        .where(OrganizerProfile.user_id == user_id)
+    )
+    if active_only:
+        query = query.where(
+            Event.status != EventStatus.CANCELLED,
+            Event.end_at > now,
+        )
+    return db.execute(query.order_by(Event.start_at.asc())).scalars().all()
+
+
+@router.get("/mine", response_model=list[MyEventItemResponse])
+def get_my_events(
+    active_only: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[MyEventItemResponse]:
+    events = _list_events_for_organizer(db, user_id=user_id, active_only=active_only)
+    return [_to_my_event_item(event) for event in events]
+
+
+@router.get("/mine/active", response_model=list[MyEventItemResponse])
+def get_my_active_events(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[MyEventItemResponse]:
+    events = _list_events_for_organizer(db, user_id=user_id, active_only=True)
+    return [_to_my_event_item(event) for event in events]
+
+
+@router.get("/{event_id}/dashboard", response_model=EventDashboardResponse)
+def get_event_dashboard(
+    event_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> EventDashboardResponse:
+    event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+    if not _is_event_owner(db, event=event, user_id=user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only organizer can view dashboard.")
+
+    summary = get_event_reporting_summary(db, event_id=event_id)
+    tier_rows = get_event_tier_summary(db, event_id=event_id)
+    refunded_count = db.execute(
+        select(func.count(Order.id)).where(Order.event_id == event_id, Order.refund_status == "refunded")
+    ).scalar_one()
+    transfer_count = db.execute(select(func.coalesce(func.sum(Ticket.transfer_count), 0)).where(Ticket.event_id == event_id)).scalar_one()
+    event_operational = event.end_at > datetime.now(UTC) and event.status != EventStatus.CANCELLED and event.cancelled_at is None
+    active_staff = (
+        db.execute(
+            select(func.count(EventStaff.id)).where(
+                EventStaff.event_id == event_id,
+                EventStaff.is_active.is_(True),
+            )
+        ).scalar_one()
+        if event_operational
+        else 0
+    )
+    recent_rows = db.execute(
+        select(Ticket.id, Ticket.checked_in_at, Ticket.checked_in_by_user_id)
+        .where(Ticket.event_id == event_id, Ticket.checked_in_at.is_not(None))
+        .order_by(Ticket.checked_in_at.desc())
+        .limit(10)
+    ).all()
+
+    return EventDashboardResponse(
+        event_id=event_id,
+        tickets_sold=summary.tickets_sold_count,
+        gross_revenue=float(summary.gross_revenue),
+        attendees_admitted=summary.tickets_checked_in_count,
+        attendees_remaining=summary.tickets_remaining_count,
+        total_ticket_capacity=summary.total_capacity,
+        transfer_count=int(transfer_count or 0),
+        voided_ticket_count=summary.tickets_voided_count,
+        refunded_ticket_count=int(refunded_count or 0),
+        live_checkin_percentage=summary.check_in_rate,
+        active_staff_assigned=int(active_staff or 0),
+        tier_metrics=[
+            EventDashboardTierResponse(
+                ticket_tier_id=row.ticket_tier_id,
+                name=row.name,
+                sold_count=row.sold_count,
+                remaining_count=row.remaining_count,
+                gross_revenue=float(row.gross_revenue),
+                currency=row.currency,
+            )
+            for row in tier_rows
+        ],
+        recent_checkins=[
+            EventDashboardCheckInRow(
+                ticket_id=int(row[0]),
+                checked_in_at=row[1],
+                checked_in_by_user_id=row[2],
+            )
+            for row in recent_rows
+        ],
     )
 
 

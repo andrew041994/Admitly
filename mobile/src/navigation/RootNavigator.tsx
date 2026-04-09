@@ -9,9 +9,9 @@ import { EventDiscoveryDetail, getDiscoverableEventDetail } from '../api/events'
 import { AppStackParamList, AuthStackParamList } from './types';
 import { BootScreen } from './screens/BootScreen';
 import { EventDetailScreen } from './screens/EventDetailScreen';
+import { CreateEventScreen } from './screens/CreateEventScreen';
 import { ForgotPasswordScreen } from './screens/ForgotPasswordScreen';
 import { HomeScreen } from './screens/HomeScreen';
-import { PlaceholderScreen } from './screens/PlaceholderScreen';
 import { ResetPasswordScreen } from './screens/ResetPasswordScreen';
 import { SignInScreen } from './screens/SignInScreen';
 import { SignUpScreen } from './screens/SignUpScreen';
@@ -22,6 +22,10 @@ import { TicketDetailScreen } from './screens/TicketDetailScreen';
 import { CheckoutMethodScreen } from './screens/CheckoutMethodScreen';
 import { TicketSelectionScreen } from './screens/TicketSelectionScreen';
 import { ScannerScreen } from './screens/ScannerScreen';
+import { MyEventsScreen } from './screens/MyEventsScreen';
+import { OrganizerDashboardScreen } from './screens/OrganizerDashboardScreen';
+import { ProfileScreen } from './screens/ProfileScreen';
+import { StaffManagementScreen } from './screens/StaffManagementScreen';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
@@ -90,7 +94,7 @@ function TicketSelectionRoute({ eventId, onOrderCreated }: { eventId: number; on
 
 function SignedInNavigator() {
   const { signOut, user } = useSession();
-  const canAccessScanner = Boolean(user?.is_admin);
+  const canAccessScanner = Boolean(user);
 
   return (
     <AppStack.Navigator
@@ -164,10 +168,26 @@ function SignedInNavigator() {
       <AppStack.Screen name="Scanner" options={{ headerShown: false }}>
         {({ navigation }) => <ScannerScreen canAccessScanner={canAccessScanner} onBack={() => navigation.goBack()} />}
       </AppStack.Screen>
-      <AppStack.Screen
-        name="Profile"
-        children={() => <PlaceholderScreen title="Profile" description="Account profile shell for future phases." />}
-      />
+      <AppStack.Screen name="Profile" options={{ title: 'Profile' }}>
+        {({ navigation }) => (
+          <ProfileScreen
+            onSignOut={signOut}
+            onOpenCreateEvent={() => navigation.navigate('CreateEvent')}
+            onOpenMyEvents={() => navigation.navigate('MyEvents')}
+            onOpenStaffManagement={() => navigation.navigate('StaffManagement')}
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen name="CreateEvent" options={{ title: 'Create Event' }}>
+        {({ navigation }) => <CreateEventScreen onCreated={(eventId) => navigation.replace('OrganizerDashboard', { eventId })} />}
+      </AppStack.Screen>
+      <AppStack.Screen name="MyEvents" options={{ title: 'My Events' }}>
+        {({ navigation }) => <MyEventsScreen onOpenEvent={(eventId) => navigation.navigate('OrganizerDashboard', { eventId })} />}
+      </AppStack.Screen>
+      <AppStack.Screen name="StaffManagement" component={StaffManagementScreen} options={{ title: 'Staff Management' }} />
+      <AppStack.Screen name="OrganizerDashboard" options={{ title: 'Event Dashboard' }}>
+        {({ route }) => <OrganizerDashboardScreen eventId={route.params.eventId} />}
+      </AppStack.Screen>
     </AppStack.Navigator>
   );
 }

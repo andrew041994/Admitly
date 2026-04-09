@@ -3,7 +3,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.enums import EventStaffRole
+from app.models.enums import EventStaffRole, EventStatus
+from app.models.event import Event
 from app.models.event_staff import EventStaff
 from app.models.user import User
 from app.services.event_permissions import (
@@ -11,6 +12,7 @@ from app.services.event_permissions import (
     has_event_permission_by_id,
     require_event_permission,
 )
+from app.services.ticket_holds import get_guyana_now
 
 
 class EventStaffError(ValueError):
@@ -66,14 +68,30 @@ def add_event_staff(
     if user is None:
         raise EventStaffValidationError("User not found.")
 
+    event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
+    if event is None:
+        raise EventStaffValidationError("Event not found.")
+    if event.end_at <= get_guyana_now() or event.status == EventStatus.CANCELLED:
+        raise EventStaffValidationError("Cannot assign staff to ended or cancelled events.")
+
     existing = db.execute(
         select(EventStaff).where(EventStaff.event_id == event_id, EventStaff.user_id == user_id)
     ).scalar_one_or_none()
-    if existing is not None:
+    if existing is not None and existing.is_active:
         raise EventStaffConflictError("User is already assigned to this event.")
 
     if role == EventStaffRole.OWNER:
         raise EventStaffValidationError("Owner role is derived from event ownership.")
+
+    if role != EventStaffRole.CHECKIN:
+        raise EventStaffValidationError("Only check-in staff can be assigned.")
+
+    if existing is not None:
+        existing.role = EventStaffRole.CHECKIN
+        existing.is_active = True
+        existing.invited_by_user_id = actor_user_id
+        db.flush()
+        return existing
 
     assignment = EventStaff(
         event_id=event_id,
@@ -106,8 +124,8 @@ def update_event_staff_role(
     ).scalar_one_or_none()
     if assignment is None:
         raise EventStaffNotFoundError("Event staff assignment not found.")
-    if role == EventStaffRole.OWNER:
-        raise EventStaffValidationError("Owner role is derived from event ownership.")
+    if role != EventStaffRole.CHECKIN:
+        raise EventStaffValidationError("Only check-in staff can be assigned.")
 
     assignment.role = role
     db.flush()
@@ -132,5 +150,5 @@ def remove_event_staff(
     ).scalar_one_or_none()
     if assignment is None:
         raise EventStaffNotFoundError("Event staff assignment not found.")
-    db.delete(assignment)
+    assignment.is_active = False
     db.flush()

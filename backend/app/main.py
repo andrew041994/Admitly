@@ -17,6 +17,7 @@ from app.api.payments import router as payments_router
 from app.api.refunds import router as refunds_router
 from app.api.ticket_holds import router as ticket_holds_router
 from app.api.tickets import router as tickets_router
+from app.api.users import router as users_router
 from app.api.ticket_transfer_invites import router as ticket_transfer_invites_router
 from app.core.config import settings
 
@@ -38,6 +39,7 @@ app.include_router(admin_support_router)
 app.include_router(admin_finance_router)
 app.include_router(auth_router)
 app.include_router(account_router)
+app.include_router(users_router)
 
 
 @app.get("/health")

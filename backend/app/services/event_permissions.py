@@ -5,11 +5,12 @@ from enum import Enum
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.enums import EventStaffRole
+from app.models.enums import EventStaffRole, EventStatus
 from app.models.event import Event
 from app.models.event_staff import EventStaff
 from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
+from app.services.ticket_holds import get_guyana_now
 
 
 class EventPermissionAction(str, Enum):
@@ -44,11 +45,17 @@ def _is_event_owner(db: Session, *, event: Event, user_id: int) -> bool:
 
 
 def _get_staff_role(db: Session, *, event_id: int, user_id: int) -> EventStaffRole | None:
+    now = get_guyana_now()
     return db.execute(
-        select(EventStaff.role).where(
+        select(EventStaff.role)
+        .join(Event, Event.id == EventStaff.event_id)
+        .where(
             EventStaff.event_id == event_id,
             EventStaff.user_id == user_id,
             EventStaff.is_active.is_(True),
+            Event.end_at > now,
+            Event.status != EventStatus.CANCELLED,
+            Event.cancelled_at.is_(None),
         )
     ).scalar_one_or_none()
 
@@ -56,16 +63,7 @@ def _get_staff_role(db: Session, *, event_id: int, user_id: int) -> EventStaffRo
 def _role_permissions(role: EventStaffRole) -> set[EventPermissionAction]:
     if role == EventStaffRole.OWNER:
         return set(EventPermissionAction)
-    if role == EventStaffRole.MANAGER:
-        return {
-            EventPermissionAction.EDIT_EVENT,
-            EventPermissionAction.VIEW_ORDERS,
-            EventPermissionAction.MANAGE_REFUNDS,
-            EventPermissionAction.CHECKIN_TICKETS,
-            EventPermissionAction.VIEW_CHECKIN_SUMMARY,
-            EventPermissionAction.CHECKIN_OVERRIDE,
-        }
-    if role == EventStaffRole.CHECKIN:
+    if role in {EventStaffRole.MANAGER, EventStaffRole.CHECKIN, EventStaffRole.SUPPORT}:
         return {
             EventPermissionAction.CHECKIN_TICKETS,
             EventPermissionAction.VIEW_CHECKIN_SUMMARY,

@@ -16,4 +16,8 @@ export type AppStackParamList = {
   TicketDetail: { ticketId: number };
   Scanner: undefined;
   Profile: undefined;
+  CreateEvent: undefined;
+  MyEvents: undefined;
+  StaffManagement: undefined;
+  OrganizerDashboard: { eventId: number };
 };
