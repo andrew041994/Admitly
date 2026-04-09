@@ -649,9 +649,6 @@ def accept_ticket_transfer_invite(
         )
         if invite is None:
             raise TicketNotFoundError("Transfer invite not found.")
-        accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
-        if accepting_user is None:
-            raise TicketTransferError("Accepting user not found.")
         if (
             invite.status == TransferInviteStatus.ACCEPTED
             and invite.recipient_user_id == accepting_user_id
@@ -661,6 +658,9 @@ def accept_ticket_transfer_invite(
         _expire_pending_invite_if_needed(db, invite)
         if invite.status != TransferInviteStatus.PENDING:
             raise TicketTransferError("Transfer invite is no longer pending.")
+        accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
+        if accepting_user is None:
+            raise TicketTransferError("Accepting user not found.")
 
         now = get_guyana_now()
 
