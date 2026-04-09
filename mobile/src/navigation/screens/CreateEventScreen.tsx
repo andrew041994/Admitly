@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import DateTimePicker, { DateTimePickerAndroid, type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 
 import { ApiError } from '../../api/client';
 import { createEvent } from '../../api/organizer';
@@ -20,22 +21,55 @@ const defaultTier = (): TierFormState => ({
   description: '',
   priceAmount: '0.00',
   currency: 'GYD',
-  quantityTotal: '100',
-  minPerOrder: '1',
-  maxPerOrder: '10',
+  quantityTotal: '',
+  minPerOrder: '',
+  maxPerOrder: '',
 });
+
+const GUYANA_TIMEZONE = 'America/Guyana';
+
+type DateTimeField = {
+  date: Date | null;
+  time: Date | null;
+};
+
+type IosPickerState = {
+  mode: 'date' | 'time';
+  value: Date;
+  onPick: (date: Date) => void;
+} | null;
+
+const formatDate = (value: Date) =>
+  new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(value);
+
+const formatTime = (value: Date) => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(value);
+
+const formatDateTimeValue = (field: DateTimeField) => {
+  if (!field.date || !field.time) return 'Select date and time';
+  return `${formatDate(field.date)} • ${formatTime(field.time)}`;
+};
+
+const buildGuyanaIso = (date: Date, time: Date) => {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+  const hour = time.getHours();
+  const minute = time.getMinutes();
+  const utcMillis = Date.UTC(year, month, day, hour + 4, minute, 0, 0);
+  return new Date(utcMillis).toISOString();
+};
 
 export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) => void }) {
   const [title, setTitle] = useState('');
   const [shortDescription, setShortDescription] = useState('');
   const [longDescription, setLongDescription] = useState('');
   const [category, setCategory] = useState('');
-  const [startAt, setStartAt] = useState('');
-  const [endAt, setEndAt] = useState('');
-  const [doorsOpenAt, setDoorsOpenAt] = useState('');
-  const [salesStartAt, setSalesStartAt] = useState('');
-  const [salesEndAt, setSalesEndAt] = useState('');
-  const [timezone, setTimezone] = useState('America/Guyana');
+  const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
+  const [endAt, setEndAt] = useState<DateTimeField>({ date: null, time: null });
+  const [doorsOpenAt, setDoorsOpenAt] = useState<Date | null>(null);
+  const [salesStartAt, setSalesStartAt] = useState<DateTimeField>({ date: null, time: null });
+  const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
+  const [iosPicker, setIosPicker] = useState<IosPickerState>(null);
   const [venueName, setVenueName] = useState('');
   const [addressText, setAddressText] = useState('');
   const [refundPolicyText, setRefundPolicyText] = useState('');
@@ -57,9 +91,25 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
     setTiers((current) => current.map((tier, idx) => (idx === index ? { ...tier, ...patch } : tier)));
   };
 
+  const showPicker = (mode: 'date' | 'time', value: Date, onPick: (date: Date) => void) => {
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value,
+        mode,
+        is24Hour: false,
+        onChange: (event: DateTimePickerEvent, selectedDate) => {
+          if (event.type !== 'set' || !selectedDate) return;
+          onPick(selectedDate);
+        },
+      });
+      return;
+    }
+    setIosPicker({ mode, value, onPick });
+  };
+
   const submitValidationError = useMemo(() => {
     if (!title.trim()) return 'Event title is required.';
-    if (!startAt.trim() || !endAt.trim()) return 'Start and end date/time are required.';
+    if (!startAt.date || !startAt.time || !endAt.date || !endAt.time) return 'Start and end date/time are required.';
     if (!venueName.trim()) return 'Venue name is required for MVP event creation.';
     if (tiers.length < 1) return 'At least one ticket tier is required.';
 
@@ -89,17 +139,23 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
     setLoading(true);
     setError(null);
     try {
+      const startAtIso = buildGuyanaIso(startAt.date as Date, startAt.time as Date);
+      const endAtIso = buildGuyanaIso(endAt.date as Date, endAt.time as Date);
+      const salesStartAtIso = salesStartAt.date && salesStartAt.time ? buildGuyanaIso(salesStartAt.date, salesStartAt.time) : null;
+      const salesEndAtIso = salesEndAt.date && salesEndAt.time ? buildGuyanaIso(salesEndAt.date, salesEndAt.time) : null;
+      const doorsOpenAtIso = doorsOpenAt && startAt.date ? buildGuyanaIso(startAt.date, doorsOpenAt) : null;
+
       const created = await createEvent({
         title: title.trim(),
         short_description: shortDescription.trim() || null,
         long_description: longDescription.trim() || null,
         category: category.trim() || null,
-        start_at: new Date(startAt).toISOString(),
-        end_at: new Date(endAt).toISOString(),
-        doors_open_at: doorsOpenAt.trim() ? new Date(doorsOpenAt).toISOString() : null,
-        sales_start_at: salesStartAt.trim() ? new Date(salesStartAt).toISOString() : null,
-        sales_end_at: salesEndAt.trim() ? new Date(salesEndAt).toISOString() : null,
-        timezone: timezone.trim() || 'America/Guyana',
+        start_at: startAtIso,
+        end_at: endAtIso,
+        doors_open_at: doorsOpenAtIso,
+        sales_start_at: salesStartAtIso,
+        sales_end_at: salesEndAtIso,
+        timezone: GUYANA_TIMEZONE,
         custom_venue_name: venueName.trim(),
         custom_address_text: addressText.trim() || null,
         refund_policy_text: refundPolicyText.trim() || null,
@@ -141,13 +197,74 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
       />
       <TextInput style={styles.input} value={category} onChangeText={setCategory} placeholder="Category" placeholderTextColor={theme.colors.textSecondary} />
 
-      <Text style={styles.sectionTitle}>Timing (ISO format)</Text>
-      <TextInput style={styles.input} value={startAt} onChangeText={setStartAt} placeholder="Start (e.g. 2026-06-12T18:00:00-04:00)" placeholderTextColor={theme.colors.textSecondary} autoCapitalize="none" />
-      <TextInput style={styles.input} value={endAt} onChangeText={setEndAt} placeholder="End (e.g. 2026-06-12T22:00:00-04:00)" placeholderTextColor={theme.colors.textSecondary} autoCapitalize="none" />
-      <TextInput style={styles.input} value={doorsOpenAt} onChangeText={setDoorsOpenAt} placeholder="Doors open at (optional ISO)" placeholderTextColor={theme.colors.textSecondary} autoCapitalize="none" />
-      <TextInput style={styles.input} value={salesStartAt} onChangeText={setSalesStartAt} placeholder="Sales start at (optional ISO)" placeholderTextColor={theme.colors.textSecondary} autoCapitalize="none" />
-      <TextInput style={styles.input} value={salesEndAt} onChangeText={setSalesEndAt} placeholder="Sales end at (optional ISO)" placeholderTextColor={theme.colors.textSecondary} autoCapitalize="none" />
-      <TextInput style={styles.input} value={timezone} onChangeText={setTimezone} placeholder="Timezone" placeholderTextColor={theme.colors.textSecondary} autoCapitalize="none" />
+      <Text style={styles.sectionTitle}>Timing</Text>
+      <View style={styles.timingCard}>
+        <Text style={styles.timingLabel}>Start</Text>
+        <View style={styles.row}>
+          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('date', startAt.date ?? new Date(), (date) => setStartAt((current) => ({ ...current, date })))}>
+            <Text style={styles.pickerValue}>{startAt.date ? formatDate(startAt.date) : 'Pick date'}</Text>
+          </Pressable>
+          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('time', startAt.time ?? new Date(), (time) => setStartAt((current) => ({ ...current, time })))}>
+            <Text style={styles.pickerValue}>{startAt.time ? formatTime(startAt.time) : 'Pick time'}</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.helperText}>{formatDateTimeValue(startAt)}</Text>
+      </View>
+
+      <View style={styles.timingCard}>
+        <Text style={styles.timingLabel}>End</Text>
+        <View style={styles.row}>
+          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('date', endAt.date ?? startAt.date ?? new Date(), (date) => setEndAt((current) => ({ ...current, date })))}>
+            <Text style={styles.pickerValue}>{endAt.date ? formatDate(endAt.date) : 'Pick date'}</Text>
+          </Pressable>
+          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('time', endAt.time ?? startAt.time ?? new Date(), (time) => setEndAt((current) => ({ ...current, time })))}>
+            <Text style={styles.pickerValue}>{endAt.time ? formatTime(endAt.time) : 'Pick time'}</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.helperText}>{formatDateTimeValue(endAt)}</Text>
+      </View>
+
+      <View style={styles.timingCard}>
+        <Text style={styles.timingLabel}>Doors open (optional)</Text>
+        <Pressable style={styles.input} onPress={() => showPicker('time', doorsOpenAt ?? startAt.time ?? new Date(), (time) => setDoorsOpenAt(time))}>
+          <Text style={styles.pickerValue}>{doorsOpenAt ? formatTime(doorsOpenAt) : 'Pick time'}</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.timingCard}>
+        <Text style={styles.timingLabel}>Sales start (optional)</Text>
+        <View style={styles.row}>
+          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('date', salesStartAt.date ?? new Date(), (date) => setSalesStartAt((current) => ({ ...current, date })))}>
+            <Text style={styles.pickerValue}>{salesStartAt.date ? formatDate(salesStartAt.date) : 'Pick date'}</Text>
+          </Pressable>
+          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('time', salesStartAt.time ?? new Date(), (time) => setSalesStartAt((current) => ({ ...current, time })))}>
+            <Text style={styles.pickerValue}>{salesStartAt.time ? formatTime(salesStartAt.time) : 'Pick time'}</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.helperText}>{formatDateTimeValue(salesStartAt)}</Text>
+      </View>
+
+      <View style={styles.timingCard}>
+        <Text style={styles.timingLabel}>Sales end (optional)</Text>
+        <View style={styles.row}>
+          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('date', salesEndAt.date ?? new Date(), (date) => setSalesEndAt((current) => ({ ...current, date })))}>
+            <Text style={styles.pickerValue}>{salesEndAt.date ? formatDate(salesEndAt.date) : 'Pick date'}</Text>
+          </Pressable>
+          <Pressable style={[styles.input, styles.half]} onPress={() => showPicker('time', salesEndAt.time ?? new Date(), (time) => setSalesEndAt((current) => ({ ...current, time })))}>
+            <Text style={styles.pickerValue}>{salesEndAt.time ? formatTime(salesEndAt.time) : 'Pick time'}</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.helperText}>{formatDateTimeValue(salesEndAt)}</Text>
+      </View>
+
+      {iosPicker ? (
+        <View style={styles.iosPickerContainer}>
+          <DateTimePicker value={iosPicker.value} mode={iosPicker.mode} onChange={(_, date) => date && iosPicker.onPick(date)} />
+          <Pressable style={styles.secondaryButton} onPress={() => setIosPicker(null)}>
+            <Text style={styles.secondaryButtonText}>Done</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <Text style={styles.sectionTitle}>Venue / Location</Text>
       <TextInput style={styles.input} value={venueName} onChangeText={setVenueName} placeholder="Venue name" placeholderTextColor={theme.colors.textSecondary} />
@@ -239,6 +356,25 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   tierTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
+  timingCard: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
+  pickerValue: { color: theme.colors.textPrimary },
+  helperText: { color: theme.colors.textSecondary, fontSize: 12 },
+  iosPickerContainer: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.sm,
+    gap: theme.spacing.sm,
+  },
   secondaryButton: {
     borderWidth: 1,
     borderColor: theme.colors.primary,
