@@ -54,6 +54,9 @@ class Ticket(TimestampMixin, Base):
         index=True,
     )
     ticket_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    display_code: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
+    qr_token: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
+    qr_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     qr_payload: Mapped[str] = mapped_column(Text, nullable=False)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     checked_in_at: Mapped[datetime | None] = mapped_column(

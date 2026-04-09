@@ -15,9 +15,14 @@ class TicketResponse(BaseModel):
     ticket_tier_id: int
     status: str
     ticket_code: str
+    display_code: str | None = None
     qr_payload: str
     public_ticket_url: str
     qr_image_url: str
+    event_title: str | None = None
+    starts_at: datetime | None = None
+    venue_name: str | None = None
+    ticket_tier_name: str | None = None
     issued_at: datetime
     checked_in_at: datetime | None
     check_in_method: str | None = None
@@ -26,6 +31,24 @@ class TicketResponse(BaseModel):
     voided_by_user_id: int | None
     void_reason: str | None
     transfer_count: int
+
+
+class TicketDetailResponse(TicketResponse):
+    ticket_id: int
+    ticket_public_id: str | None = None
+    attendee_name: str | None = None
+    attendee_email: str | None = None
+    event_description: str | None = None
+    venue_address: str | None = None
+    ends_at: datetime | None = None
+    timezone: str | None = None
+    order_reference: str | None = None
+    ticket_tier_name: str | None = None
+    ticket_status: str
+    transferred_from_user_id: int | None = None
+    transferred_to_user_id: int | None = None
+    created_at: datetime
+    subtitle: str | None = None
 
 
 class TicketTransferRequest(BaseModel):

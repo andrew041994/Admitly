@@ -60,7 +60,8 @@ def _is_valid_for_entry(ticket: Ticket, *, display_status: str) -> bool:
 def _build_wallet_view(ticket: Ticket, *, now: datetime) -> WalletTicketView:
     is_upcoming = _is_event_upcoming(ticket, now)
     display_status = _derive_display_status(ticket)
-    can_display_entry_code = bool(ticket.qr_payload.strip()) if ticket.qr_payload else False
+    token_value = (ticket.qr_token or ticket.qr_payload or "").strip()
+    can_display_entry_code = bool(token_value)
     return WalletTicketView(
         ticket=ticket,
         event_is_upcoming=is_upcoming,

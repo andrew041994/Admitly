@@ -1,171 +1,260 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/context/SessionContext.tsx b/mobile/src/context/SessionContext.tsx
-index 3d5c126a5580420bd5e641086bda908abf4392b1..f247321587e0cd411daeb642efe7ddf47d2d765f 100644
---- a/mobile/src/context/SessionContext.tsx
-+++ b/mobile/src/context/SessionContext.tsx
-@@ -32,85 +32,146 @@ function getErrorMessage(error: unknown) {
-   if (error instanceof ApiError) {
-     return error.message;
-   }
-   if (error instanceof Error) {
-     return error.message;
-   }
-   return 'Something went wrong. Please try again.';
- }
+diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
+index bbb742824a6b515c063be434b8e68847bc73d8c8..701da9a016e7bec1f57665e1ee8ccf52cdf5820f 100644
+--- a/backend/tests/test_tickets_service.py
++++ b/backend/tests/test_tickets_service.py
+@@ -1,58 +1,59 @@
+ from __future__ import annotations
  
- function normalizeEmail(email: string) {
-   return email.trim().toLowerCase();
- }
+ from concurrent.futures import ThreadPoolExecutor
  
- function toStoredSession(tokens: AuthTokens) {
-   return {
-     accessToken: tokens.access_token,
-     refreshToken: tokens.refresh_token,
-   };
- }
+ from fastapi import HTTPException
+ from datetime import datetime, timedelta, timezone
+ from decimal import Decimal
+ from pathlib import Path
  
- export function SessionProvider({ children }: PropsWithChildren) {
-   const [state, setState] = useState<SessionState>('booting');
-   const [user, setUser] = useState<AuthUser | null>(null);
+ import pytest
+ from sqlalchemy import create_engine, select
+ from sqlalchemy.exc import OperationalError
+ from sqlalchemy.orm import Session, sessionmaker
  
-   useEffect(() => {
--    async function bootstrap() {
--      const storedSession = await getStoredSession();
-+    let completed = false;
-+    const BOOT_TIMEOUT_MS = 5000;
+ from app.db.base import Base
+ from app.models import Event, EventStaff, OrganizerProfile, Order, OrderItem, Ticket, TicketScanLog, TicketTier, User, Venue
+ from app.models.enums import (
+     CheckInStatus,
+     EventApprovalStatus,
+     EventStaffRole,
+     EventStatus,
+     EventVisibility,
+     OrderStatus,
+     TicketStatus,
+ )
+-from app.api.tickets import get_ticket_qr_by_ticket_id
++from app.api.tickets import get_ticket_detail, get_ticket_qr_by_ticket_id
+ from app.services.orders import complete_paid_order
+ from app.services.ticket_qr import (
++    QR_PAYLOAD_PREFIX,
+     build_ticket_qr_payload,
++    ensure_ticket_qr,
+     generate_qr_png_bytes,
+     generate_signed_ticket_qr_payload,
+     generate_ticket_qr_payload,
+-    get_ticket_public_url,
+ )
+ from app.services.tickets import (
+     CHECK_IN_METHOD_MANUAL,
+     CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
+     CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+     CHECK_IN_STATUS_CANCELED_EVENT,
+     CHECK_IN_STATUS_NOT_FOUND,
+     CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
+     CHECK_IN_STATUS_VALID,
+     CHECK_IN_STATUS_WRONG_EVENT,
+     TicketAuthorizationError,
+     TicketCheckInConflictError,
+     TicketCrossEventError,
+     TicketIssuanceError,
+     TicketNotFoundError,
+     TicketTransferError,
+     TicketVoidError,
+     check_in_ticket,
+     can_check_in_event_tickets,
+     can_void_event_ticket,
+     check_in_ticket_for_event,
+     get_event_check_in_summary,
+     issue_tickets_for_completed_order,
+     list_recent_check_in_attempts,
+     list_tickets_for_order_owner,
+@@ -772,52 +773,53 @@ def test_ticket_lifecycle_notification_hooks_are_called(db_session: Session, mon
+     db_session.commit()
+     db_session.refresh(recipient)
  
--      if (!storedSession?.accessToken) {
--        setState('signedOut');
-+    const completeBootAsSignedOut = async (reason: string, options?: { clearSession?: boolean }) => {
-+      if (completed) {
-         return;
-       }
-+      completed = true;
-+
-+      if (__DEV__) {
-+        console.log(`[session] init fallback -> signedOut (${reason})`);
-+      }
-+
-+      if (options?.clearSession ?? true) {
-+        await clearStoredSession();
-+      }
-+      setApiAuthToken(null);
-+      setUser(null);
-+      setState('signedOut');
-+    };
-+
-+    const completeBootAsSignedIn = (currentUser: AuthUser, reason: string) => {
-+      if (completed) {
-+        return;
-+      }
-+      completed = true;
-+
-+      if (__DEV__) {
-+        console.log(`[session] init success -> signedIn (${reason})`);
-+      }
-+
-+      setUser(currentUser);
-+      setState('signedIn');
-+    };
-+
-+    const timeoutId = setTimeout(() => {
-+      if (__DEV__) {
-+        console.warn('[session] init timeout fired, forcing signedOut');
-+      }
-+      void completeBootAsSignedOut('timeout');
-+    }, BOOT_TIMEOUT_MS);
+     transfer_ticket_to_user(
+         db_session,
+         ticket_id=ticket.id,
+         from_user_id=buyer.id,
+         to_user_id=recipient.id,
+     )
+     void_ticket(
+         db_session,
+         ticket_id=ticket.id,
+         actor_user_id=event.organizer.user_id,
+         reason="ops",
+     )
  
-+    async function bootstrap() {
-+      let storedSession: Awaited<ReturnType<typeof getStoredSession>> | null = null;
-       try {
-+        if (__DEV__) {
-+          console.log('[session] init started');
-+          console.log('[session] token/session restore started');
-+        }
-+        storedSession = await getStoredSession();
-+
-+        if (!storedSession?.accessToken) {
-+          await completeBootAsSignedOut('no stored access token', { clearSession: false });
-+          return;
-+        }
-+
-         setApiAuthToken(storedSession.accessToken);
-+        if (__DEV__) {
-+          console.log('[session] backend validation started');
-+        }
-         const currentUser = await getCurrentUser();
--        setUser(currentUser);
--        setState('signedIn');
-+        completeBootAsSignedIn(currentUser, 'validated current user');
-       } catch (error) {
--        if (storedSession.refreshToken) {
-+        if (__DEV__) {
-+          console.warn('[session] init error', error);
-+        }
-+
-+        if (storedSession?.refreshToken) {
-           try {
-+            if (__DEV__) {
-+              console.log('[session] backend validation started (refresh fallback)');
-+            }
-             const refreshed = await refresh(storedSession.refreshToken);
-             await setStoredSession(toStoredSession(refreshed.tokens));
-             setApiAuthToken(refreshed.tokens.access_token);
--            setUser(refreshed.user);
--            setState('signedIn');
-+            completeBootAsSignedIn(refreshed.user, 'refreshed session');
-             return;
--          } catch {
--            // Continue to sign-out fallback.
-+          } catch (refreshError) {
-+            if (__DEV__) {
-+              console.warn('[session] refresh during init failed', refreshError);
-+            }
-           }
-         }
+     assert [name for name, _ in calls] == ["issued", "transferred", "voided"]
  
--        await clearStoredSession();
--        setApiAuthToken(null);
--        setUser(null);
--        setState('signedOut');
-+        await completeBootAsSignedOut('init error');
-+      } finally {
-+        clearTimeout(timeoutId);
-       }
-     }
  
--    bootstrap();
-+    void bootstrap();
+ def test_ticket_qr_payload_and_png_generation_are_stable(db_session: Session) -> None:
+     pytest.importorskip("qrcode")
+     order, _, _, _, _ = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+ 
+     payload = build_ticket_qr_payload(ticket)
+-    assert payload == get_ticket_public_url(ticket)
+-    assert payload.endswith(f"/t/{ticket.qr_payload}")
++    assert payload.startswith(QR_PAYLOAD_PREFIX)
++    assert payload.endswith(ticket.qr_token or ticket.qr_payload)
++    assert payload != str(ticket.id)
+ 
+     png = generate_qr_png_bytes(payload)
+     assert png
+     assert png.startswith(b"\x89PNG\r\n\x1a\n")
+ 
+ 
+ def test_checkin_accepts_ticket_url_payload_and_reuses_phase17_validation(db_session: Session) -> None:
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+ 
+     url_payload = build_ticket_qr_payload(ticket)
+     valid = validate_ticket_for_check_in(
+         db_session,
+         actor_user_id=event.organizer.user_id,
+         event_id=event.id,
+         qr_payload=url_payload,
+     )
+     assert valid.valid is True
+ 
+     ticket.status = TicketStatus.VOIDED
+     db_session.commit()
+ 
+     rejected = validate_ticket_for_check_in(
+         db_session,
+         actor_user_id=event.organizer.user_id,
+@@ -912,51 +914,51 @@ def test_manual_override_requires_manager_and_notes(db_session: Session) -> None
+             actor_user_id=manager_user.id,
+             event_id=event.id,
+             ticket_code=ticket.ticket_code,
+             admit=True,
+             notes="   ",
+         )
+ 
+     result = override_ticket_check_in(
+         db_session,
+         actor_user_id=manager_user.id,
+         event_id=event.id,
+         ticket_code=ticket.ticket_code,
+         admit=True,
+         notes="badge mismatch verified at gate",
+     )
+     assert result.valid is True
+     assert result.status == CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED
+ 
+ 
+ def test_ticket_qr_endpoint_requires_ticket_ownership(db_session: Session) -> None:
+     pytest.importorskip("qrcode")
+     order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+ 
+     owner_view = get_ticket_qr_by_ticket_id(ticket.id, db=db_session, user_id=buyer.id)
+-    assert owner_view.ticket_public_token == ticket.qr_payload
++    assert owner_view.ticket_public_token == (ticket.qr_token or ticket.qr_payload)
+     assert owner_view.qr_data_uri.startswith("data:image/png;base64,")
+ 
+     outsider = User(email="qr-outsider@example.com", full_name="Outsider")
+     db_session.add(outsider)
+     db_session.commit()
+     db_session.refresh(outsider)
+ 
+     with pytest.raises(HTTPException) as exc:
+         get_ticket_qr_by_ticket_id(ticket.id, db=db_session, user_id=outsider.id)
+     assert exc.value.status_code == 404
+ 
+ def test_wallet_list_only_returns_current_owner_tickets(db_session: Session) -> None:
+     order, _, _, buyer, _ = _seed_order(db_session, quantity=2)
+     issued = issue_tickets_for_completed_order(db_session, order)
+     recipient = User(email="wallet-recipient@example.com", full_name="Recipient")
+     db_session.add(recipient)
+     db_session.commit()
+     transfer_ticket_to_user(db_session, ticket_id=issued[0].id, from_user_id=buyer.id, to_user_id=recipient.id)
+ 
+     buyer_wallet = list_wallet_tickets(db_session, user_id=buyer.id)
+     recipient_wallet = list_wallet_tickets(db_session, user_id=recipient.id)
+ 
+     assert [v.ticket.id for v in buyer_wallet] == [issued[1].id]
+     assert [v.ticket.id for v in recipient_wallet] == [issued[0].id]
+ 
+@@ -1131,25 +1133,80 @@ def test_scan_wrong_event(db_session: Session) -> None:
+ def test_only_authorized_can_scan(db_session: Session) -> None:
+     order, _, _, _, _ = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+     outsider = User(email="outsider-scanner@example.com", full_name="Outsider Scanner")
+     db_session.add(outsider)
+     db_session.commit()
+     db_session.refresh(outsider)
+ 
+     result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=outsider.id)
+ 
+     assert result.status == "INVALID"
+     assert result.message == "Not authorized to scan this event."
+ 
+ 
+ def test_scan_logs_created(db_session: Session) -> None:
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-logs@example.com")
+ 
+     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
+     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
+ 
+     logs = db_session.execute(select(TicketScanLog).where(TicketScanLog.ticket_id == ticket.id)).scalars().all()
+     assert len(logs) == 2
+     assert {row.status.value for row in logs} == {"SUCCESS", "ALREADY_USED"}
 +
-+    return () => {
-+      clearTimeout(timeoutId);
-+      completed = true;
-+    };
-   }, []);
- 
-   const value = useMemo(
-     () => ({
-       state,
-       user,
-       signIn: async (email: string, password: string) => {
-         const result = await login(normalizeEmail(email), password);
-         await setStoredSession(toStoredSession(result.tokens));
-         setApiAuthToken(result.tokens.access_token);
-         setUser(result.user);
-         setState('signedIn');
-       },
-       signUp: async (fullName: string, email: string, password: string) => {
-         const result = await register(fullName.trim(), normalizeEmail(email), password);
-         await setStoredSession(toStoredSession(result.tokens));
-         setApiAuthToken(result.tokens.access_token);
-         setUser(result.user);
-         setState('signedIn');
-       },
-       signOut: async () => {
-         try {
-           await logout();
-         } catch {
-           // logout should still complete client-side even if network call fails
++
++def test_ticket_issuance_populates_qr_fields_and_unique_tokens(db_session: Session) -> None:
++    order, _, _, _, _ = _seed_order(db_session, quantity=3)
++    tickets = issue_tickets_for_completed_order(db_session, order)
++
++    assert all(ticket.qr_token for ticket in tickets)
++    assert all(ticket.qr_generated_at for ticket in tickets)
++    assert all(ticket.display_code and ticket.display_code.startswith("TKT-") for ticket in tickets)
++    assert len({ticket.qr_token for ticket in tickets}) == len(tickets)
++
++
++def test_qr_token_is_unique_across_orders(db_session: Session) -> None:
++    order_a, _, _, _, _ = _seed_order(db_session, user_email="uniq-a@example.com", quantity=2)
++    order_b, _, _, _, _ = _seed_order(db_session, user_email="uniq-b@example.com", quantity=2)
++    issued = issue_tickets_for_completed_order(db_session, order_a) + issue_tickets_for_completed_order(db_session, order_b)
++    assert len({ticket.qr_token for ticket in issued}) == len(issued)
++
++
++def test_legacy_ticket_without_qr_token_can_be_polished(db_session: Session) -> None:
++    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    ticket.qr_token = None
++    ticket.qr_generated_at = None
++    ticket.display_code = None
++    db_session.flush()
++
++    ensure_ticket_qr(db_session, ticket)
++    db_session.flush()
++
++    detail = get_ticket_detail(ticket.id, db=db_session, user_id=buyer.id)
++    assert detail.qr_payload.startswith(QR_PAYLOAD_PREFIX)
++    assert detail.display_code and detail.display_code.startswith("TKT-")
++
++
++def test_ticket_detail_response_shape_and_auth(db_session: Session) -> None:
++    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++
++    detail = get_ticket_detail(ticket.id, db=db_session, user_id=buyer.id)
++    assert detail.ticket_id == ticket.id
++    assert detail.ticket_public_id == ticket.display_code
++    assert detail.event_title == ticket.event.title
++    assert detail.ticket_tier_name == ticket.ticket_tier.name
++    assert detail.ticket_status == ticket.status.value
++    assert detail.qr_payload == f"{QR_PAYLOAD_PREFIX}{ticket.qr_token}"
++
++    outsider = User(email="ticket-detail-outsider@example.com", full_name="Outsider")
++    db_session.add(outsider)
++    db_session.commit()
++    db_session.refresh(outsider)
++
++    with pytest.raises(HTTPException) as exc:
++        get_ticket_detail(ticket.id, db=db_session, user_id=outsider.id)
++    assert exc.value.status_code == 404
  
 EOF
 )

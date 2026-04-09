@@ -23,14 +23,15 @@ from app.models.enums import (
     OrderStatus,
     TicketStatus,
 )
-from app.api.tickets import get_ticket_qr_by_ticket_id
+from app.api.tickets import get_ticket_detail, get_ticket_qr_by_ticket_id
 from app.services.orders import complete_paid_order
 from app.services.ticket_qr import (
+    QR_PAYLOAD_PREFIX,
     build_ticket_qr_payload,
+    ensure_ticket_qr,
     generate_qr_png_bytes,
     generate_signed_ticket_qr_payload,
     generate_ticket_qr_payload,
-    get_ticket_public_url,
 )
 from app.services.tickets import (
     CHECK_IN_METHOD_MANUAL,
@@ -794,8 +795,9 @@ def test_ticket_qr_payload_and_png_generation_are_stable(db_session: Session) ->
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
 
     payload = build_ticket_qr_payload(ticket)
-    assert payload == get_ticket_public_url(ticket)
-    assert payload.endswith(f"/t/{ticket.qr_payload}")
+    assert payload.startswith(QR_PAYLOAD_PREFIX)
+    assert payload.endswith(ticket.qr_token or ticket.qr_payload)
+    assert payload != str(ticket.id)
 
     png = generate_qr_png_bytes(payload)
     assert png
@@ -934,7 +936,7 @@ def test_ticket_qr_endpoint_requires_ticket_ownership(db_session: Session) -> No
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
 
     owner_view = get_ticket_qr_by_ticket_id(ticket.id, db=db_session, user_id=buyer.id)
-    assert owner_view.ticket_public_token == ticket.qr_payload
+    assert owner_view.ticket_public_token == (ticket.qr_token or ticket.qr_payload)
     assert owner_view.qr_data_uri.startswith("data:image/png;base64,")
 
     outsider = User(email="qr-outsider@example.com", full_name="Outsider")
@@ -1153,3 +1155,58 @@ def test_scan_logs_created(db_session: Session) -> None:
     logs = db_session.execute(select(TicketScanLog).where(TicketScanLog.ticket_id == ticket.id)).scalars().all()
     assert len(logs) == 2
     assert {row.status.value for row in logs} == {"SUCCESS", "ALREADY_USED"}
+
+
+def test_ticket_issuance_populates_qr_fields_and_unique_tokens(db_session: Session) -> None:
+    order, _, _, _, _ = _seed_order(db_session, quantity=3)
+    tickets = issue_tickets_for_completed_order(db_session, order)
+
+    assert all(ticket.qr_token for ticket in tickets)
+    assert all(ticket.qr_generated_at for ticket in tickets)
+    assert all(ticket.display_code and ticket.display_code.startswith("TKT-") for ticket in tickets)
+    assert len({ticket.qr_token for ticket in tickets}) == len(tickets)
+
+
+def test_qr_token_is_unique_across_orders(db_session: Session) -> None:
+    order_a, _, _, _, _ = _seed_order(db_session, user_email="uniq-a@example.com", quantity=2)
+    order_b, _, _, _, _ = _seed_order(db_session, user_email="uniq-b@example.com", quantity=2)
+    issued = issue_tickets_for_completed_order(db_session, order_a) + issue_tickets_for_completed_order(db_session, order_b)
+    assert len({ticket.qr_token for ticket in issued}) == len(issued)
+
+
+def test_legacy_ticket_without_qr_token_can_be_polished(db_session: Session) -> None:
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    ticket.qr_token = None
+    ticket.qr_generated_at = None
+    ticket.display_code = None
+    db_session.flush()
+
+    ensure_ticket_qr(db_session, ticket)
+    db_session.flush()
+
+    detail = get_ticket_detail(ticket.id, db=db_session, user_id=buyer.id)
+    assert detail.qr_payload.startswith(QR_PAYLOAD_PREFIX)
+    assert detail.display_code and detail.display_code.startswith("TKT-")
+
+
+def test_ticket_detail_response_shape_and_auth(db_session: Session) -> None:
+    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    detail = get_ticket_detail(ticket.id, db=db_session, user_id=buyer.id)
+    assert detail.ticket_id == ticket.id
+    assert detail.ticket_public_id == ticket.display_code
+    assert detail.event_title == ticket.event.title
+    assert detail.ticket_tier_name == ticket.ticket_tier.name
+    assert detail.ticket_status == ticket.status.value
+    assert detail.qr_payload == f"{QR_PAYLOAD_PREFIX}{ticket.qr_token}"
+
+    outsider = User(email="ticket-detail-outsider@example.com", full_name="Outsider")
+    db_session.add(outsider)
+    db_session.commit()
+    db_session.refresh(outsider)
+
+    with pytest.raises(HTTPException) as exc:
+        get_ticket_detail(ticket.id, db=db_session, user_id=outsider.id)
+    assert exc.value.status_code == 404

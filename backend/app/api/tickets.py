@@ -13,6 +13,7 @@ from app.schemas.ticket import (
     TicketCheckInSummaryResponse,
     TicketCheckInValidateRequest,
     TicketCheckInValidateResponse,
+    TicketDetailResponse,
     TicketResponse,
     TicketTransferRequest,
     TicketVoidRequest,
@@ -55,6 +56,7 @@ from app.services.tickets import (
 from app.services.ticket_wallet import WalletTicketView, get_wallet_ticket, list_wallet_tickets
 from app.services.ticket_qr import (
     build_ticket_qr_payload,
+    ensure_ticket_qr,
     generate_qr_png_bytes,
     generate_ticket_qr_data_uri,
     get_ticket_public_url,
@@ -64,29 +66,6 @@ from app.services.ticket_qr import (
 router = APIRouter(tags=["tickets"])
 
 
-def _to_ticket_response(ticket) -> TicketResponse:
-    return TicketResponse(
-        id=ticket.id,
-        event_id=ticket.event_id,
-        order_id=ticket.order_id,
-        order_item_id=ticket.order_item_id,
-        purchaser_user_id=ticket.purchaser_user_id,
-        owner_user_id=ticket.owner_user_id,
-        ticket_tier_id=ticket.ticket_tier_id,
-        status=ticket.status.value,
-        ticket_code=ticket.ticket_code,
-        qr_payload=ticket.qr_payload,
-        public_ticket_url=get_ticket_public_url(ticket),
-        qr_image_url=get_ticket_qr_image_url(ticket),
-        issued_at=ticket.issued_at,
-        checked_in_at=ticket.checked_in_at,
-        check_in_method=ticket.check_in_method,
-        transferred_at=ticket.transferred_at,
-        voided_at=ticket.voided_at,
-        voided_by_user_id=ticket.voided_by_user_id,
-        void_reason=ticket.void_reason,
-        transfer_count=ticket.transfer_count,
-    )
 
 
 def _build_venue_address(event) -> str | None:
@@ -102,12 +81,67 @@ def _build_venue_address(event) -> str | None:
     return ", ".join(clean) if clean else None
 
 
+def _to_ticket_response(db: Session, ticket) -> TicketResponse:
+    ensure_ticket_qr(db, ticket)
+    return TicketResponse(
+        id=ticket.id,
+        event_id=ticket.event_id,
+        order_id=ticket.order_id,
+        order_item_id=ticket.order_item_id,
+        purchaser_user_id=ticket.purchaser_user_id,
+        owner_user_id=ticket.owner_user_id,
+        ticket_tier_id=ticket.ticket_tier_id,
+        status=ticket.status.value,
+        ticket_code=ticket.ticket_code,
+        display_code=ticket.display_code,
+        qr_payload=build_ticket_qr_payload(ticket),
+        public_ticket_url=get_ticket_public_url(ticket),
+        qr_image_url=get_ticket_qr_image_url(ticket),
+        event_title=ticket.event.title if ticket.event else None,
+        starts_at=ticket.event.start_at if ticket.event else None,
+        venue_name=(ticket.event.custom_venue_name or (ticket.event.venue.name if ticket.event and ticket.event.venue else None)) if ticket.event else None,
+        ticket_tier_name=ticket.ticket_tier.name if ticket.ticket_tier else None,
+        issued_at=ticket.issued_at,
+        checked_in_at=ticket.checked_in_at,
+        check_in_method=ticket.check_in_method,
+        transferred_at=ticket.transferred_at,
+        voided_at=ticket.voided_at,
+        voided_by_user_id=ticket.voided_by_user_id,
+        void_reason=ticket.void_reason,
+        transfer_count=ticket.transfer_count,
+    )
+
+
+def _to_ticket_detail_response(db: Session, ticket) -> TicketDetailResponse:
+    base = _to_ticket_response(db, ticket)
+    event = ticket.event
+    return TicketDetailResponse(
+        **base.model_dump(),
+        ticket_id=ticket.id,
+        ticket_public_id=ticket.display_code,
+        attendee_name=ticket.owner.full_name if ticket.owner else None,
+        attendee_email=ticket.owner.email if ticket.owner else None,
+        event_description=event.description if event else None,
+        venue_address=_build_venue_address(event),
+        ends_at=event.end_at if event else None,
+        timezone=event.timezone if event else None,
+        order_reference=ticket.order.reference_code if ticket.order else None,
+        ticket_tier_name=ticket.ticket_tier.name if ticket.ticket_tier else None,
+        ticket_status=ticket.status.value,
+        transferred_from_user_id=ticket.purchaser_user_id if ticket.owner_user_id != ticket.purchaser_user_id else None,
+        transferred_to_user_id=ticket.owner_user_id if ticket.owner_user_id != ticket.purchaser_user_id else None,
+        created_at=ticket.created_at,
+        subtitle=ticket.ticket_tier.name if ticket.ticket_tier else None,
+    )
+
+
 def _to_wallet_ticket_card(view: WalletTicketView) -> WalletTicketCardItemResponse:
     ticket = view.ticket
     event = ticket.event
     return WalletTicketCardItemResponse(
         id=ticket.id,
         ticket_code=ticket.ticket_code,
+        display_code=ticket.display_code,
         ticket_status=ticket.status.value,
         display_status=view.display_status,
         is_valid_for_entry=view.is_valid_for_entry,
@@ -163,9 +197,10 @@ def get_my_ticket_detail(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
     card = _to_wallet_ticket_card(view)
     ticket = view.ticket
+    ensure_ticket_qr(db, ticket)
     return WalletTicketDetailResponse(
         **card.model_dump(),
-        qr_payload=ticket.qr_payload,
+        qr_payload=build_ticket_qr_payload(ticket),
         check_in_token=ticket.ticket_code,
         check_in_method=ticket.check_in_method,
         voided_at=ticket.voided_at,
@@ -173,6 +208,18 @@ def get_my_ticket_detail(
         order_status=ticket.order.status.value if ticket.order else "unknown",
         order_refund_status=ticket.order.refund_status if ticket.order else "unknown",
     )
+
+
+@router.get("/tickets/{ticket_id}", response_model=TicketDetailResponse)
+def get_ticket_detail(
+    ticket_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> TicketDetailResponse:
+    ticket = get_ticket_for_owner(db, ticket_id=ticket_id, user_id=user_id)
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+    return _to_ticket_detail_response(db, ticket)
 
 
 @router.get("/orders/{order_id}/tickets", response_model=list[TicketResponse])
@@ -188,7 +235,7 @@ def get_order_tickets(
     except TicketNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    return [_to_ticket_response(t) for t in tickets]
+    return [_to_ticket_response(db, t) for t in tickets]
 
 
 @router.post("/tickets/{ticket_id}/transfer", response_model=TicketResponse)
@@ -212,7 +259,7 @@ def transfer_ticket(
     except TicketTransferError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    return _to_ticket_response(ticket)
+    return _to_ticket_response(db, ticket)
 
 
 @router.post("/tickets/{ticket_id}/void", response_model=TicketResponse)
@@ -236,7 +283,7 @@ def void_existing_ticket(
     except TicketVoidError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    return _to_ticket_response(ticket)
+    return _to_ticket_response(db, ticket)
 
 
 @router.post("/events/{event_id}/check-in/validate", response_model=TicketCheckInValidateResponse)
@@ -469,8 +516,10 @@ def get_ticket_qr_by_ticket_id(
     ticket = get_ticket_for_owner(db, ticket_id=ticket_id, user_id=user_id)
     if ticket is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+    ensure_ticket_qr(db, ticket)
+    db.flush()
     return TicketQrResponse(
-        ticket_public_token=ticket.qr_payload,
+        ticket_public_token=ticket.qr_token or ticket.qr_payload,
         qr_payload=build_ticket_qr_payload(ticket),
         public_ticket_url=get_ticket_public_url(ticket),
         qr_image_url=get_ticket_qr_image_url(ticket),
@@ -486,8 +535,10 @@ def get_public_ticket_qr(
     ticket = get_ticket_by_qr_payload(db, qr_payload=ticket_token)
     if ticket is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+    ensure_ticket_qr(db, ticket)
+    db.flush()
     return TicketQrResponse(
-        ticket_public_token=ticket.qr_payload,
+        ticket_public_token=ticket.qr_token or ticket.qr_payload,
         qr_payload=build_ticket_qr_payload(ticket),
         public_ticket_url=get_ticket_public_url(ticket),
         qr_image_url=get_ticket_qr_image_url(ticket),
@@ -503,6 +554,8 @@ def get_public_ticket_qr_image(
     ticket = get_ticket_by_qr_payload(db, qr_payload=ticket_token)
     if ticket is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+    ensure_ticket_qr(db, ticket)
+    db.flush()
     png_bytes = generate_qr_png_bytes(build_ticket_qr_payload(ticket))
     return Response(content=png_bytes, media_type="image/png")
 

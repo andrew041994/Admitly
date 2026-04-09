@@ -37,6 +37,7 @@ class WalletTicketCardItemResponse(BaseModel):
 
     id: int
     ticket_code: str
+    display_code: str | None = None
     ticket_status: str
     display_status: str
     is_valid_for_entry: bool

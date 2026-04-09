@@ -33,7 +33,13 @@ from app.services.notifications import (
     notify_tickets_issued,
 )
 from app.services.ticket_holds import get_guyana_now
-from app.services.ticket_qr import extract_ticket_lookup_value, validate_ticket_qr_signature
+from app.services.ticket_qr import (
+    ensure_ticket_qr,
+    extract_ticket_lookup_value,
+    generate_ticket_display_code,
+    generate_ticket_qr_token,
+    validate_ticket_qr_signature,
+)
 from app.services.integrations import build_checkin_payload, build_transfer_payload, publish_webhook_event
 
 
@@ -134,6 +140,17 @@ def _generate_ticket_code() -> str:
     return secrets.token_urlsafe(24)
 
 
+def _issue_ticket_qr_fields(db: Session) -> tuple[str, str, datetime]:
+    for _ in range(10):
+        qr_token = generate_ticket_qr_token()
+        existing = db.execute(select(Ticket.id).where(Ticket.qr_token == qr_token)).scalar_one_or_none()
+        if existing is not None:
+            continue
+        display_code = generate_ticket_display_code(qr_token=qr_token)
+        return qr_token, display_code, get_guyana_now()
+    raise TicketIssuanceError("Unable to generate a unique QR token for ticket issuance.")
+
+
 def notify_ticket_issued(ticket: Ticket) -> None:
     db = object_session(ticket)
     if db is None:
@@ -217,6 +234,10 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
         )
         existing_count = len(existing_tickets)
         if existing_count == expected_total:
+            for ticket in existing_tickets:
+                if not ticket.qr_token:
+                    ensure_ticket_qr(db, ticket)
+            db.flush()
             return existing_tickets
         if existing_count != 0:
             raise TicketIssuanceError(
@@ -228,6 +249,7 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
         for item in order_items:
             for _ in range(item.quantity):
                 ticket_code = _generate_ticket_code()
+                qr_token, display_code, qr_generated_at = _issue_ticket_qr_fields(db)
                 tickets_to_create.append(
                     Ticket(
                         order_id=locked_order.id,
@@ -239,7 +261,10 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
                         ticket_tier_id=item.ticket_tier_id,
                         status=TicketStatus.ISSUED,
                         ticket_code=ticket_code,
-                        qr_payload=ticket_code,
+                        display_code=display_code,
+                        qr_token=qr_token,
+                        qr_generated_at=qr_generated_at,
+                        qr_payload=qr_token,
                         issued_at=now,
                     )
                 )
@@ -704,11 +729,15 @@ def get_ticket_by_qr_payload(db: Session, *, qr_payload: str) -> Ticket | None:
     lookup = extract_ticket_lookup_value(qr_payload)
     if not lookup:
         return None
-    return (
-        db.execute(select(Ticket).where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup)))
+    ticket = (
+        db.execute(select(Ticket).where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup)))
         .scalars()
         .first()
     )
+    if ticket is not None and not ticket.qr_token:
+        ensure_ticket_qr(db, ticket)
+        db.flush()
+    return ticket
 
 
 def _is_event_admittable(event: Event | None) -> bool:
@@ -887,7 +916,7 @@ def validate_ticket_for_check_in(
         db.execute(
             select(Ticket)
             .options(joinedload(Ticket.event), joinedload(Ticket.order))
-            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup))
+            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
         )
         .unique()
         .scalars()
@@ -977,7 +1006,7 @@ def check_in_ticket(
             db.execute(
                 select(Ticket)
                 .options(joinedload(Ticket.event), joinedload(Ticket.order))
-                .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup))
+                .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
                 .with_for_update()
             )
             .unique()
@@ -1103,7 +1132,7 @@ def override_ticket_check_in(
             db.execute(
                 select(Ticket)
                 .options(joinedload(Ticket.event), joinedload(Ticket.order))
-                .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup))
+                .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
                 .with_for_update()
             )
             .unique()
