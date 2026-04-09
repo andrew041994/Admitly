@@ -1,28 +1,171 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
-index 1789ab733105a038262b761084d8fbc6ad0d4a27..afa28d39f7c21eed8c469c6ec5db129f85956c18 100644
---- a/mobile/src/navigation/types.ts
-+++ b/mobile/src/navigation/types.ts
-@@ -1,18 +1,19 @@
- export type AuthStackParamList = {
-   SignIn: undefined;
-   SignUp: undefined;
-   ForgotPassword: undefined;
-   ResetPassword: undefined;
- };
+diff --git a/mobile/src/context/SessionContext.tsx b/mobile/src/context/SessionContext.tsx
+index 3d5c126a5580420bd5e641086bda908abf4392b1..f247321587e0cd411daeb642efe7ddf47d2d765f 100644
+--- a/mobile/src/context/SessionContext.tsx
++++ b/mobile/src/context/SessionContext.tsx
+@@ -32,85 +32,146 @@ function getErrorMessage(error: unknown) {
+   if (error instanceof ApiError) {
+     return error.message;
+   }
+   if (error instanceof Error) {
+     return error.message;
+   }
+   return 'Something went wrong. Please try again.';
+ }
  
- export type AppStackParamList = {
-   Home: undefined;
-   EventDetail: { eventId: number };
-   TicketSelection: { eventId: number };
-   CheckoutMethod: { eventId: number; orderId: number };
-   MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
-   PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
-   MyTickets: undefined;
-   TicketDetail: { ticketId: number };
-+  Scanner: undefined;
-   Profile: undefined;
- };
+ function normalizeEmail(email: string) {
+   return email.trim().toLowerCase();
+ }
+ 
+ function toStoredSession(tokens: AuthTokens) {
+   return {
+     accessToken: tokens.access_token,
+     refreshToken: tokens.refresh_token,
+   };
+ }
+ 
+ export function SessionProvider({ children }: PropsWithChildren) {
+   const [state, setState] = useState<SessionState>('booting');
+   const [user, setUser] = useState<AuthUser | null>(null);
+ 
+   useEffect(() => {
+-    async function bootstrap() {
+-      const storedSession = await getStoredSession();
++    let completed = false;
++    const BOOT_TIMEOUT_MS = 5000;
+ 
+-      if (!storedSession?.accessToken) {
+-        setState('signedOut');
++    const completeBootAsSignedOut = async (reason: string, options?: { clearSession?: boolean }) => {
++      if (completed) {
+         return;
+       }
++      completed = true;
++
++      if (__DEV__) {
++        console.log(`[session] init fallback -> signedOut (${reason})`);
++      }
++
++      if (options?.clearSession ?? true) {
++        await clearStoredSession();
++      }
++      setApiAuthToken(null);
++      setUser(null);
++      setState('signedOut');
++    };
++
++    const completeBootAsSignedIn = (currentUser: AuthUser, reason: string) => {
++      if (completed) {
++        return;
++      }
++      completed = true;
++
++      if (__DEV__) {
++        console.log(`[session] init success -> signedIn (${reason})`);
++      }
++
++      setUser(currentUser);
++      setState('signedIn');
++    };
++
++    const timeoutId = setTimeout(() => {
++      if (__DEV__) {
++        console.warn('[session] init timeout fired, forcing signedOut');
++      }
++      void completeBootAsSignedOut('timeout');
++    }, BOOT_TIMEOUT_MS);
+ 
++    async function bootstrap() {
++      let storedSession: Awaited<ReturnType<typeof getStoredSession>> | null = null;
+       try {
++        if (__DEV__) {
++          console.log('[session] init started');
++          console.log('[session] token/session restore started');
++        }
++        storedSession = await getStoredSession();
++
++        if (!storedSession?.accessToken) {
++          await completeBootAsSignedOut('no stored access token', { clearSession: false });
++          return;
++        }
++
+         setApiAuthToken(storedSession.accessToken);
++        if (__DEV__) {
++          console.log('[session] backend validation started');
++        }
+         const currentUser = await getCurrentUser();
+-        setUser(currentUser);
+-        setState('signedIn');
++        completeBootAsSignedIn(currentUser, 'validated current user');
+       } catch (error) {
+-        if (storedSession.refreshToken) {
++        if (__DEV__) {
++          console.warn('[session] init error', error);
++        }
++
++        if (storedSession?.refreshToken) {
+           try {
++            if (__DEV__) {
++              console.log('[session] backend validation started (refresh fallback)');
++            }
+             const refreshed = await refresh(storedSession.refreshToken);
+             await setStoredSession(toStoredSession(refreshed.tokens));
+             setApiAuthToken(refreshed.tokens.access_token);
+-            setUser(refreshed.user);
+-            setState('signedIn');
++            completeBootAsSignedIn(refreshed.user, 'refreshed session');
+             return;
+-          } catch {
+-            // Continue to sign-out fallback.
++          } catch (refreshError) {
++            if (__DEV__) {
++              console.warn('[session] refresh during init failed', refreshError);
++            }
+           }
+         }
+ 
+-        await clearStoredSession();
+-        setApiAuthToken(null);
+-        setUser(null);
+-        setState('signedOut');
++        await completeBootAsSignedOut('init error');
++      } finally {
++        clearTimeout(timeoutId);
+       }
+     }
+ 
+-    bootstrap();
++    void bootstrap();
++
++    return () => {
++      clearTimeout(timeoutId);
++      completed = true;
++    };
+   }, []);
+ 
+   const value = useMemo(
+     () => ({
+       state,
+       user,
+       signIn: async (email: string, password: string) => {
+         const result = await login(normalizeEmail(email), password);
+         await setStoredSession(toStoredSession(result.tokens));
+         setApiAuthToken(result.tokens.access_token);
+         setUser(result.user);
+         setState('signedIn');
+       },
+       signUp: async (fullName: string, email: string, password: string) => {
+         const result = await register(fullName.trim(), normalizeEmail(email), password);
+         await setStoredSession(toStoredSession(result.tokens));
+         setApiAuthToken(result.tokens.access_token);
+         setUser(result.user);
+         setState('signedIn');
+       },
+       signOut: async () => {
+         try {
+           await logout();
+         } catch {
+           // logout should still complete client-side even if network call fails
  
 EOF
 )

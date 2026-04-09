@@ -54,41 +54,102 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [user, setUser] = useState<AuthUser | null>(null);
 
   useEffect(() => {
-    async function bootstrap() {
-      const storedSession = await getStoredSession();
+    let completed = false;
+    const BOOT_TIMEOUT_MS = 5000;
 
-      if (!storedSession?.accessToken) {
-        setState('signedOut');
+    const completeBootAsSignedOut = async (reason: string, options?: { clearSession?: boolean }) => {
+      if (completed) {
         return;
       }
+      completed = true;
 
+      if (__DEV__) {
+        console.log(`[session] init fallback -> signedOut (${reason})`);
+      }
+
+      if (options?.clearSession ?? true) {
+        await clearStoredSession();
+      }
+      setApiAuthToken(null);
+      setUser(null);
+      setState('signedOut');
+    };
+
+    const completeBootAsSignedIn = (currentUser: AuthUser, reason: string) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+
+      if (__DEV__) {
+        console.log(`[session] init success -> signedIn (${reason})`);
+      }
+
+      setUser(currentUser);
+      setState('signedIn');
+    };
+
+    const timeoutId = setTimeout(() => {
+      if (__DEV__) {
+        console.warn('[session] init timeout fired, forcing signedOut');
+      }
+      void completeBootAsSignedOut('timeout');
+    }, BOOT_TIMEOUT_MS);
+
+    async function bootstrap() {
+      let storedSession: Awaited<ReturnType<typeof getStoredSession>> | null = null;
       try {
+        if (__DEV__) {
+          console.log('[session] init started');
+          console.log('[session] token/session restore started');
+        }
+        storedSession = await getStoredSession();
+
+        if (!storedSession?.accessToken) {
+          await completeBootAsSignedOut('no stored access token', { clearSession: false });
+          return;
+        }
+
         setApiAuthToken(storedSession.accessToken);
+        if (__DEV__) {
+          console.log('[session] backend validation started');
+        }
         const currentUser = await getCurrentUser();
-        setUser(currentUser);
-        setState('signedIn');
+        completeBootAsSignedIn(currentUser, 'validated current user');
       } catch (error) {
-        if (storedSession.refreshToken) {
+        if (__DEV__) {
+          console.warn('[session] init error', error);
+        }
+
+        if (storedSession?.refreshToken) {
           try {
+            if (__DEV__) {
+              console.log('[session] backend validation started (refresh fallback)');
+            }
             const refreshed = await refresh(storedSession.refreshToken);
             await setStoredSession(toStoredSession(refreshed.tokens));
             setApiAuthToken(refreshed.tokens.access_token);
-            setUser(refreshed.user);
-            setState('signedIn');
+            completeBootAsSignedIn(refreshed.user, 'refreshed session');
             return;
-          } catch {
-            // Continue to sign-out fallback.
+          } catch (refreshError) {
+            if (__DEV__) {
+              console.warn('[session] refresh during init failed', refreshError);
+            }
           }
         }
 
-        await clearStoredSession();
-        setApiAuthToken(null);
-        setUser(null);
-        setState('signedOut');
+        await completeBootAsSignedOut('init error');
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
 
-    bootstrap();
+    void bootstrap();
+
+    return () => {
+      clearTimeout(timeoutId);
+      completed = true;
+    };
   }, []);
 
   const value = useMemo(
