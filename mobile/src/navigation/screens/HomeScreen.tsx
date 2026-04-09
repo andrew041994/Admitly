@@ -24,11 +24,13 @@ type HomeScreenProps = {
   onOpenMyTickets: () => void;
   onSignOut: () => void;
   onOpenEvent: (eventId: number) => void;
+  onOpenScanner: () => void;
+  canAccessScanner: boolean;
 };
 
 const CATEGORY_FILTERS = ['All', 'Party', 'Concert', 'Festival'];
 
-export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent }: HomeScreenProps) {
+export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent, onOpenScanner, canAccessScanner }: HomeScreenProps) {
   const [events, setEvents] = useState<EventDiscoveryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -90,7 +92,15 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
             <Text style={styles.kicker}>DISCOVER</Text>
             <Text style={styles.title}>Admitly</Text>
           </View>
-          <View style={styles.headerLinks}><Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable><Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable></View>
+          <View style={styles.headerLinks}>
+            {canAccessScanner ? (
+              <Pressable onPress={onOpenScanner}>
+                <Text style={styles.profileLink}>Scan Tickets</Text>
+              </Pressable>
+            ) : null}
+            <Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable>
+            <Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable>
+          </View>
         </View>
 
         <View style={styles.searchWrap}>

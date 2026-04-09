@@ -19,6 +19,14 @@
     "extra": {
       "apiBaseUrl": "http://192.168.1.123:8000",
       "enableDevTestCheckout": "true"
-    }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Admitly uses your camera to scan ticket QR codes for event check-in."
+        }
+      ]
+    ]
   }
 }

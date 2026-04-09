@@ -1,110 +1,28 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
-index c3c38b39b95a6f62be594798df5aaa0503cf1042..bbb742824a6b515c063be434b8e68847bc73d8c8 100644
---- a/backend/tests/test_tickets_service.py
-+++ b/backend/tests/test_tickets_service.py
-@@ -1062,94 +1062,94 @@ def test_wallet_uses_issued_tickets_not_only_orders(db_session: Session) -> None
+diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
+index 1789ab733105a038262b761084d8fbc6ad0d4a27..afa28d39f7c21eed8c469c6ec5db129f85956c18 100644
+--- a/mobile/src/navigation/types.ts
++++ b/mobile/src/navigation/types.ts
+@@ -1,18 +1,19 @@
+ export type AuthStackParamList = {
+   SignIn: undefined;
+   SignUp: undefined;
+   ForgotPassword: undefined;
+   ResetPassword: undefined;
+ };
  
- def _add_checkin_staff(db: Session, *, event: Event, owner_user_id: int, email: str = "scanner@example.com") -> User:
-     scanner = User(email=email, full_name="Scanner")
-     db.add(scanner)
-     db.flush()
-     db.add(
-         EventStaff(
-             event_id=event.id,
-             user_id=scanner.id,
-             role=EventStaffRole.CHECKIN,
-             invited_by_user_id=owner_user_id,
-         )
-     )
-     db.commit()
-     db.refresh(scanner)
-     return scanner
- 
- 
- def test_scan_valid_ticket(db_session: Session) -> None:
-     order, _, _, _, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-valid@example.com")
- 
-     result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
- 
--    assert result.status == "success"
-+    assert result.status == "SUCCESS"
-     assert result.ticket_id == ticket.id
-     db_session.refresh(ticket)
-     assert ticket.check_in_status == CheckInStatus.CHECKED_IN
-     assert ticket.checked_in_by_user_id == scanner.id
- 
- 
- def test_scan_already_used_ticket(db_session: Session) -> None:
-     order, _, _, _, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-used@example.com")
- 
-     first = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
-     second = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
- 
--    assert first.status == "success"
--    assert second.status == "already_used"
-+    assert first.status == "SUCCESS"
-+    assert second.status == "ALREADY_USED"
- 
- 
- def test_scan_invalid_signature(db_session: Session) -> None:
-     order, _, _, _, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-invalid@example.com")
- 
-     payload = generate_ticket_qr_payload(ticket)
-     payload["hash"] = "bad-signature"
- 
-     result = scan_ticket(db_session, payload=payload, user_id=scanner.id)
- 
--    assert result.status == "invalid"
-+    assert result.status == "INVALID"
- 
- 
- def test_scan_wrong_event(db_session: Session) -> None:
-     order, _, _, _, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-wrong-event@example.com")
- 
-     payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id + 999)
- 
-     result = scan_ticket(db_session, payload=payload, user_id=scanner.id)
- 
--    assert result.status == "wrong_event"
-+    assert result.status == "WRONG_EVENT"
- 
- 
- def test_only_authorized_can_scan(db_session: Session) -> None:
-     order, _, _, _, _ = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     outsider = User(email="outsider-scanner@example.com", full_name="Outsider Scanner")
-     db_session.add(outsider)
-     db_session.commit()
-     db_session.refresh(outsider)
- 
-     result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=outsider.id)
- 
--    assert result.status == "invalid"
-+    assert result.status == "INVALID"
-     assert result.message == "Not authorized to scan this event."
- 
- 
- def test_scan_logs_created(db_session: Session) -> None:
-     order, _, _, _, event = _seed_order(db_session, quantity=1)
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-logs@example.com")
- 
-     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
-     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
- 
-     logs = db_session.execute(select(TicketScanLog).where(TicketScanLog.ticket_id == ticket.id)).scalars().all()
-     assert len(logs) == 2
--    assert {row.status.value for row in logs} == {"success", "already_used"}
-+    assert {row.status.value for row in logs} == {"SUCCESS", "ALREADY_USED"}
+ export type AppStackParamList = {
+   Home: undefined;
+   EventDetail: { eventId: number };
+   TicketSelection: { eventId: number };
+   CheckoutMethod: { eventId: number; orderId: number };
+   MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
+   PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
+   MyTickets: undefined;
+   TicketDetail: { ticketId: number };
++  Scanner: undefined;
+   Profile: undefined;
+ };
  
 EOF
 )

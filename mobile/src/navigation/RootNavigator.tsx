@@ -21,6 +21,7 @@ import { MyTicketsScreen } from './screens/MyTicketsScreen';
 import { TicketDetailScreen } from './screens/TicketDetailScreen';
 import { CheckoutMethodScreen } from './screens/CheckoutMethodScreen';
 import { TicketSelectionScreen } from './screens/TicketSelectionScreen';
+import { ScannerScreen } from './screens/ScannerScreen';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
@@ -88,7 +89,8 @@ function TicketSelectionRoute({ eventId, onOrderCreated }: { eventId: number; on
 }
 
 function SignedInNavigator() {
-  const { signOut } = useSession();
+  const { signOut, user } = useSession();
+  const canAccessScanner = Boolean(user?.is_admin);
 
   return (
     <AppStack.Navigator
@@ -105,6 +107,8 @@ function SignedInNavigator() {
             onOpenMyTickets={() => navigation.navigate('MyTickets')}
             onSignOut={signOut}
             onOpenEvent={(eventId) => navigation.navigate('EventDetail', { eventId })}
+            onOpenScanner={() => navigation.navigate('Scanner')}
+            canAccessScanner={canAccessScanner}
           />
         )}
       </AppStack.Screen>
@@ -156,6 +160,9 @@ function SignedInNavigator() {
       </AppStack.Screen>
       <AppStack.Screen name="TicketDetail" options={{ title: 'Ticket' }}>
         {({ route }) => <TicketDetailScreen ticketId={route.params.ticketId} />}
+      </AppStack.Screen>
+      <AppStack.Screen name="Scanner" options={{ headerShown: false }}>
+        {({ navigation }) => <ScannerScreen canAccessScanner={canAccessScanner} onBack={() => navigation.goBack()} />}
       </AppStack.Screen>
       <AppStack.Screen
         name="Profile"

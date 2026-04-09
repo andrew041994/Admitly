@@ -60,3 +60,21 @@ export type TicketQrResponse = {
 export async function getMyTicketQr(ticketId: number): Promise<TicketQrResponse> {
   return apiRequest<TicketQrResponse>({ path: `/tickets/${ticketId}/qr`, method: 'GET' });
 }
+
+export type TicketScanResponse = {
+  state?: 'success' | 'already_used' | 'invalid' | 'wrong_event' | string;
+  status?: string;
+  result?: string;
+  message?: string;
+  attendee_name?: string;
+  ticket_type?: string;
+  checked_in_at?: string;
+};
+
+export async function scanTicket(payload: string): Promise<TicketScanResponse> {
+  return apiRequest<TicketScanResponse>({
+    path: '/tickets/scan',
+    method: 'POST',
+    body: JSON.stringify({ payload }),
+  });
+}

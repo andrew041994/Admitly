@@ -14,5 +14,6 @@ export type AppStackParamList = {
   PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
   MyTickets: undefined;
   TicketDetail: { ticketId: number };
+  Scanner: undefined;
   Profile: undefined;
 };
