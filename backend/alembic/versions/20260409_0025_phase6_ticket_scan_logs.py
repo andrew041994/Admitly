@@ -10,6 +10,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import ENUM
 
 
 # revision identifiers, used by Alembic.
@@ -20,13 +21,37 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 check_in_status_enum = sa.Enum("not_checked_in", "checked_in", name="check_in_status")
-ticket_scan_status_enum = sa.Enum("success", "already_used", "invalid", "wrong_event", name="ticket_scan_status")
+ticket_scan_status_enum = ENUM(
+    "SUCCESS",
+    "ALREADY_USED",
+    "INVALID",
+    "WRONG_EVENT",
+    name="ticket_scan_status",
+    create_type=False,
+)
 
 
 def upgrade() -> None:
     bind = op.get_bind()
     check_in_status_enum.create(bind, checkfirst=True)
-    ticket_scan_status_enum.create(bind, checkfirst=True)
+
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_type WHERE typname = 'ticket_scan_status'
+            ) THEN
+                CREATE TYPE ticket_scan_status AS ENUM (
+                    'SUCCESS',
+                    'ALREADY_USED',
+                    'INVALID',
+                    'WRONG_EVENT'
+                );
+            END IF;
+        END$$;
+        """
+    )
 
     op.add_column(
         "tickets",
@@ -82,5 +107,4 @@ def downgrade() -> None:
     op.drop_column("tickets", "check_in_status")
 
     bind = op.get_bind()
-    ticket_scan_status_enum.drop(bind, checkfirst=True)
     check_in_status_enum.drop(bind, checkfirst=True)

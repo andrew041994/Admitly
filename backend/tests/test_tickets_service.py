@@ -1084,7 +1084,7 @@ def test_scan_valid_ticket(db_session: Session) -> None:
 
     result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
 
-    assert result.status == "success"
+    assert result.status == "SUCCESS"
     assert result.ticket_id == ticket.id
     db_session.refresh(ticket)
     assert ticket.check_in_status == CheckInStatus.CHECKED_IN
@@ -1099,8 +1099,8 @@ def test_scan_already_used_ticket(db_session: Session) -> None:
     first = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
     second = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
 
-    assert first.status == "success"
-    assert second.status == "already_used"
+    assert first.status == "SUCCESS"
+    assert second.status == "ALREADY_USED"
 
 
 def test_scan_invalid_signature(db_session: Session) -> None:
@@ -1113,7 +1113,7 @@ def test_scan_invalid_signature(db_session: Session) -> None:
 
     result = scan_ticket(db_session, payload=payload, user_id=scanner.id)
 
-    assert result.status == "invalid"
+    assert result.status == "INVALID"
 
 
 def test_scan_wrong_event(db_session: Session) -> None:
@@ -1125,7 +1125,7 @@ def test_scan_wrong_event(db_session: Session) -> None:
 
     result = scan_ticket(db_session, payload=payload, user_id=scanner.id)
 
-    assert result.status == "wrong_event"
+    assert result.status == "WRONG_EVENT"
 
 
 def test_only_authorized_can_scan(db_session: Session) -> None:
@@ -1138,7 +1138,7 @@ def test_only_authorized_can_scan(db_session: Session) -> None:
 
     result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=outsider.id)
 
-    assert result.status == "invalid"
+    assert result.status == "INVALID"
     assert result.message == "Not authorized to scan this event."
 
 
@@ -1152,4 +1152,4 @@ def test_scan_logs_created(db_session: Session) -> None:
 
     logs = db_session.execute(select(TicketScanLog).where(TicketScanLog.ticket_id == ticket.id)).scalars().all()
     assert len(logs) == 2
-    assert {row.status.value for row in logs} == {"success", "already_used"}
+    assert {row.status.value for row in logs} == {"SUCCESS", "ALREADY_USED"}

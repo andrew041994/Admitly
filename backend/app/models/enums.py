@@ -64,10 +64,10 @@ class CheckInStatus(str, Enum):
 
 
 class TicketScanStatus(str, Enum):
-    SUCCESS = "success"
-    ALREADY_USED = "already_used"
-    INVALID = "invalid"
-    WRONG_EVENT = "wrong_event"
+    SUCCESS = "SUCCESS"
+    ALREADY_USED = "ALREADY_USED"
+    INVALID = "INVALID"
+    WRONG_EVENT = "WRONG_EVENT"
 
 
 class TransferInviteStatus(str, Enum):
