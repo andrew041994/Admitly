@@ -43,8 +43,8 @@ def upgrade() -> None:
         """
         UPDATE tickets
         SET check_in_status = CASE
-            WHEN status = 'checked_in' THEN 'checked_in'
-            ELSE 'not_checked_in'
+            WHEN status = 'checked_in' THEN 'checked_in'::check_in_status
+            ELSE 'not_checked_in'::check_in_status
         END
         """
     )
