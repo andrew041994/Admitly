@@ -40,7 +40,6 @@ from app.services.tickets import (
     TicketTransferError,
     TicketVoidError,
     check_in_ticket,
-    check_in_ticket_for_event,
     get_event_check_in_summary,
     get_ticket_by_qr_payload,
     get_ticket_for_owner,
@@ -67,6 +66,52 @@ from app.models.event import Event
 
 
 router = APIRouter(tags=["tickets"])
+
+_CHECK_IN_PUBLIC_CODE_MAP = {
+    "valid": "admitted",
+    "already_checked_in": "already_used",
+    "wrong_event": "wrong_event",
+    "invalid": "invalid_qr",
+    "not_found": "not_found",
+    "refunded_or_invalidated": "voided",
+    "unauthorized": "unauthorized",
+    "canceled_event": "event_not_admittable",
+    "order_not_admittable": "event_not_admittable",
+}
+
+_CHECK_IN_PUBLIC_MESSAGE_MAP = {
+    "admitted": "Admitted",
+    "already_used": "Ticket already used",
+    "wrong_event": "Wrong event",
+    "invalid_qr": "Invalid ticket",
+    "not_found": "Ticket not found",
+    "voided": "Ticket voided",
+    "unauthorized": "You are not authorized to check in tickets for this event",
+    "event_not_admittable": "Event is not accepting check-ins",
+}
+
+
+def _normalize_check_in_status(status: str | None) -> str:
+    if not status:
+        return "invalid_qr"
+    return _CHECK_IN_PUBLIC_CODE_MAP.get(status, status)
+
+
+def _build_check_in_response(*, event_id: int, result) -> TicketCheckInResponse:
+    code = _normalize_check_in_status(result.status)
+    success = code == "admitted" and bool(result.valid)
+    message = _CHECK_IN_PUBLIC_MESSAGE_MAP.get(code, result.message)
+    return TicketCheckInResponse(
+        success=success,
+        code=code,
+        ticket_id=result.ticket.id if result.ticket else None,
+        event_id=event_id,
+        status=result.ticket.status.value if result.ticket else None,
+        checked_in_at=result.checked_in_at,
+        checked_in_by_user_id=result.ticket.checked_in_by_user_id if result.ticket else None,
+        message=message,
+        ui_signal="green" if success else "red",
+    )
 
 
 
@@ -336,16 +381,7 @@ def confirm_event_ticket_check_in(
         ticket_code=payload.ticket_code,
         method=method,
     )
-    return TicketCheckInResponse(
-        success=result.valid,
-        code=result.status,
-        ticket_id=result.ticket.id if result.ticket else None,
-        event_id=event_id,
-        status=result.ticket.status.value if result.ticket else None,
-        checked_in_at=result.checked_in_at,
-        checked_in_by_user_id=result.ticket.checked_in_by_user_id if result.ticket else None,
-        message=result.message,
-    )
+    return _build_check_in_response(event_id=event_id, result=result)
 
 
 @router.post("/events/{event_id}/check-in/manual", response_model=TicketCheckInResponse)
@@ -363,16 +399,7 @@ def manual_event_ticket_check_in(
         ticket_code=payload.ticket_code,
         method=CHECK_IN_METHOD_MANUAL,
     )
-    return TicketCheckInResponse(
-        success=result.valid,
-        code=result.status,
-        ticket_id=result.ticket.id if result.ticket else None,
-        event_id=event_id,
-        status=result.ticket.status.value if result.ticket else None,
-        checked_in_at=result.checked_in_at,
-        checked_in_by_user_id=result.ticket.checked_in_by_user_id if result.ticket else None,
-        message=result.message,
-    )
+    return _build_check_in_response(event_id=event_id, result=result)
 
 
 @router.get("/events/{event_id}/check-in/summary", response_model=TicketCheckInSummaryResponse)
@@ -449,16 +476,7 @@ def override_event_ticket_check_in(
     except TicketCheckInConflictError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    return TicketCheckInResponse(
-        success=result.valid,
-        code=result.status,
-        ticket_id=result.ticket.id if result.ticket else None,
-        event_id=event_id,
-        status=result.ticket.status.value if result.ticket else None,
-        checked_in_at=result.checked_in_at,
-        checked_in_by_user_id=result.ticket.checked_in_by_user_id if result.ticket else None,
-        message=result.message,
-    )
+    return _build_check_in_response(event_id=event_id, result=result)
 
 
 @router.post("/events/{event_id}/tickets/check-in", response_model=TicketCheckInResponse)
@@ -468,36 +486,15 @@ def check_in_event_ticket(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> TicketCheckInResponse:
-    try:
-        ticket = check_in_ticket_for_event(
-            db,
-            scanner_user_id=user_id,
-            event_id=event_id,
-            qr_payload=payload.qr_payload,
-            ticket_code=payload.ticket_code,
-        )
-    except TicketAuthorizationError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    except TicketNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except TicketCrossEventError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except TicketCheckInConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-
-    return TicketCheckInResponse(
-        success=True,
-        code="valid",
-        ticket_id=ticket.id,
-        event_id=ticket.event_id,
-        status=ticket.status.value,
-        checked_in_at=ticket.checked_in_at,
-        checked_in_by_user_id=ticket.checked_in_by_user_id,
-        message="Ticket checked in successfully.",
+    result = check_in_ticket(
+        db,
+        scanner_user_id=user_id,
+        event_id=event_id,
+        qr_payload=payload.qr_payload,
+        ticket_code=payload.ticket_code,
+        method=CHECK_IN_METHOD_QR,
     )
+    return _build_check_in_response(event_id=event_id, result=result)
 
 
 @router.post("/tickets/{ticket_id}/resend", response_model=NotificationDispatchResponse)

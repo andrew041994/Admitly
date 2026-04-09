@@ -23,7 +23,8 @@ from app.models.enums import (
     OrderStatus,
     TicketStatus,
 )
-from app.api.tickets import get_ticket_detail, get_ticket_qr_by_ticket_id
+from app.api.tickets import check_in_event_ticket, get_ticket_detail, get_ticket_qr_by_ticket_id
+from app.schemas.ticket import TicketCheckInRequest
 from app.services.orders import complete_paid_order
 from app.services.ticket_qr import (
     QR_PAYLOAD_PREFIX,
@@ -412,6 +413,113 @@ def test_checkin_success_and_second_scan_rejected(db_session: Session) -> None:
             qr_payload=ticket.qr_payload,
             ticket_code=None,
         )
+
+
+def test_event_scoped_one_step_route_returns_green_on_admit_and_red_on_duplicate(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    first = check_in_event_ticket(
+        event_id=event.id,
+        payload=TicketCheckInRequest(qr_payload=ticket.qr_payload),
+        db=db_session,
+        user_id=event.organizer.user_id,
+    )
+    assert first.success is True
+    assert first.code == "admitted"
+    assert first.message == "Admitted"
+    assert first.ui_signal == "green"
+    assert first.ticket_id == ticket.id
+    assert first.checked_in_at is not None
+
+    second = check_in_event_ticket(
+        event_id=event.id,
+        payload=TicketCheckInRequest(qr_payload=ticket.qr_payload),
+        db=db_session,
+        user_id=event.organizer.user_id,
+    )
+    assert second.success is False
+    assert second.code == "already_used"
+    assert second.message == "Ticket already used"
+    assert second.ui_signal == "red"
+    assert second.ticket_id == ticket.id
+
+
+def test_event_scoped_one_step_route_returns_red_for_wrong_event_and_unauthorized(db_session: Session) -> None:
+    order_1, _, _, _, event_1 = _seed_order(db_session, user_email="route-a@example.com", quantity=1)
+    order_2, _, _, _, event_2 = _seed_order(db_session, user_email="route-b@example.com", quantity=1)
+    ticket_1 = issue_tickets_for_completed_order(db_session, order_1)[0]
+    issue_tickets_for_completed_order(db_session, order_2)
+
+    wrong_event = check_in_event_ticket(
+        event_id=event_2.id,
+        payload=TicketCheckInRequest(qr_payload=ticket_1.qr_payload),
+        db=db_session,
+        user_id=event_2.organizer.user_id,
+    )
+    assert wrong_event.success is False
+    assert wrong_event.code == "wrong_event"
+    assert wrong_event.message == "Wrong event"
+    assert wrong_event.ui_signal == "red"
+    assert wrong_event.ticket_id == ticket_1.id
+
+    outsider = User(email="route-outsider@example.com", full_name="Outsider")
+    db_session.add(outsider)
+    db_session.commit()
+    db_session.refresh(outsider)
+
+    unauthorized = check_in_event_ticket(
+        event_id=event_1.id,
+        payload=TicketCheckInRequest(qr_payload=ticket_1.qr_payload),
+        db=db_session,
+        user_id=outsider.id,
+    )
+    assert unauthorized.success is False
+    assert unauthorized.code == "unauthorized"
+    assert unauthorized.message == "You are not authorized to check in tickets for this event"
+    assert unauthorized.ui_signal == "red"
+    assert unauthorized.ticket_id is None
+
+
+def test_event_scoped_one_step_route_returns_red_for_invalid_not_found_and_voided(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    invalid = check_in_event_ticket(
+        event_id=event.id,
+        payload=TicketCheckInRequest(qr_payload=""),
+        db=db_session,
+        user_id=event.organizer.user_id,
+    )
+    assert invalid.success is False
+    assert invalid.code == "invalid_qr"
+    assert invalid.message == "Invalid ticket"
+    assert invalid.ui_signal == "red"
+
+    missing = check_in_event_ticket(
+        event_id=event.id,
+        payload=TicketCheckInRequest(qr_payload="missing-ticket-token"),
+        db=db_session,
+        user_id=event.organizer.user_id,
+    )
+    assert missing.success is False
+    assert missing.code == "not_found"
+    assert missing.message == "Ticket not found"
+    assert missing.ui_signal == "red"
+
+    ticket.status = TicketStatus.VOIDED
+    db_session.commit()
+
+    voided = check_in_event_ticket(
+        event_id=event.id,
+        payload=TicketCheckInRequest(qr_payload=ticket.qr_payload),
+        db=db_session,
+        user_id=event.organizer.user_id,
+    )
+    assert voided.success is False
+    assert voided.code == "voided"
+    assert voided.message == "Ticket voided"
+    assert voided.ui_signal == "red"
 
 
 def test_validate_ticket_statuses_for_qr_flow(db_session: Session) -> None:

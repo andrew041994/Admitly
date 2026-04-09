@@ -69,6 +69,7 @@ class TicketCheckInResponse(BaseModel):
     checked_in_at: datetime | None
     checked_in_by_user_id: int | None
     message: str
+    ui_signal: str
 
 
 class TicketCheckInValidateRequest(BaseModel):
