@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
+
 from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
 from app.schemas.notification import NotificationDispatchResponse
@@ -62,6 +63,8 @@ from app.services.ticket_qr import (
     get_ticket_public_url,
     get_ticket_qr_image_url,
 )
+from app.models.event import Event
+
 
 router = APIRouter(tags=["tickets"])
 
@@ -114,14 +117,20 @@ def _to_ticket_response(db: Session, ticket) -> TicketResponse:
 
 def _to_ticket_detail_response(db: Session, ticket) -> TicketDetailResponse:
     base = _to_ticket_response(db, ticket)
+
+    base_data = base.model_dump()
     event = ticket.event
+
+# remove fields that will be overridden explicitly
+    base_data.pop("ticket_tier_name", None)
+
     return TicketDetailResponse(
-        **base.model_dump(),
+        **base_data,
         ticket_id=ticket.id,
         ticket_public_id=ticket.display_code,
         attendee_name=ticket.owner.full_name if ticket.owner else None,
         attendee_email=ticket.owner.email if ticket.owner else None,
-        event_description=event.description if event else None,
+        event_description=event.long_description if event else None,
         venue_address=_build_venue_address(event),
         ends_at=event.end_at if event else None,
         timezone=event.timezone if event else None,
