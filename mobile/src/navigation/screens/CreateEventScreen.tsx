@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import DateTimePicker, { DateTimePickerAndroid, type DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 import { ApiError } from '../../api/client';
 import { createEvent } from '../../api/organizer';
@@ -35,8 +35,19 @@ type DateTimeField = {
 
 type DateTimeFieldKey = 'start_at' | 'end_at' | 'sales_start_at' | 'sales_end_at';
 
+type PickerField =
+  | 'start_date'
+  | 'start_time'
+  | 'end_date'
+  | 'end_time'
+  | 'doors_open_time'
+  | 'sales_start_date'
+  | 'sales_start_time'
+  | 'sales_end_date'
+  | 'sales_end_time';
+
 type PickerSession = {
-  field: DateTimeFieldKey | 'doors_open_at';
+  field: PickerField;
   mode: 'date' | 'time';
   value: Date;
   selectedDate?: Date;
@@ -73,7 +84,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const [salesStartAt, setSalesStartAt] = useState<DateTimeField>({ date: null, time: null });
   const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
   const [pickerSession, setPickerSession] = useState<PickerSession>(null);
-  const [iosDraftValue, setIosDraftValue] = useState<Date>(new Date());
+  const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
   const [venueName, setVenueName] = useState('');
   const [addressText, setAddressText] = useState('');
   const [refundPolicyText, setRefundPolicyText] = useState('');
@@ -96,105 +107,66 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   };
 
   const openPicker = (nextSession: Exclude<PickerSession, null>) => {
-    if (Platform.OS === 'android') {
-      DateTimePickerAndroid.open({
-        value: nextSession.value,
-        mode: nextSession.mode,
-        is24Hour: false,
-        onChange: (event: DateTimePickerEvent, selectedDate) => {
-          if (event.type !== 'set' || !selectedDate) return;
-          if (nextSession.field === 'doors_open_at') {
-            setDoorsOpenAt(selectedDate);
-            return;
-          }
-
-          if (nextSession.mode === 'date') {
-            const nextTimeValue =
-              nextSession.field === 'start_at'
-                ? startAt.time ?? selectedDate
-                : nextSession.field === 'end_at'
-                  ? endAt.time ?? startAt.time ?? selectedDate
-                  : nextSession.field === 'sales_start_at'
-                    ? salesStartAt.time ?? selectedDate
-                    : salesEndAt.time ?? selectedDate;
-
-            openPicker({
-              field: nextSession.field,
-              mode: 'time',
-              value: nextTimeValue,
-              selectedDate,
-            });
-            return;
-          }
-
-          const finalDate = nextSession.selectedDate;
-          if (!finalDate) return;
-
-          if (nextSession.field === 'start_at') {
-            setStartAt({ date: finalDate, time: selectedDate });
-            return;
-          }
-          if (nextSession.field === 'end_at') {
-            setEndAt({ date: finalDate, time: selectedDate });
-            return;
-          }
-          if (nextSession.field === 'sales_start_at') {
-            setSalesStartAt({ date: finalDate, time: selectedDate });
-            return;
-          }
-          setSalesEndAt({ date: finalDate, time: selectedDate });
-        },
-      });
-      return;
-    }
-
-    setIosDraftValue(nextSession.value);
+    setPickerDraftValue(nextSession.value);
     setPickerSession(nextSession);
   };
 
   const startDateTimeFlow = (field: DateTimeFieldKey) => {
     const now = new Date();
     if (field === 'start_at') {
-      openPicker({ field, mode: 'date', value: startAt.date ?? now });
+      openPicker({ field: 'start_date', mode: 'date', value: startAt.date ?? now });
       return;
     }
     if (field === 'end_at') {
-      openPicker({ field, mode: 'date', value: endAt.date ?? startAt.date ?? now });
+      openPicker({ field: 'end_date', mode: 'date', value: endAt.date ?? startAt.date ?? now });
       return;
     }
     if (field === 'sales_start_at') {
-      openPicker({ field, mode: 'date', value: salesStartAt.date ?? now });
+      openPicker({ field: 'sales_start_date', mode: 'date', value: salesStartAt.date ?? now });
       return;
     }
-    openPicker({ field, mode: 'date', value: salesEndAt.date ?? now });
+    openPicker({ field: 'sales_end_date', mode: 'date', value: salesEndAt.date ?? now });
   };
 
-  const completeIosSelection = () => {
+  const cancelPickerSelection = () => {
+    setPickerSession(null);
+  };
+
+  const completePickerSelection = () => {
     if (!pickerSession) return;
 
-    if (pickerSession.field === 'doors_open_at') {
-      setDoorsOpenAt(iosDraftValue);
+    if (pickerSession.field === 'doors_open_time') {
+      setDoorsOpenAt(pickerDraftValue);
       setPickerSession(null);
       return;
     }
 
     if (pickerSession.mode === 'date') {
       const nextTimeValue =
-        pickerSession.field === 'start_at'
-          ? startAt.time ?? iosDraftValue
-          : pickerSession.field === 'end_at'
-            ? endAt.time ?? startAt.time ?? iosDraftValue
-            : pickerSession.field === 'sales_start_at'
-              ? salesStartAt.time ?? iosDraftValue
-              : salesEndAt.time ?? iosDraftValue;
+        pickerSession.field === 'start_date'
+          ? startAt.time ?? pickerDraftValue
+          : pickerSession.field === 'end_date'
+            ? endAt.time ?? startAt.time ?? pickerDraftValue
+            : pickerSession.field === 'sales_start_date'
+              ? salesStartAt.time ?? pickerDraftValue
+              : salesEndAt.time ?? pickerDraftValue;
+
+      const nextField: PickerField =
+        pickerSession.field === 'start_date'
+          ? 'start_time'
+          : pickerSession.field === 'end_date'
+            ? 'end_time'
+            : pickerSession.field === 'sales_start_date'
+              ? 'sales_start_time'
+              : 'sales_end_time';
 
       setPickerSession({
-        field: pickerSession.field,
+        field: nextField,
         mode: 'time',
         value: nextTimeValue,
-        selectedDate: iosDraftValue,
+        selectedDate: pickerDraftValue,
       });
-      setIosDraftValue(nextTimeValue);
+      setPickerDraftValue(nextTimeValue);
       return;
     }
 
@@ -204,14 +176,14 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
       return;
     }
 
-    if (pickerSession.field === 'start_at') {
-      setStartAt({ date: finalDate, time: iosDraftValue });
-    } else if (pickerSession.field === 'end_at') {
-      setEndAt({ date: finalDate, time: iosDraftValue });
-    } else if (pickerSession.field === 'sales_start_at') {
-      setSalesStartAt({ date: finalDate, time: iosDraftValue });
-    } else if (pickerSession.field === 'sales_end_at') {
-      setSalesEndAt({ date: finalDate, time: iosDraftValue });
+    if (pickerSession.field === 'start_time') {
+      setStartAt({ date: finalDate, time: pickerDraftValue });
+    } else if (pickerSession.field === 'end_time') {
+      setEndAt({ date: finalDate, time: pickerDraftValue });
+    } else if (pickerSession.field === 'sales_start_time') {
+      setSalesStartAt({ date: finalDate, time: pickerDraftValue });
+    } else if (pickerSession.field === 'sales_end_time') {
+      setSalesEndAt({ date: finalDate, time: pickerDraftValue });
     }
 
     setPickerSession(null);
@@ -325,7 +297,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
 
         <View style={styles.timingCard}>
           <Text style={styles.timingLabel}>Doors open (optional)</Text>
-          <Pressable style={styles.input} onPress={() => openPicker({ field: 'doors_open_at', mode: 'time', value: doorsOpenAt ?? startAt.time ?? new Date() })}>
+          <Pressable style={styles.input} onPress={() => openPicker({ field: 'doors_open_time', mode: 'time', value: doorsOpenAt ?? startAt.time ?? new Date() })}>
             <Text style={styles.pickerValue}>{doorsOpenAt ? formatTime(doorsOpenAt) : 'Pick time'}</Text>
           </Pressable>
         </View>
@@ -408,23 +380,24 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         </Pressable>
       </ScrollView>
 
-      {Platform.OS === 'ios' && pickerSession ? (
-        <Modal transparent animationType="slide" visible onRequestClose={() => setPickerSession(null)}>
+      {pickerSession ? (
+        <Modal transparent animationType="slide" visible onRequestClose={cancelPickerSelection}>
           <View style={styles.modalBackdrop}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={cancelPickerSelection} />
             <View style={styles.modalSheet}>
               <View style={styles.modalActions}>
-                <Pressable onPress={() => setPickerSession(null)}>
+                <Pressable onPress={cancelPickerSelection}>
                   <Text style={styles.modalActionText}>Cancel</Text>
                 </Pressable>
-                <Pressable onPress={completeIosSelection}>
+                <Pressable onPress={completePickerSelection}>
                   <Text style={styles.modalActionText}>Done</Text>
                 </Pressable>
               </View>
               <DateTimePicker
-                value={iosDraftValue}
+                value={pickerDraftValue}
                 mode={pickerSession.mode}
                 onChange={(_, date) => {
-                  if (date) setIosDraftValue(date);
+                  if (date) setPickerDraftValue(date);
                 }}
               />
             </View>
@@ -492,12 +465,16 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    backgroundColor: 'rgba(0,0,0,0.65)',
   },
   modalSheet: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.surfaceElevated,
     borderTopLeftRadius: theme.radius.lg,
     borderTopRightRadius: theme.radius.lg,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: theme.colors.border,
     paddingBottom: theme.spacing.lg,
   },
   modalActions: {
