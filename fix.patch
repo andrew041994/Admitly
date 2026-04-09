@@ -1,62 +1,19 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/mobile/src/navigation/screens/CreateEventScreen.tsx b/mobile/src/navigation/screens/CreateEventScreen.tsx
-index 14f7e2359ba46eb7bf7bd6305dedb79673580c67..ea40d2b6399d57c3dd736ba152b47db206752b5a 100644
+index ea40d2b6399d57c3dd736ba152b47db206752b5a..a9755f68becf2e7a2ac5d9b5016eab51cfbc9658 100644
 --- a/mobile/src/navigation/screens/CreateEventScreen.tsx
 +++ b/mobile/src/navigation/screens/CreateEventScreen.tsx
-@@ -1,239 +1,211 @@
- import { useMemo, useState } from 'react';
--import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
--import DateTimePicker, { DateTimePickerAndroid, type DateTimePickerEvent } from '@react-native-community/datetimepicker';
-+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-+import DateTimePicker from '@react-native-community/datetimepicker';
+@@ -41,50 +41,63 @@ type PickerField =
+   | 'end_date'
+   | 'end_time'
+   | 'doors_open_time'
+   | 'sales_start_date'
+   | 'sales_start_time'
+   | 'sales_end_date'
+   | 'sales_end_time';
  
- import { ApiError } from '../../api/client';
- import { createEvent } from '../../api/organizer';
- import { theme } from '../../theme';
- 
- type TierFormState = {
-   name: string;
-   description: string;
-   priceAmount: string;
-   currency: string;
-   quantityTotal: string;
-   minPerOrder: string;
-   maxPerOrder: string;
- };
- 
- const defaultTier = (): TierFormState => ({
-   name: '',
-   description: '',
-   priceAmount: '0.00',
-   currency: 'GYD',
-   quantityTotal: '',
-   minPerOrder: '',
-   maxPerOrder: '',
- });
- 
- const GUYANA_TIMEZONE = 'America/Guyana';
- 
- type DateTimeField = {
-   date: Date | null;
-   time: Date | null;
- };
- 
- type DateTimeFieldKey = 'start_at' | 'end_at' | 'sales_start_at' | 'sales_end_at';
- 
-+type PickerField =
-+  | 'start_date'
-+  | 'start_time'
-+  | 'end_date'
-+  | 'end_time'
-+  | 'doors_open_time'
-+  | 'sales_start_date'
-+  | 'sales_start_time'
-+  | 'sales_end_date'
-+  | 'sales_end_time';
-+
  type PickerSession = {
--  field: DateTimeFieldKey | 'doors_open_at';
-+  field: PickerField;
+   field: PickerField;
    mode: 'date' | 'time';
    value: Date;
    selectedDate?: Date;
@@ -72,6 +29,19 @@ index 14f7e2359ba46eb7bf7bd6305dedb79673580c67..ea40d2b6399d57c3dd736ba152b47db2
    return `${formatDate(field.date)} • ${formatTime(field.time)}`;
  };
  
++const getPickerTitle = (field: PickerField) => {
++  if (field.startsWith('start_')) return 'Event start';
++  if (field.startsWith('end_')) return 'Event end';
++  if (field === 'doors_open_time') return 'Doors open';
++  if (field.startsWith('sales_start_')) return 'Sales start';
++  return 'Sales end';
++};
++
++const getPickerStepLabel = (session: Exclude<PickerSession, null>) => {
++  if (session.field === 'doors_open_time') return 'Select time';
++  return session.mode === 'date' ? 'Step 1 of 2 • Select date' : 'Step 2 of 2 • Select time';
++};
++
  const buildGuyanaIso = (date: Date, time: Date) => {
    const year = date.getFullYear();
    const month = date.getMonth();
@@ -93,265 +63,11 @@ index 14f7e2359ba46eb7bf7bd6305dedb79673580c67..ea40d2b6399d57c3dd736ba152b47db2
    const [salesStartAt, setSalesStartAt] = useState<DateTimeField>({ date: null, time: null });
    const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
    const [pickerSession, setPickerSession] = useState<PickerSession>(null);
--  const [iosDraftValue, setIosDraftValue] = useState<Date>(new Date());
-+  const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
+   const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
    const [venueName, setVenueName] = useState('');
    const [addressText, setAddressText] = useState('');
    const [refundPolicyText, setRefundPolicyText] = useState('');
-   const [termsText, setTermsText] = useState('');
-   const [tiers, setTiers] = useState<TierFormState[]>([defaultTier()]);
- 
-   const [loading, setLoading] = useState(false);
-   const [error, setError] = useState<string | null>(null);
- 
-   const canRemoveTier = tiers.length > 1;
- 
-   const addTier = () => setTiers((current) => [...current, defaultTier()]);
-   const removeTier = (index: number) => {
-     if (tiers.length === 1) return;
-     setTiers((current) => current.filter((_, idx) => idx !== index));
-   };
- 
-   const updateTier = (index: number, patch: Partial<TierFormState>) => {
-     setTiers((current) => current.map((tier, idx) => (idx === index ? { ...tier, ...patch } : tier)));
-   };
- 
-   const openPicker = (nextSession: Exclude<PickerSession, null>) => {
--    if (Platform.OS === 'android') {
--      DateTimePickerAndroid.open({
--        value: nextSession.value,
--        mode: nextSession.mode,
--        is24Hour: false,
--        onChange: (event: DateTimePickerEvent, selectedDate) => {
--          if (event.type !== 'set' || !selectedDate) return;
--          if (nextSession.field === 'doors_open_at') {
--            setDoorsOpenAt(selectedDate);
--            return;
--          }
--
--          if (nextSession.mode === 'date') {
--            const nextTimeValue =
--              nextSession.field === 'start_at'
--                ? startAt.time ?? selectedDate
--                : nextSession.field === 'end_at'
--                  ? endAt.time ?? startAt.time ?? selectedDate
--                  : nextSession.field === 'sales_start_at'
--                    ? salesStartAt.time ?? selectedDate
--                    : salesEndAt.time ?? selectedDate;
--
--            openPicker({
--              field: nextSession.field,
--              mode: 'time',
--              value: nextTimeValue,
--              selectedDate,
--            });
--            return;
--          }
--
--          const finalDate = nextSession.selectedDate;
--          if (!finalDate) return;
--
--          if (nextSession.field === 'start_at') {
--            setStartAt({ date: finalDate, time: selectedDate });
--            return;
--          }
--          if (nextSession.field === 'end_at') {
--            setEndAt({ date: finalDate, time: selectedDate });
--            return;
--          }
--          if (nextSession.field === 'sales_start_at') {
--            setSalesStartAt({ date: finalDate, time: selectedDate });
--            return;
--          }
--          setSalesEndAt({ date: finalDate, time: selectedDate });
--        },
--      });
--      return;
--    }
--
--    setIosDraftValue(nextSession.value);
-+    setPickerDraftValue(nextSession.value);
-     setPickerSession(nextSession);
-   };
- 
-   const startDateTimeFlow = (field: DateTimeFieldKey) => {
-     const now = new Date();
-     if (field === 'start_at') {
--      openPicker({ field, mode: 'date', value: startAt.date ?? now });
-+      openPicker({ field: 'start_date', mode: 'date', value: startAt.date ?? now });
-       return;
-     }
-     if (field === 'end_at') {
--      openPicker({ field, mode: 'date', value: endAt.date ?? startAt.date ?? now });
-+      openPicker({ field: 'end_date', mode: 'date', value: endAt.date ?? startAt.date ?? now });
-       return;
-     }
-     if (field === 'sales_start_at') {
--      openPicker({ field, mode: 'date', value: salesStartAt.date ?? now });
-+      openPicker({ field: 'sales_start_date', mode: 'date', value: salesStartAt.date ?? now });
-       return;
-     }
--    openPicker({ field, mode: 'date', value: salesEndAt.date ?? now });
-+    openPicker({ field: 'sales_end_date', mode: 'date', value: salesEndAt.date ?? now });
-   };
- 
--  const completeIosSelection = () => {
-+  const cancelPickerSelection = () => {
-+    setPickerSession(null);
-+  };
-+
-+  const completePickerSelection = () => {
-     if (!pickerSession) return;
- 
--    if (pickerSession.field === 'doors_open_at') {
--      setDoorsOpenAt(iosDraftValue);
-+    if (pickerSession.field === 'doors_open_time') {
-+      setDoorsOpenAt(pickerDraftValue);
-       setPickerSession(null);
-       return;
-     }
- 
-     if (pickerSession.mode === 'date') {
-       const nextTimeValue =
--        pickerSession.field === 'start_at'
--          ? startAt.time ?? iosDraftValue
--          : pickerSession.field === 'end_at'
--            ? endAt.time ?? startAt.time ?? iosDraftValue
--            : pickerSession.field === 'sales_start_at'
--              ? salesStartAt.time ?? iosDraftValue
--              : salesEndAt.time ?? iosDraftValue;
-+        pickerSession.field === 'start_date'
-+          ? startAt.time ?? pickerDraftValue
-+          : pickerSession.field === 'end_date'
-+            ? endAt.time ?? startAt.time ?? pickerDraftValue
-+            : pickerSession.field === 'sales_start_date'
-+              ? salesStartAt.time ?? pickerDraftValue
-+              : salesEndAt.time ?? pickerDraftValue;
-+
-+      const nextField: PickerField =
-+        pickerSession.field === 'start_date'
-+          ? 'start_time'
-+          : pickerSession.field === 'end_date'
-+            ? 'end_time'
-+            : pickerSession.field === 'sales_start_date'
-+              ? 'sales_start_time'
-+              : 'sales_end_time';
- 
-       setPickerSession({
--        field: pickerSession.field,
-+        field: nextField,
-         mode: 'time',
-         value: nextTimeValue,
--        selectedDate: iosDraftValue,
-+        selectedDate: pickerDraftValue,
-       });
--      setIosDraftValue(nextTimeValue);
-+      setPickerDraftValue(nextTimeValue);
-       return;
-     }
- 
-     const finalDate = pickerSession.selectedDate;
-     if (!finalDate) {
-       setPickerSession(null);
-       return;
-     }
- 
--    if (pickerSession.field === 'start_at') {
--      setStartAt({ date: finalDate, time: iosDraftValue });
--    } else if (pickerSession.field === 'end_at') {
--      setEndAt({ date: finalDate, time: iosDraftValue });
--    } else if (pickerSession.field === 'sales_start_at') {
--      setSalesStartAt({ date: finalDate, time: iosDraftValue });
--    } else if (pickerSession.field === 'sales_end_at') {
--      setSalesEndAt({ date: finalDate, time: iosDraftValue });
-+    if (pickerSession.field === 'start_time') {
-+      setStartAt({ date: finalDate, time: pickerDraftValue });
-+    } else if (pickerSession.field === 'end_time') {
-+      setEndAt({ date: finalDate, time: pickerDraftValue });
-+    } else if (pickerSession.field === 'sales_start_time') {
-+      setSalesStartAt({ date: finalDate, time: pickerDraftValue });
-+    } else if (pickerSession.field === 'sales_end_time') {
-+      setSalesEndAt({ date: finalDate, time: pickerDraftValue });
-     }
- 
-     setPickerSession(null);
-   };
- 
-   const submitValidationError = useMemo(() => {
-     if (!title.trim()) return 'Event title is required.';
-     if (!startAt.date || !startAt.time || !endAt.date || !endAt.time) return 'Start and end date/time are required.';
-     if (!venueName.trim()) return 'Venue name is required for MVP event creation.';
-     if (tiers.length < 1) return 'At least one ticket tier is required.';
- 
-     for (let i = 0; i < tiers.length; i += 1) {
-       const tier = tiers[i];
-       if (!tier.name.trim()) return `Tier ${i + 1}: name is required.`;
-       const price = Number(tier.priceAmount);
-       const quantity = Number(tier.quantityTotal);
-       const minPerOrder = Number(tier.minPerOrder);
-       const maxPerOrder = Number(tier.maxPerOrder);
-       if (Number.isNaN(price) || price < 0) return `Tier ${i + 1}: price must be zero or greater.`;
-       if (!Number.isInteger(quantity) || quantity <= 0) return `Tier ${i + 1}: quantity must be a positive integer.`;
-       if (!Number.isInteger(minPerOrder) || minPerOrder < 1) return `Tier ${i + 1}: minimum per order must be at least 1.`;
-       if (!Number.isInteger(maxPerOrder) || maxPerOrder < minPerOrder) return `Tier ${i + 1}: maximum per order must be greater than or equal to minimum.`;
-       if (!tier.currency.trim() || tier.currency.trim().length !== 3) return `Tier ${i + 1}: currency must be a 3-letter code.`;
-     }
- 
-@@ -303,51 +275,51 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
-           numberOfLines={4}
-           value={longDescription}
-           onChangeText={setLongDescription}
-           placeholder="Long description"
-           placeholderTextColor={theme.colors.textSecondary}
-         />
-         <TextInput style={styles.input} value={category} onChangeText={setCategory} placeholder="Category" placeholderTextColor={theme.colors.textSecondary} />
- 
-         <Text style={styles.sectionTitle}>Timing</Text>
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Start</Text>
-           <Pressable style={styles.input} onPress={() => startDateTimeFlow('start_at')}>
-             <Text style={styles.pickerValue}>{formatDateTimeValue(startAt)}</Text>
-           </Pressable>
-         </View>
- 
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>End</Text>
-           <Pressable style={styles.input} onPress={() => startDateTimeFlow('end_at')}>
-             <Text style={styles.pickerValue}>{formatDateTimeValue(endAt)}</Text>
-           </Pressable>
-         </View>
- 
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Doors open (optional)</Text>
--          <Pressable style={styles.input} onPress={() => openPicker({ field: 'doors_open_at', mode: 'time', value: doorsOpenAt ?? startAt.time ?? new Date() })}>
-+          <Pressable style={styles.input} onPress={() => openPicker({ field: 'doors_open_time', mode: 'time', value: doorsOpenAt ?? startAt.time ?? new Date() })}>
-             <Text style={styles.pickerValue}>{doorsOpenAt ? formatTime(doorsOpenAt) : 'Pick time'}</Text>
-           </Pressable>
-         </View>
- 
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Sales start (optional)</Text>
-           <Pressable style={styles.input} onPress={() => startDateTimeFlow('sales_start_at')}>
-             <Text style={styles.pickerValue}>{formatDateTimeValue(salesStartAt)}</Text>
-           </Pressable>
-         </View>
- 
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Sales end (optional)</Text>
-           <Pressable style={styles.input} onPress={() => startDateTimeFlow('sales_end_at')}>
-             <Text style={styles.pickerValue}>{formatDateTimeValue(salesEndAt)}</Text>
-           </Pressable>
-         </View>
- 
-         <Text style={styles.sectionTitle}>Venue / Location</Text>
-         <TextInput style={styles.input} value={venueName} onChangeText={setVenueName} placeholder="Venue name" placeholderTextColor={theme.colors.textSecondary} />
-         <TextInput
-           style={[styles.input, styles.multiline]}
-           multiline
-           numberOfLines={3}
-           value={addressText}
-@@ -386,67 +358,68 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
-         <TextInput
+@@ -359,69 +372,75 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
            style={[styles.input, styles.multiline]}
            multiline
            numberOfLines={3}
@@ -376,32 +92,41 @@ index 14f7e2359ba46eb7bf7bd6305dedb79673580c67..ea40d2b6399d57c3dd736ba152b47db2
          </Pressable>
        </ScrollView>
  
--      {Platform.OS === 'ios' && pickerSession ? (
--        <Modal transparent animationType="slide" visible onRequestClose={() => setPickerSession(null)}>
-+      {pickerSession ? (
-+        <Modal transparent animationType="slide" visible onRequestClose={cancelPickerSelection}>
+       {pickerSession ? (
+-        <Modal transparent animationType="slide" visible onRequestClose={cancelPickerSelection}>
++        <Modal transparent animationType="fade" visible onRequestClose={cancelPickerSelection}>
            <View style={styles.modalBackdrop}>
-+            <Pressable style={StyleSheet.absoluteFill} onPress={cancelPickerSelection} />
-             <View style={styles.modalSheet}>
+             <Pressable style={StyleSheet.absoluteFill} onPress={cancelPickerSelection} />
+-            <View style={styles.modalSheet}>
++            <View style={styles.modalCard}>
++              <View style={styles.modalHeading}>
++                <Text style={styles.modalTitle}>{getPickerTitle(pickerSession.field)}</Text>
++                <Text style={styles.modalSubtitle}>{getPickerStepLabel(pickerSession)}</Text>
++              </View>
                <View style={styles.modalActions}>
--                <Pressable onPress={() => setPickerSession(null)}>
-+                <Pressable onPress={cancelPickerSelection}>
+                 <Pressable onPress={cancelPickerSelection}>
                    <Text style={styles.modalActionText}>Cancel</Text>
                  </Pressable>
--                <Pressable onPress={completeIosSelection}>
-+                <Pressable onPress={completePickerSelection}>
+                 <Pressable onPress={completePickerSelection}>
                    <Text style={styles.modalActionText}>Done</Text>
                  </Pressable>
                </View>
-               <DateTimePicker
--                value={iosDraftValue}
-+                value={pickerDraftValue}
-                 mode={pickerSession.mode}
-                 onChange={(_, date) => {
--                  if (date) setIosDraftValue(date);
-+                  if (date) setPickerDraftValue(date);
-                 }}
-               />
+-              <DateTimePicker
+-                value={pickerDraftValue}
+-                mode={pickerSession.mode}
+-                onChange={(_, date) => {
+-                  if (date) setPickerDraftValue(date);
+-                }}
+-              />
++              <View style={styles.pickerFrame}>
++                <DateTimePicker
++                  value={pickerDraftValue}
++                  mode={pickerSession.mode}
++                  onChange={(_, date) => {
++                    if (date) setPickerDraftValue(date);
++                  }}
++                />
++              </View>
              </View>
            </View>
          </Modal>
@@ -425,7 +150,10 @@ index 14f7e2359ba46eb7bf7bd6305dedb79673580c67..ea40d2b6399d57c3dd736ba152b47db2
    multiline: { minHeight: 90, textAlignVertical: 'top' },
    row: { flexDirection: 'row', gap: theme.spacing.sm },
    half: { flex: 1 },
-@@ -470,47 +443,51 @@ const styles = StyleSheet.create({
+   tierCard: {
+     borderWidth: 1,
+@@ -442,52 +461,76 @@ const styles = StyleSheet.create({
+   },
    timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
    pickerValue: { color: theme.colors.textPrimary },
    secondaryButton: {
@@ -450,20 +178,45 @@ index 14f7e2359ba46eb7bf7bd6305dedb79673580c67..ea40d2b6399d57c3dd736ba152b47db2
    error: { color: theme.colors.error },
    modalBackdrop: {
      flex: 1,
-     justifyContent: 'flex-end',
--    backgroundColor: 'rgba(0,0,0,0.35)',
-+    backgroundColor: 'rgba(0,0,0,0.65)',
+-    justifyContent: 'flex-end',
++    justifyContent: 'center',
++    alignItems: 'center',
+     backgroundColor: 'rgba(0,0,0,0.65)',
++    padding: theme.spacing.lg,
    },
-   modalSheet: {
--    backgroundColor: theme.colors.surface,
-+    backgroundColor: theme.colors.surfaceElevated,
-     borderTopLeftRadius: theme.radius.lg,
-     borderTopRightRadius: theme.radius.lg,
-+    borderTopWidth: 1,
-+    borderLeftWidth: 1,
-+    borderRightWidth: 1,
-+    borderColor: theme.colors.border,
-     paddingBottom: theme.spacing.lg,
+-  modalSheet: {
++  modalCard: {
+     backgroundColor: theme.colors.surfaceElevated,
+-    borderTopLeftRadius: theme.radius.lg,
+-    borderTopRightRadius: theme.radius.lg,
+-    borderTopWidth: 1,
+-    borderLeftWidth: 1,
+-    borderRightWidth: 1,
++    borderRadius: theme.radius.lg,
++    borderWidth: 1,
+     borderColor: theme.colors.border,
+-    paddingBottom: theme.spacing.lg,
++    width: '100%',
++    maxWidth: 420,
++    shadowColor: '#000',
++    shadowOffset: { width: 0, height: 14 },
++    shadowOpacity: 0.35,
++    shadowRadius: 24,
++    elevation: 10,
++  },
++  modalHeading: {
++    paddingHorizontal: theme.spacing.lg,
++    paddingTop: theme.spacing.lg,
++    gap: 4,
++  },
++  modalTitle: {
++    color: theme.colors.textPrimary,
++    fontSize: 20,
++    fontWeight: '700',
++  },
++  modalSubtitle: {
++    color: theme.colors.textSecondary,
++    fontSize: 13,
    },
    modalActions: {
      flexDirection: 'row',
@@ -472,12 +225,17 @@ index 14f7e2359ba46eb7bf7bd6305dedb79673580c67..ea40d2b6399d57c3dd736ba152b47db2
      paddingVertical: theme.spacing.md,
      borderBottomWidth: 1,
      borderBottomColor: theme.colors.border,
++    marginTop: theme.spacing.sm,
    },
    modalActionText: {
      color: theme.colors.primary,
      fontWeight: '700',
      fontSize: 16,
    },
++  pickerFrame: {
++    alignItems: 'center',
++    paddingVertical: theme.spacing.md,
++  },
  });
  
 EOF

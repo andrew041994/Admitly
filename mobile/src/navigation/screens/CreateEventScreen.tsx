@@ -63,6 +63,19 @@ const formatDateTimeValue = (field: DateTimeField) => {
   return `${formatDate(field.date)} • ${formatTime(field.time)}`;
 };
 
+const getPickerTitle = (field: PickerField) => {
+  if (field.startsWith('start_')) return 'Event start';
+  if (field.startsWith('end_')) return 'Event end';
+  if (field === 'doors_open_time') return 'Doors open';
+  if (field.startsWith('sales_start_')) return 'Sales start';
+  return 'Sales end';
+};
+
+const getPickerStepLabel = (session: Exclude<PickerSession, null>) => {
+  if (session.field === 'doors_open_time') return 'Select time';
+  return session.mode === 'date' ? 'Step 1 of 2 • Select date' : 'Step 2 of 2 • Select time';
+};
+
 const buildGuyanaIso = (date: Date, time: Date) => {
   const year = date.getFullYear();
   const month = date.getMonth();
@@ -381,10 +394,14 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
       </ScrollView>
 
       {pickerSession ? (
-        <Modal transparent animationType="slide" visible onRequestClose={cancelPickerSelection}>
+        <Modal transparent animationType="fade" visible onRequestClose={cancelPickerSelection}>
           <View style={styles.modalBackdrop}>
             <Pressable style={StyleSheet.absoluteFill} onPress={cancelPickerSelection} />
-            <View style={styles.modalSheet}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeading}>
+                <Text style={styles.modalTitle}>{getPickerTitle(pickerSession.field)}</Text>
+                <Text style={styles.modalSubtitle}>{getPickerStepLabel(pickerSession)}</Text>
+              </View>
               <View style={styles.modalActions}>
                 <Pressable onPress={cancelPickerSelection}>
                   <Text style={styles.modalActionText}>Cancel</Text>
@@ -393,13 +410,15 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
                   <Text style={styles.modalActionText}>Done</Text>
                 </Pressable>
               </View>
-              <DateTimePicker
-                value={pickerDraftValue}
-                mode={pickerSession.mode}
-                onChange={(_, date) => {
-                  if (date) setPickerDraftValue(date);
-                }}
-              />
+              <View style={styles.pickerFrame}>
+                <DateTimePicker
+                  value={pickerDraftValue}
+                  mode={pickerSession.mode}
+                  onChange={(_, date) => {
+                    if (date) setPickerDraftValue(date);
+                  }}
+                />
+              </View>
             </View>
           </View>
         </Modal>
@@ -464,18 +483,37 @@ const styles = StyleSheet.create({
   error: { color: theme.colors.error },
   modalBackdrop: {
     flex: 1,
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.65)',
+    padding: theme.spacing.lg,
   },
-  modalSheet: {
+  modalCard: {
     backgroundColor: theme.colors.surfaceElevated,
-    borderTopLeftRadius: theme.radius.lg,
-    borderTopRightRadius: theme.radius.lg,
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
     borderColor: theme.colors.border,
-    paddingBottom: theme.spacing.lg,
+    width: '100%',
+    maxWidth: 420,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.35,
+    shadowRadius: 24,
+    elevation: 10,
+  },
+  modalHeading: {
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.lg,
+    gap: 4,
+  },
+  modalTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  modalSubtitle: {
+    color: theme.colors.textSecondary,
+    fontSize: 13,
   },
   modalActions: {
     flexDirection: 'row',
@@ -484,10 +522,15 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
+    marginTop: theme.spacing.sm,
   },
   modalActionText: {
     color: theme.colors.primary,
     fontWeight: '700',
     fontSize: 16,
+  },
+  pickerFrame: {
+    alignItems: 'center',
+    paddingVertical: theme.spacing.md,
   },
 });
