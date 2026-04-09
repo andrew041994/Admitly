@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -635,7 +636,7 @@ def accept_ticket_transfer_invite(
     invite_token: str,
     accepting_user_id: int,
 ) -> Ticket:
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+    tx_ctx = db.begin() if not db.in_transaction() else nullcontext()
     with tx_ctx:
         invite = (
             db.execute(
