@@ -9,6 +9,7 @@ from app.schemas.ticket_transfer_invite import (
     AcceptTicketTransferInviteResponse,
     CreateTicketTransferInviteRequest,
     RevokeTicketTransferInviteResponse,
+    TicketTransferInvitePreviewResponse,
     TicketTransferInviteResponse,
 )
 from app.services.tickets import (
@@ -17,6 +18,7 @@ from app.services.tickets import (
     TicketTransferError,
     accept_ticket_transfer_invite,
     create_ticket_transfer_invite,
+    build_transfer_claim_url,
     get_ticket_transfer_invite_by_token,
     list_ticket_transfer_invites_for_user,
     revoke_ticket_transfer_invite,
@@ -33,13 +35,37 @@ def _to_invite_response(invite) -> TicketTransferInviteResponse:
         recipient_user_id=invite.recipient_user_id,
         recipient_email=invite.recipient_email,
         recipient_phone=invite.recipient_phone,
+        recipient_name=invite.recipient_name,
         invite_token=invite.invite_token,
         status=invite.status.value,
         expires_at=invite.expires_at,
         accepted_at=invite.accepted_at,
         revoked_at=invite.revoked_at,
+        claim_url=build_transfer_claim_url(invite_token=invite.invite_token),
         created_at=invite.created_at,
         updated_at=invite.updated_at,
+    )
+
+
+def _to_invite_preview_response(invite) -> TicketTransferInvitePreviewResponse:
+    ticket = invite.ticket
+    event = ticket.event if ticket else None
+    return TicketTransferInvitePreviewResponse(
+        transfer_id=invite.id,
+        ticket_id=invite.ticket_id,
+        event_title=event.title if event else None,
+        starts_at=event.start_at if event else None,
+        venue_name=(event.custom_venue_name or (event.venue.name if event and event.venue else None)) if event else None,
+        ticket_tier_name=ticket.ticket_tier.name if ticket and ticket.ticket_tier else None,
+        sender_name=invite.sender.full_name if invite.sender else None,
+        recipient_name=invite.recipient_name,
+        recipient_email=invite.recipient_email,
+        recipient_phone=invite.recipient_phone,
+        status=invite.status.value,
+        expires_at=invite.expires_at,
+        accepted_at=invite.accepted_at,
+        canceled_at=invite.revoked_at,
+        claim_url=build_transfer_claim_url(invite_token=invite.invite_token),
     )
 
 
@@ -65,6 +91,7 @@ def create_transfer_invite(
             recipient_user_id=payload.recipient_user_id,
             recipient_email=payload.recipient_email,
             recipient_phone=payload.recipient_phone,
+            recipient_name=payload.recipient_name,
             expires_at=payload.expires_at,
         )
     except TicketAuthorizationError as exc:
@@ -121,14 +148,65 @@ def revoke_transfer_invite(
 def get_transfer_invite(
     invite_token: str,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
 ) -> TicketTransferInviteResponse:
-    _ = user_id
     try:
         invite = get_ticket_transfer_invite_by_token(db, invite_token=invite_token)
     except TicketNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return _to_invite_response(invite)
+
+
+@router.get("/tickets/transfers/{invite_token}", response_model=TicketTransferInvitePreviewResponse)
+def preview_transfer_invite(
+    invite_token: str,
+    db: Session = Depends(get_db),
+) -> TicketTransferInvitePreviewResponse:
+    try:
+        invite = get_ticket_transfer_invite_by_token(db, invite_token=invite_token)
+    except TicketNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _to_invite_preview_response(invite)
+
+
+@router.post("/tickets/transfers/{invite_token}/accept", response_model=AcceptTicketTransferInviteResponse)
+def accept_transfer_invite_v2(
+    invite_token: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+    client_ip: str = Depends(request_client_ip),
+) -> AcceptTicketTransferInviteResponse:
+    apply_rate_limit(
+        scope="transfer_invite_accept",
+        key=f"{user_id}:{invite_token}:{client_ip}",
+        limit=settings.rate_limit_payment_submit_count,
+        window_seconds=settings.rate_limit_payment_submit_window_seconds,
+    )
+    try:
+        ticket = accept_ticket_transfer_invite(db, invite_token=invite_token, accepting_user_id=user_id)
+    except TicketAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except TicketNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TicketTransferError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return AcceptTicketTransferInviteResponse(ticket_id=ticket.id, owner_user_id=ticket.owner_user_id, status=ticket.status.value)
+
+
+@router.post("/tickets/transfers/{invite_token}/cancel", response_model=RevokeTicketTransferInviteResponse)
+def cancel_transfer_invite(
+    invite_token: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> RevokeTicketTransferInviteResponse:
+    try:
+        invite = revoke_ticket_transfer_invite(db, invite_token=invite_token, actor_user_id=user_id)
+    except TicketAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except TicketNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TicketTransferError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return RevokeTicketTransferInviteResponse(id=invite.id, status=invite.status.value, revoked_at=invite.revoked_at)
 
 
 @router.get("/me/ticket-transfer-invites", response_model=list[TicketTransferInviteResponse])

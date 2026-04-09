@@ -31,6 +31,7 @@ class TicketTransferInvite(TimestampMixin, Base):
     )
     recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     recipient_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    recipient_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     invite_token: Mapped[str] = mapped_column(
         String(128), nullable=False, unique=True, index=True
     )

@@ -17,6 +17,7 @@ from app.schemas.ticket import (
     TicketDetailResponse,
     TicketResponse,
     TicketTransferRequest,
+    TicketTransferPendingResponse,
     TicketVoidRequest,
     TicketQrResponse,
     TicketScanRequest,
@@ -33,6 +34,7 @@ from app.schemas.ticket_wallet import (
 from app.services.tickets import (
     CHECK_IN_METHOD_MANUAL,
     CHECK_IN_METHOD_QR,
+    CHECK_IN_STATUS_TRANSFER_PENDING,
     TicketAuthorizationError,
     TicketCheckInConflictError,
     TicketCrossEventError,
@@ -46,7 +48,8 @@ from app.services.tickets import (
     list_tickets_for_order_owner,
     list_recent_check_in_attempts,
     override_ticket_check_in,
-    transfer_ticket_to_user,
+    build_transfer_claim_url,
+    create_ticket_transfer_invite,
     validate_ticket_for_check_in,
     void_ticket,
     resend_ticket_notification,
@@ -77,6 +80,7 @@ _CHECK_IN_PUBLIC_CODE_MAP = {
     "unauthorized": "unauthorized",
     "canceled_event": "event_not_admittable",
     "order_not_admittable": "event_not_admittable",
+    CHECK_IN_STATUS_TRANSFER_PENDING: "transfer_pending",
 }
 
 _CHECK_IN_PUBLIC_MESSAGE_MAP = {
@@ -88,6 +92,7 @@ _CHECK_IN_PUBLIC_MESSAGE_MAP = {
     "voided": "Ticket voided",
     "unauthorized": "You are not authorized to check in tickets for this event",
     "event_not_admittable": "Event is not accepting check-ins",
+    "transfer_pending": "Ticket transfer is pending acceptance",
 }
 
 
@@ -292,19 +297,22 @@ def get_order_tickets(
     return [_to_ticket_response(db, t) for t in tickets]
 
 
-@router.post("/tickets/{ticket_id}/transfer", response_model=TicketResponse)
+@router.post("/tickets/{ticket_id}/transfer", response_model=TicketTransferPendingResponse)
 def transfer_ticket(
     ticket_id: int,
     payload: TicketTransferRequest,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
-) -> TicketResponse:
+) -> TicketTransferPendingResponse:
     try:
-        ticket = transfer_ticket_to_user(
+        invite = create_ticket_transfer_invite(
             db,
             ticket_id=ticket_id,
-            from_user_id=user_id,
-            to_user_id=payload.to_user_id,
+            sender_user_id=user_id,
+            recipient_user_id=payload.to_user_id,
+            recipient_email=payload.recipient_email,
+            recipient_phone=payload.recipient_phone,
+            recipient_name=payload.recipient_name,
         )
     except TicketAuthorizationError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
@@ -313,7 +321,18 @@ def transfer_ticket(
     except TicketTransferError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    return _to_ticket_response(db, ticket)
+    return TicketTransferPendingResponse(
+        transfer_id=invite.id,
+        ticket_id=invite.ticket_id,
+        status=invite.status.value,
+        recipient_user_id=invite.recipient_user_id,
+        recipient_email=invite.recipient_email,
+        recipient_phone=invite.recipient_phone,
+        recipient_name=invite.recipient_name,
+        expires_at=invite.expires_at,
+        claim_url=build_transfer_claim_url(invite_token=invite.invite_token),
+        created_at=invite.created_at,
+    )
 
 
 @router.post("/tickets/{ticket_id}/void", response_model=TicketResponse)

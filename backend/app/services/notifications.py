@@ -297,6 +297,7 @@ def notify_ticket_transfer_invite_created(db: Session, invite: TicketTransferInv
     recipient_email = invite.recipient_email
     if not recipient_email and invite.recipient_user_id:
         recipient_email = _user_email(db, invite.recipient_user_id)
+    claim_url = f"{settings.ticket_public_base_url.rstrip('/')}/tickets/transfers/{invite.invite_token}"
     result = dispatch_templated_message(
         db,
         template_type=MessageTemplateType.TRANSFER_INVITE,
@@ -305,7 +306,11 @@ def notify_ticket_transfer_invite_created(db: Session, invite: TicketTransferInv
         recipient_email=recipient_email,
         related_entity_type="transfer_invite",
         related_entity_id=invite.id,
-        context={"ticket_id": str(invite.ticket_id), "invite_token": invite.invite_token},
+        context={
+            "ticket_id": str(invite.ticket_id),
+            "invite_token": invite.invite_token,
+            "claim_url": claim_url,
+        },
     )
     return NotificationDispatchResult(success=result.success, channel_results=result.channel_results)
 

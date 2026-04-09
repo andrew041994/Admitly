@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, object_session
 
 from app.models.event import Event
 from app.models.enums import EventStatus, OrderStatus, TicketStatus
 from app.models.ticket import Ticket
+from app.services.tickets import get_active_pending_transfer_for_ticket
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -40,6 +41,9 @@ def _is_event_upcoming(ticket: Ticket, now: datetime) -> bool:
 
 
 def _derive_display_status(ticket: Ticket) -> str:
+    db = object_session(ticket)
+    if db is not None and get_active_pending_transfer_for_ticket(db, ticket_id=ticket.id) is not None:
+        return "transfer_pending"
     if ticket.status == TicketStatus.CHECKED_IN:
         return "used"
     if ticket.status == TicketStatus.VOIDED:

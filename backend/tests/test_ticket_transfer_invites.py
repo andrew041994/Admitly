@@ -11,13 +11,16 @@ from app.db.base import Base
 from app.models import Event, OrganizerProfile, Order, OrderItem, TicketTier, User, Venue
 from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus, TicketStatus, TransferInviteStatus
 from app.services.tickets import (
+    CHECK_IN_STATUS_TRANSFER_PENDING,
     TicketAuthorizationError,
     TicketTransferError,
     accept_ticket_transfer_invite,
     create_ticket_transfer_invite,
+    get_active_pending_transfer_for_ticket,
     issue_tickets_for_completed_order,
     revoke_ticket_transfer_invite,
     transfer_ticket_to_user,
+    validate_ticket_for_check_in,
 )
 
 
@@ -110,8 +113,10 @@ def test_invite_creation_and_acceptance_and_revocation_flow(db_session: Session,
         ticket_id=ticket.id,
         sender_user_id=owner.id,
         recipient_user_id=recipient.id,
+        recipient_name="Recipient Name",
     )
     assert invite.status == TransferInviteStatus.PENDING
+    assert invite.recipient_name == "Recipient Name"
     assert ticket.owner_user_id == owner.id
     assert calls == ["created"]
 
@@ -185,8 +190,87 @@ def test_invite_rejects_checked_in_voided_and_expired_and_self(db_session: Sessi
         accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=owner_3.id + 999)
 
     invite = db_session.get(type(invite), invite.id)
-    assert invite.status == TransferInviteStatus.PENDING
+    assert invite.status == TransferInviteStatus.EXPIRED
     _ = event
+
+
+def test_acceptance_requires_matching_email_or_phone(db_session: Session) -> None:
+    order, owner, _ = _seed_order(db_session, suffix="06")
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    correct = User(email="claim@example.com", full_name="Claim User", phone="+59270066")
+    wrong_email = User(email="wrong@example.com", full_name="Wrong Email", phone="+59270066")
+    wrong_phone = User(email="claim@example.com", full_name="Wrong Phone", phone="+59212345")
+    db_session.add_all([correct, wrong_email, wrong_phone])
+    db_session.commit()
+    db_session.refresh(correct)
+    db_session.refresh(wrong_email)
+    db_session.refresh(wrong_phone)
+
+    invite = create_ticket_transfer_invite(
+        db_session,
+        ticket_id=ticket.id,
+        sender_user_id=owner.id,
+        recipient_email="claim@example.com",
+        recipient_phone="+59270066",
+    )
+
+    with pytest.raises(TicketAuthorizationError):
+        accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=wrong_email.id)
+    with pytest.raises(TicketAuthorizationError):
+        accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=wrong_phone.id)
+
+    accepted = accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=correct.id)
+    assert accepted.owner_user_id == correct.id
+
+
+def test_pending_transfer_blocks_checkin_and_allows_after_cancel(db_session: Session) -> None:
+    order, owner, event = _seed_order(db_session, suffix="07")
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    invite = create_ticket_transfer_invite(
+        db_session,
+        ticket_id=ticket.id,
+        sender_user_id=owner.id,
+        recipient_email="pending@example.com",
+    )
+
+    pending = get_active_pending_transfer_for_ticket(db_session, ticket_id=ticket.id)
+    assert pending is not None
+
+    blocked = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=ticket.qr_payload,
+        ticket_code=None,
+    )
+    assert blocked.status == CHECK_IN_STATUS_TRANSFER_PENDING
+
+    revoke_ticket_transfer_invite(db_session, invite_token=invite.invite_token, actor_user_id=owner.id)
+    allowed = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=event.organizer.user_id,
+        event_id=event.id,
+        qr_payload=ticket.qr_payload,
+        ticket_code=None,
+    )
+    assert allowed.status == "valid"
+
+
+def test_transfer_invite_auto_binds_existing_user_by_email(db_session: Session) -> None:
+    order, owner, _ = _seed_order(db_session, suffix="08")
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    recipient = User(email="known@example.com", full_name="Known User")
+    db_session.add(recipient)
+    db_session.commit()
+    db_session.refresh(recipient)
+
+    invite = create_ticket_transfer_invite(
+        db_session,
+        ticket_id=ticket.id,
+        sender_user_id=owner.id,
+        recipient_email="KNOWN@example.com",
+    )
+    assert invite.recipient_user_id == recipient.id
 
 
 def test_direct_transfer_compatibility(db_session: Session) -> None:
