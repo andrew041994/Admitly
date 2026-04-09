@@ -1,61 +1,137 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_ticket_transfer_invites.py b/backend/tests/test_ticket_transfer_invites.py
-index 76ca32fd54330db0a3d7f47afb070bb261701045..9139e2f71552417ca725a139ca8d86d414e442c5 100644
---- a/backend/tests/test_ticket_transfer_invites.py
-+++ b/backend/tests/test_ticket_transfer_invites.py
-@@ -177,51 +177,51 @@ def test_invite_rejects_checked_in_voided_and_expired_and_self(db_session: Sessi
-     with pytest.raises(TicketTransferError):
-         create_ticket_transfer_invite(db_session, ticket_id=ticket_2.id, sender_user_id=owner_2.id, recipient_email="a@example.com")
- 
-     order_3, owner_3, _ = _seed_order(db_session, suffix="04")
-     ticket_3 = issue_tickets_for_completed_order(db_session, order_3)[0]
-     invite = create_ticket_transfer_invite(
-         db_session,
-         ticket_id=ticket_3.id,
-         sender_user_id=owner_3.id,
-         recipient_email="late@example.com",
-         expires_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
+index 55d1cd983c7f2e7ec094e0a6c7f0c85d91ef7fb7..a26aa9f39807e2e933e9eceb52f5900bfe8b8eb3 100644
+--- a/backend/app/services/tickets.py
++++ b/backend/app/services/tickets.py
+@@ -613,116 +613,121 @@ def list_ticket_transfer_invites_for_user(
+     user_id: int,
+     sent: bool = False,
+ ) -> list[TicketTransferInvite]:
+     filters = [TicketTransferInvite.sender_user_id == user_id] if sent else [TicketTransferInvite.recipient_user_id == user_id]
+     invites = (
+         db.execute(
+             select(TicketTransferInvite)
+             .where(and_(*filters))
+             .order_by(TicketTransferInvite.created_at.desc(), TicketTransferInvite.id.desc())
+         )
+         .scalars()
+         .all()
      )
-     with pytest.raises(TicketTransferError):
-         accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=owner_3.id + 999)
- 
-     invite = db_session.get(type(invite), invite.id)
-     assert invite.status == TransferInviteStatus.EXPIRED
-     _ = event
+     now = get_guyana_now()
+     for invite in invites:
+         _expire_pending_invite_if_needed(db, invite, now=now)
+     return invites
  
  
- def test_acceptance_requires_matching_email_or_phone(db_session: Session) -> None:
-     order, owner, _ = _seed_order(db_session, suffix="06")
-     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-     correct = User(email="claim@example.com", full_name="Claim User", phone="+59270066")
-     wrong_email = User(email="wrong@example.com", full_name="Wrong Email", phone="+59270066")
--    wrong_phone = User(email="claim@example.com", full_name="Wrong Phone", phone="+59212345")
-+    wrong_phone = User(email="claim2@example.com", full_name="Wrong Phone", phone="+59212345")
-     db_session.add_all([correct, wrong_email, wrong_phone])
-     db_session.commit()
-     db_session.refresh(correct)
-     db_session.refresh(wrong_email)
-     db_session.refresh(wrong_phone)
+ def accept_ticket_transfer_invite(
+     db: Session,
+     *,
+     invite_token: str,
+     accepting_user_id: int,
+ ) -> Ticket:
++    non_pending_error: TicketTransferError | None = None
+     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+     with tx_ctx:
+         invite = (
+             db.execute(
+                 select(TicketTransferInvite)
+                 .options(joinedload(TicketTransferInvite.ticket), joinedload(TicketTransferInvite.sender))
+                 .where(TicketTransferInvite.invite_token == invite_token)
+                 .with_for_update()
+             )
+             .unique()
+             .scalar_one_or_none()
+         )
+         if invite is None:
+             raise TicketNotFoundError("Transfer invite not found.")
+-        accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
+-        if accepting_user is None:
+-            raise TicketTransferError("Accepting user not found.")
+         if (
+             invite.status == TransferInviteStatus.ACCEPTED
+             and invite.recipient_user_id == accepting_user_id
+             and invite.ticket.owner_user_id == accepting_user_id
+         ):
+             return invite.ticket
+         _expire_pending_invite_if_needed(db, invite)
+         if invite.status != TransferInviteStatus.PENDING:
+-            raise TicketTransferError("Transfer invite is no longer pending.")
++            non_pending_error = TicketTransferError("Transfer invite is no longer pending.")
++            return invite.ticket
++        accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
++        if accepting_user is None:
++            raise TicketTransferError("Accepting user not found.")
  
-     invite = create_ticket_transfer_invite(
-         db_session,
-         ticket_id=ticket.id,
-         sender_user_id=owner.id,
-         recipient_email="claim@example.com",
-         recipient_phone="+59270066",
-     )
+         now = get_guyana_now()
  
-     with pytest.raises(TicketAuthorizationError):
-         accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=wrong_email.id)
-     with pytest.raises(TicketAuthorizationError):
-         accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=wrong_phone.id)
+         ticket = (
+             db.execute(select(Ticket).where(Ticket.id == invite.ticket_id).with_for_update())
+             .scalars()
+             .first()
+         )
+         if ticket is None:
+             raise TicketNotFoundError("Ticket not found.")
+         if ticket.owner_user_id != invite.sender_user_id:
+             raise TicketTransferError("Ticket ownership no longer matches invite sender.")
+         validate_ticket_transferable(ticket, current_user_id=invite.sender_user_id)
  
-     accepted = accept_ticket_transfer_invite(db_session, invite_token=invite.invite_token, accepting_user_id=correct.id)
-     assert accepted.owner_user_id == correct.id
+         if invite.recipient_user_id is not None and invite.recipient_user_id != accepting_user_id:
+-            raise TicketTransferError("This transfer invite is assigned to a different user.")
++            raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
+         if invite.recipient_email is not None and normalize_email(accepting_user.email) != invite.recipient_email:
+-            raise TicketTransferError("This transfer invite is assigned to a different email.")
++            raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
+         if invite.recipient_phone is not None and _normalize_phone(accepting_user.phone) != invite.recipient_phone:
+-            raise TicketTransferError("This transfer invite is assigned to a different phone number.")
++            raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
+ 
+         ticket.owner_user_id = accepting_user_id
+         ticket.user_id = accepting_user_id
+         ticket.transferred_at = now
+         ticket.transfer_count += 1
+         ticket.updated_at = now
+ 
+         invite.status = TransferInviteStatus.ACCEPTED
+         invite.accepted_at = now
+         invite.accepted_by_user_id = accepting_user_id
+         if invite.recipient_user_id is None:
+             invite.recipient_user_id = accepting_user_id
+         if invite.recipient_name is None:
+             invite.recipient_name = _normalize_optional(accepting_user.full_name)
+         invite.updated_at = now
+ 
+         db.flush()
+         notify_ticket_transfer_invite_accepted(invite, ticket)
+         publish_webhook_event(db, event_type="transfer.accepted", payload=build_transfer_payload(invite, ticket))
+         return ticket
++    if non_pending_error is not None:
++        raise non_pending_error
++    raise TicketTransferError("Transfer invite could not be accepted.")
  
  
- def test_pending_transfer_blocks_checkin_and_allows_after_cancel(db_session: Session) -> None:
-     order, owner, event = _seed_order(db_session, suffix="07")
+ def revoke_ticket_transfer_invite(
+     db: Session,
+     *,
+     invite_token: str,
+     actor_user_id: int,
+ ) -> TicketTransferInvite:
+     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+     with tx_ctx:
+         invite = (
+             db.execute(
+                 select(TicketTransferInvite)
+                 .options(joinedload(TicketTransferInvite.ticket))
+                 .where(TicketTransferInvite.invite_token == invite_token)
+                 .with_for_update()
+             )
+             .unique()
+             .scalar_one_or_none()
+         )
+         if invite is None:
+             raise TicketNotFoundError("Transfer invite not found.")
+         if invite.status != TransferInviteStatus.PENDING:
+             raise TicketTransferError("Only pending invites can be revoked.")
+         if actor_user_id not in {invite.sender_user_id, invite.ticket.owner_user_id}:
  
 EOF
 )
