@@ -1,4 +1,6 @@
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
 import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")

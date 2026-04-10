@@ -2,15 +2,17 @@ import { useEffect, useState } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../../api/client';
-import { getEventDashboard } from '../../api/organizer';
+import { getEventDashboard, getOrganizerEvent, OrganizerEventDetail } from '../../api/organizer';
 import { theme } from '../../theme';
 
 export function OrganizerDashboardScreen({ eventId }: { eventId: number }) {
   const [dashboard, setDashboard] = useState<Awaited<ReturnType<typeof getEventDashboard>> | null>(null);
+  const [eventDetail, setEventDetail] = useState<OrganizerEventDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     getEventDashboard(eventId).then(setDashboard).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load dashboard.'));
+    getOrganizerEvent(eventId).then(setEventDetail).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load event details.'));
   }, [eventId]);
 
   if (!dashboard) {
@@ -20,6 +22,10 @@ export function OrganizerDashboardScreen({ eventId }: { eventId: number }) {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Event Dashboard</Text>
+      {eventDetail ? <Text style={styles.meta}>Status: {eventDetail.status} • Approval: {eventDetail.approval_status}</Text> : null}
+      {eventDetail?.status === 'published' && eventDetail.approval_status !== 'approved' ? (
+        <Text style={styles.notice}>This event is published but will not appear in discovery until approved.</Text>
+      ) : null}
       <Text style={styles.metric}>Tickets sold: {dashboard.tickets_sold}</Text>
       <Text style={styles.metric}>Gross revenue: {dashboard.gross_revenue.toFixed(2)}</Text>
       <Text style={styles.metric}>Admitted: {dashboard.attendees_admitted}</Text>
@@ -41,4 +47,5 @@ const styles = StyleSheet.create({
   metric: { color: theme.colors.textPrimary, marginBottom: 4 },
   section: { color: theme.colors.textSecondary, marginTop: theme.spacing.md, marginBottom: theme.spacing.xs },
   meta: { color: theme.colors.textSecondary, marginBottom: 4 },
+  notice: { color: theme.colors.primaryMuted, marginBottom: theme.spacing.sm },
 });

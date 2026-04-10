@@ -95,6 +95,9 @@ export type OrganizerEventDashboardItem = {
   start_at: string;
   end_at: string;
   status: 'draft' | 'published' | 'unpublished' | 'cancelled' | string;
+  approval_status: 'pending' | 'approved' | 'rejected' | string;
+  is_publicly_visible: boolean;
+  visibility_state?: 'pending_review' | string | null;
   total_ticket_types: number;
   total_quantity: number;
   sold_count: number;
@@ -114,6 +117,9 @@ export type OrganizerEventDetail = CreateEventResponse & {
   sales_start_at: string | null;
   sales_end_at: string | null;
   visibility: string;
+  approval_status: 'pending' | 'approved' | 'rejected' | string;
+  is_publicly_visible: boolean;
+  visibility_state?: 'pending_review' | string | null;
   custom_address_text: string | null;
   ticket_tiers: Array<{
     id: number;

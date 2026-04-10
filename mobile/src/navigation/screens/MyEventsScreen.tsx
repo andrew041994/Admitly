@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../../api/client';
 import {
@@ -10,6 +10,16 @@ import {
   unpublishOrganizerEvent,
 } from '../../api/organizer';
 import { theme } from '../../theme';
+
+const getOrganizerStatusLabel = (event: OrganizerEventDashboardItem): string => {
+  if (event.status === 'published' && event.approval_status !== 'approved') {
+    return 'Published • Pending approval';
+  }
+  if (event.status === 'published' && event.approval_status === 'approved') {
+    return 'Published • Publicly visible';
+  }
+  return event.status;
+};
 
 export function MyEventsScreen({ onOpenEvent }: { onOpenEvent: (eventId: number) => void }) {
   const [events, setEvents] = useState<OrganizerEventDashboardItem[]>([]);
@@ -33,11 +43,26 @@ export function MyEventsScreen({ onOpenEvent }: { onOpenEvent: (eventId: number)
           <Pressable style={styles.item} onPress={() => onOpenEvent(item.id)}>
             <Text style={styles.itemTitle}>{item.title}</Text>
             <Text style={styles.meta}>{new Date(item.start_at).toLocaleString()} • {item.venue_name ?? 'Venue TBA'}</Text>
-            <Text style={styles.meta}>Status: {item.status}</Text>
+            <Text style={styles.meta}>Status: {getOrganizerStatusLabel(item)}</Text>
+            {item.status === 'published' && item.approval_status !== 'approved' ? (
+              <Text style={styles.helper}>This event is published but will not appear in discovery until approved.</Text>
+            ) : null}
             <Text style={styles.meta}>Sold: {item.sold_count} • Revenue: {item.gross_revenue.toFixed(2)}</Text>
             <View style={styles.actions}>
               {(item.status === 'draft' || item.status === 'unpublished') ? (
-                <Pressable style={styles.actionButton} onPress={() => publishOrganizerEvent(item.id).then(load)}>
+                <Pressable
+                  style={styles.actionButton}
+                  onPress={() =>
+                    publishOrganizerEvent(item.id).then((updatedEvent) => {
+                      if (updatedEvent.approval_status === 'approved') {
+                        Alert.alert('Event published', 'Your event is now published.');
+                      } else {
+                        Alert.alert('Event published', 'Event published and submitted for approval.');
+                      }
+                      return load();
+                    })
+                  }
+                >
                   <Text style={styles.actionText}>Publish</Text>
                 </Pressable>
               ) : null}
@@ -66,6 +91,7 @@ const styles = StyleSheet.create({
   itemTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
   meta: { color: theme.colors.textSecondary, marginTop: 4 },
   actions: { flexDirection: 'row', marginTop: theme.spacing.sm },
+  helper: { color: theme.colors.textSecondary, marginTop: 4, fontStyle: 'italic' },
   actionButton: { borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.sm, paddingVertical: 6, paddingHorizontal: 10, marginRight: theme.spacing.sm },
   actionText: { color: theme.colors.textPrimary, fontWeight: '600' },
   error: { color: theme.colors.error, marginBottom: theme.spacing.sm },
