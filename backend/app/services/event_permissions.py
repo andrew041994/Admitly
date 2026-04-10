@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import select
@@ -11,6 +11,8 @@ from app.models.event import Event
 from app.models.event_staff import EventStaff
 from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
+
+UTC = timezone.utc
 
 
 class EventPermissionAction(str, Enum):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,6 +14,8 @@ from app.services.event_permissions import (
     has_event_permission_by_id,
     require_event_permission,
 )
+
+UTC = timezone.utc
 
 
 def _to_utc_aware(dt: datetime) -> datetime:

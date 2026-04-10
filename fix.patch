@@ -1,38 +1,54 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_organizer_recovery_phase.py b/backend/tests/test_organizer_recovery_phase.py
-index 069d9400bd645b46e66a11d27350cac5d6c82b18..f278e6e6778779f07844a07af6a857da0a5ca9ef 100644
---- a/backend/tests/test_organizer_recovery_phase.py
-+++ b/backend/tests/test_organizer_recovery_phase.py
-@@ -1,26 +1,28 @@
--from datetime import UTC, datetime, timedelta
-+from datetime import datetime, timedelta, timezone
-+
-+UTC = timezone.utc
- import os
+diff --git a/backend/app/services/event_staff.py b/backend/app/services/event_staff.py
+index 64ce85485d1d64fbbdea70e8712e7157c83af49f..6130018eef105efe9c90e8d20e8a93b9e862a26d 100644
+--- a/backend/app/services/event_staff.py
++++ b/backend/app/services/event_staff.py
+@@ -1,42 +1,44 @@
+ from __future__ import annotations
  
- os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+-from datetime import UTC, datetime
++from datetime import datetime, timezone
  
- import pytest
- from fastapi.testclient import TestClient
- from sqlalchemy import create_engine
- from sqlalchemy.orm import Session, sessionmaker
+ from sqlalchemy import select
+ from sqlalchemy.orm import Session
  
- from app.db.base import Base
- from app.db.session import get_db
- from app.main import app
- from app.models.enums import EventApprovalStatus, EventStaffRole, EventStatus, EventVisibility, OrderStatus
+ from app.models.enums import EventStaffRole, EventStatus
  from app.models.event import Event
  from app.models.event_staff import EventStaff
- from app.models.order import Order
- from app.models.order_item import OrderItem
- from app.models.organizer_profile import OrganizerProfile
- from app.models.ticket_tier import TicketTier
  from app.models.user import User
- from app.models.venue import Venue
- from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
+ from app.services.event_permissions import (
+     EventPermissionAction,
+     has_event_permission_by_id,
+     require_event_permission,
+ )
+ 
++UTC = timezone.utc
++
+ 
+ def _to_utc_aware(dt: datetime) -> datetime:
+     if dt.tzinfo is None:
+         return dt.replace(tzinfo=UTC)
+     return dt.astimezone(UTC)
  
  
- @pytest.fixture
+ class EventStaffError(ValueError):
+     """Base staff management error."""
+ 
+ 
+ class EventStaffNotFoundError(EventStaffError):
+     """Raised when staff assignment is not found."""
+ 
+ 
+ class EventStaffConflictError(EventStaffError):
+     """Raised when duplicate assignment exists."""
+ 
+ 
+ class EventStaffValidationError(EventStaffError):
+     """Raised when staff operation violates business rules."""
+ 
+ 
+ def list_event_staff(db: Session, *, actor_user_id: int, event_id: int) -> list[EventStaff]:
+     require_event_permission(
  
 EOF
 )
