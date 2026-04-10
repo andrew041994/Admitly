@@ -46,21 +46,13 @@ def _get_owner_profile(db: Session, *, user_id: int) -> OrganizerProfile | None:
 
 
 def get_owned_event_for_update(db: Session, *, actor_user_id: int, event_id: int) -> Event:
-    event = (
-        db.execute(
-            select(Event)
-            .options(joinedload(Event.venue), joinedload(Event.ticket_tiers))
-            .where(Event.id == event_id)
-            .with_for_update()
-        )
-        .scalars()
-        .first()
-    )
+    event = db.execute(select(Event).where(Event.id == event_id).with_for_update()).scalar_one_or_none()
     if event is None:
         raise OrganizerEventNotFoundError("Event not found.")
     owner_profile = _get_owner_profile(db, user_id=actor_user_id)
     if owner_profile is None or owner_profile.id != event.organizer_id:
         raise OrganizerEventAuthorizationError("Not authorized to manage this event.")
+    db.refresh(event, attribute_names=["ticket_tiers", "venue"])
     return event
 
 

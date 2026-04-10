@@ -1,104 +1,76 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_organizer_recovery_phase.py b/backend/tests/test_organizer_recovery_phase.py
-index ace36728a5cc326e041cef89fe9f5aad2ce3bd47..069d9400bd645b46e66a11d27350cac5d6c82b18 100644
---- a/backend/tests/test_organizer_recovery_phase.py
-+++ b/backend/tests/test_organizer_recovery_phase.py
-@@ -230,50 +230,95 @@ def test_event_creation_is_atomic_when_tier_validation_fails(client: TestClient,
-     before_count = db_session.query(Event).count()
-     response = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
-     assert response.status_code == 422
-     assert db_session.query(Event).count() == before_count
+diff --git a/backend/app/services/organizer_events.py b/backend/app/services/organizer_events.py
+index e30709f8e7d61557bcc9fe8c56cf3ff149a974a3..4ef4a11a7260e02953b1f9bec90e93305b47026d 100644
+--- a/backend/app/services/organizer_events.py
++++ b/backend/app/services/organizer_events.py
+@@ -24,65 +24,57 @@ class OrganizerEventNotFoundError(OrganizerEventError):
+     pass
  
  
- def test_mine_and_active_event_listing(client: TestClient, db_session: Session) -> None:
-     owner = _seed_user(db_session, "owner@example.com", "Owner")
-     other = _seed_user(db_session, "other@example.com", "Other")
-     _seed_event(db_session, owner, title="Active Event", end_offset_hours=10)
-     ended = _seed_event(db_session, owner, title="Ended Event", end_offset_hours=-1)
-     ended.end_at = datetime.now(UTC) - timedelta(hours=1)
-     _seed_event(db_session, other, title="Other Event", end_offset_hours=10)
-     db_session.commit()
- 
-     mine = client.get("/events/mine", headers={"x-user-id": str(owner.id)})
-     assert mine.status_code == 200
-     assert len(mine.json()) == 2
- 
-     active = client.get("/events/mine/active", headers={"x-user-id": str(owner.id)})
-     assert active.status_code == 200
-     titles = [row["title"] for row in active.json()]
-     assert titles == ["Active Event"]
+ class OrganizerEventAuthorizationError(OrganizerEventError):
+     pass
  
  
-+def test_mine_active_listing_with_multiple_tiers_has_no_duplicates(client: TestClient, db_session: Session) -> None:
-+    owner = _seed_user(db_session, "owner-tiers@example.com", "Owner Tiers")
-+    event = _seed_event(db_session, owner, title="Tiered Active Event", end_offset_hours=10)
-+    db_session.add_all(
-+        [
-+            TicketTier(
-+                event_id=event.id,
-+                name="General",
-+                tier_code="GEN",
-+                price_amount=100,
-+                currency="GYD",
-+                quantity_total=50,
-+                quantity_sold=0,
-+                quantity_held=0,
-+                min_per_order=1,
-+                max_per_order=5,
-+                is_active=True,
-+                sort_order=0,
-+            ),
-+            TicketTier(
-+                event_id=event.id,
-+                name="VIP",
-+                tier_code="VIP",
-+                price_amount=250,
-+                currency="GYD",
-+                quantity_total=25,
-+                quantity_sold=0,
-+                quantity_held=0,
-+                min_per_order=1,
-+                max_per_order=2,
-+                is_active=True,
-+                sort_order=1,
-+            ),
-+        ]
-+    )
-+    db_session.commit()
-+
-+    active = client.get("/events/mine/active", headers={"x-user-id": str(owner.id)})
-+    assert active.status_code == 200
-+    body = active.json()
-+    assert len(body) == 1
-+    assert body[0]["id"] == event.id
-+
-+
-+
- def test_staff_assignment_permissions_and_expiration(client: TestClient, db_session: Session) -> None:
-     owner = _seed_user(db_session, "org@example.com", "Organizer")
-     staff = _seed_user(db_session, "staff@example.com", "Staff")
-     outsider = _seed_user(db_session, "outsider@example.com", "Outsider")
-     event = _seed_event(db_session, owner, title="Checkin", end_offset_hours=2)
-     outsider_event = _seed_event(db_session, outsider, title="Other", end_offset_hours=2)
-     db_session.commit()
- 
-     assign = client.post(f"/events/{event.id}/staff", json={"user_id": staff.id, "role": EventStaffRole.CHECKIN.value}, headers={"x-user-id": str(owner.id)})
-     assert assign.status_code == 201
-     duplicate = client.post(f"/events/{event.id}/staff", json={"user_id": staff.id, "role": EventStaffRole.CHECKIN.value}, headers={"x-user-id": str(owner.id)})
-     assert duplicate.status_code == 409
-     forbidden = client.post(f"/events/{event.id}/staff", json={"user_id": owner.id, "role": EventStaffRole.CHECKIN.value}, headers={"x-user-id": str(outsider.id)})
-     assert forbidden.status_code == 403
- 
-     assert has_event_permission_by_id(db_session, user_id=staff.id, event_id=event.id, action=EventPermissionAction.CHECKIN_TICKETS)
-     assert not has_event_permission_by_id(db_session, user_id=staff.id, event_id=event.id, action=EventPermissionAction.EDIT_EVENT)
-     assert not has_event_permission_by_id(db_session, user_id=staff.id, event_id=outsider_event.id, action=EventPermissionAction.CHECKIN_TICKETS)
- 
-     event.end_at = datetime.now(UTC) - timedelta(minutes=1)
-     db_session.commit()
-     assert not has_event_permission_by_id(db_session, user_id=staff.id, event_id=event.id, action=EventPermissionAction.CHECKIN_TICKETS)
+ class OrganizerEventValidationError(OrganizerEventError):
+     def __init__(self, *, code: str, errors: list[dict[str, str]]):
+         super().__init__(code)
+         self.code = code
+         self.errors = errors
  
  
- def test_dashboard_profile_and_user_search(client: TestClient, db_session: Session) -> None:
+ @dataclass
+ class OrganizerDashboardMetrics:
+     sold_count: int
+     gross_revenue: Decimal
+ 
+ 
+ def _get_owner_profile(db: Session, *, user_id: int) -> OrganizerProfile | None:
+     return db.execute(select(OrganizerProfile).where(OrganizerProfile.user_id == user_id)).scalar_one_or_none()
+ 
+ 
+ def get_owned_event_for_update(db: Session, *, actor_user_id: int, event_id: int) -> Event:
+-    event = (
+-        db.execute(
+-            select(Event)
+-            .options(joinedload(Event.venue), joinedload(Event.ticket_tiers))
+-            .where(Event.id == event_id)
+-            .with_for_update()
+-        )
+-        .scalars()
+-        .first()
+-    )
++    event = db.execute(select(Event).where(Event.id == event_id).with_for_update()).scalar_one_or_none()
+     if event is None:
+         raise OrganizerEventNotFoundError("Event not found.")
+     owner_profile = _get_owner_profile(db, user_id=actor_user_id)
+     if owner_profile is None or owner_profile.id != event.organizer_id:
+         raise OrganizerEventAuthorizationError("Not authorized to manage this event.")
++    db.refresh(event, attribute_names=["ticket_tiers", "venue"])
+     return event
+ 
+ 
+ def get_owned_event(db: Session, *, actor_user_id: int, event_id: int) -> Event:
+     event = (
+         db.execute(
+             select(Event)
+             .options(joinedload(Event.venue), joinedload(Event.ticket_tiers))
+             .where(Event.id == event_id)
+         )
+         .scalars()
+         .first()
+     )
+     if event is None:
+         raise OrganizerEventNotFoundError("Event not found.")
+     owner_profile = _get_owner_profile(db, user_id=actor_user_id)
+     if owner_profile is None or owner_profile.id != event.organizer_id:
+         raise OrganizerEventAuthorizationError("Not authorized to manage this event.")
+     return event
+ 
+ 
+ def validate_event_publishable(event: Event) -> None:
+     errors: list[dict[str, str]] = []
+     if not event.title or not event.title.strip():
+         errors.append({"field": "title", "message": "Title is required."})
  
 EOF
 )
