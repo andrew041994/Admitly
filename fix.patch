@@ -1,9 +1,62 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
-index 7c9d928d66d61f14afc570e172447fe064639b7a..5176c974a309aee327687012a844d139889514f7 100644
+index 5176c974a309aee327687012a844d139889514f7..221de920998e8bb6711036bbecc9d2b0cacd5594 100644
 --- a/backend/app/services/tickets.py
 +++ b/backend/app/services/tickets.py
-@@ -1320,59 +1320,66 @@ def list_recent_check_in_attempts(
+@@ -524,51 +524,51 @@ def create_ticket_transfer_invite(
+     normalized_name = _normalize_optional(recipient_name)
+     if recipient_user_id is None and normalized_email is None and normalized_phone is None:
+         raise TicketTransferError("Provide recipient_user_id, recipient_email, or recipient_phone.")
+ 
+     ticket = (
+         db.execute(
+             select(Ticket).where(Ticket.id == ticket_id).with_for_update()
+         )
+         .scalars()
+         .first()
+     )
+     if ticket is None:
+         raise TicketNotFoundError("Ticket not found.")
+     db.refresh(ticket, attribute_names=["transfer_invites", "owner"])
+ 
+     validate_ticket_transfer_invitable(ticket, current_user_id=sender_user_id)
+     if recipient_user_id is not None:
+         recipient = db.execute(select(User).where(User.id == recipient_user_id)).scalars().first()
+         if recipient is None:
+             raise TicketTransferError("Recipient user not found.")
+         if recipient_user_id == sender_user_id:
+             raise TicketTransferError("Cannot transfer a ticket to yourself.")
+     else:
+         if normalized_email is not None:
+             matched_user = db.execute(
+-                select(User).where(func.lower(User.email) == normalized_email)
++                select(User).where(func.lower(func.trim(User.email)) == normalized_email)
+             ).scalars().first()
+             if matched_user is not None:
+                 recipient_user_id = matched_user.id
+         if recipient_user_id is None and normalized_phone is not None:
+             matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalars().first()
+             if matched_user is not None:
+                 recipient_user_id = matched_user.id
+ 
+     if normalized_email and normalized_email == normalize_email(ticket.owner.email or ""):
+         raise TicketTransferError("Cannot transfer a ticket to yourself.")
+     if normalized_phone and _normalize_phone(ticket.owner.phone) and normalized_phone == _normalize_phone(ticket.owner.phone):
+         raise TicketTransferError("Cannot transfer a ticket to yourself.")
+ 
+     now = get_guyana_now()
+     invite = TicketTransferInvite(
+         ticket_id=ticket.id,
+         sender_user_id=sender_user_id,
+         recipient_user_id=recipient_user_id,
+         recipient_email=normalized_email,
+         recipient_phone=normalized_phone,
+         recipient_name=normalized_name,
+         invite_token=_create_unique_transfer_invite_token(db),
+         status=TransferInviteStatus.PENDING,
+         expires_at=expires_at or (now + DEFAULT_TRANSFER_INVITE_TTL),
+     )
+@@ -1320,62 +1320,68 @@ def list_recent_check_in_attempts(
          for row in rows
      ]
  
@@ -29,29 +82,30 @@ index 7c9d928d66d61f14afc570e172447fe064639b7a..5176c974a309aee327687012a844d139
      if result.status == CHECK_IN_STATUS_INVALID:
          raise TicketNotFoundError(result.message)
      if result.status == CHECK_IN_STATUS_NOT_FOUND:
--        existing = db.execute(
--            select(Ticket).where(
--                Ticket.event_id == event_id,
--                or_(
-+        if qr_payload:
-+            existing = db.execute(
-+                select(Ticket).where(
-+                    Ticket.event_id == event_id,
-                     Ticket.qr_payload == qr_payload,
-+                )
-+            ).scalars().first()
-+        elif ticket_code:
-+            existing = db.execute(
-+                select(Ticket).where(
-+                    Ticket.event_id == event_id,
-                     Ticket.ticket_code == ticket_code,
--                ),
--            )
--        ).scalars().first()
-+                )
-+            ).scalars().first()
-+        else:
-+            existing = None
++        lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
+         if qr_payload:
+             existing = db.execute(
+                 select(Ticket).where(
+                     Ticket.event_id == event_id,
+-                    Ticket.qr_payload == qr_payload,
++                    Ticket.qr_payload == lookup,
+                 )
+             ).scalars().first()
+         elif ticket_code:
+             existing = db.execute(
+                 select(Ticket).where(
+                     Ticket.event_id == event_id,
+-                    Ticket.ticket_code == ticket_code,
++                    or_(
++                        Ticket.ticket_code == lookup,
++                        Ticket.qr_payload == lookup,
++                        Ticket.qr_token == lookup,
++                        Ticket.display_code == lookup,
++                    ),
+                 )
+             ).scalars().first()
+         else:
+             existing = None
          if existing is not None:
              raise TicketCheckInConflictError("Already processed")
          raise TicketNotFoundError("Ticket not found.")
@@ -73,10 +127,6 @@ index 7c9d928d66d61f14afc570e172447fe064639b7a..5176c974a309aee327687012a844d139
      if not validate_ticket_qr_signature(payload):
          _record_ticket_scan_log(
              db,
-             ticket=None,
-             scanned_by=user_id,
-             status=TicketScanStatus.INVALID,
-             note="Invalid ticket payload signature.",
  
 EOF
 )

@@ -546,7 +546,7 @@ def create_ticket_transfer_invite(
     else:
         if normalized_email is not None:
             matched_user = db.execute(
-                select(User).where(func.lower(User.email) == normalized_email)
+                select(User).where(func.lower(func.trim(User.email)) == normalized_email)
             ).scalars().first()
             if matched_user is not None:
                 recipient_user_id = matched_user.id
@@ -1342,18 +1342,24 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_INVALID:
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
+        lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
         if qr_payload:
             existing = db.execute(
                 select(Ticket).where(
                     Ticket.event_id == event_id,
-                    Ticket.qr_payload == qr_payload,
+                    Ticket.qr_payload == lookup,
                 )
             ).scalars().first()
         elif ticket_code:
             existing = db.execute(
                 select(Ticket).where(
                     Ticket.event_id == event_id,
-                    Ticket.ticket_code == ticket_code,
+                    or_(
+                        Ticket.ticket_code == lookup,
+                        Ticket.qr_payload == lookup,
+                        Ticket.qr_token == lookup,
+                        Ticket.display_code == lookup,
+                    ),
                 )
             ).scalars().first()
         else:

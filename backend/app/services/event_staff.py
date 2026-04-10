@@ -32,22 +32,22 @@ class EventStaffValidationError(EventStaffError):
 
 def list_event_staff(db: Session, *, actor_user_id: int, event_id: int) -> list[EventStaff]:
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
-    is_owner = False
-    if event is not None:
-        organizer_user_id = db.execute(
-            select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
-        ).scalar_one_or_none()
-        is_owner = organizer_user_id == actor_user_id
-    if not (
-        is_owner
-        or has_event_permission_by_id(
-            db,
-            user_id=actor_user_id,
-            event_id=event_id,
-            action=EventPermissionAction.MANAGE_EVENT,
-        )
-    ):
+    if event is None:
         raise EventPermissionDeniedError("Not authorized for this event action.")
+    organizer_user_id = db.execute(
+        select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
+    ).scalar_one_or_none()
+    if organizer_user_id != actor_user_id:
+        admin_staff = db.execute(
+            select(EventStaff.id).where(
+                EventStaff.event_id == event_id,
+                EventStaff.user_id == actor_user_id,
+                EventStaff.is_active.is_(True),
+                EventStaff.role == EventStaffRole.ADMIN,
+            )
+        ).scalar_one_or_none()
+        if admin_staff is None:
+            raise EventPermissionDeniedError("Not authorized for this event action.")
     return db.execute(select(EventStaff).where(EventStaff.event_id == event_id).order_by(EventStaff.created_at.asc())).scalars().all()
 
 
