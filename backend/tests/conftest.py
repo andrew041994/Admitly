@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.session import get_db
 from app.main import app
 
-DATABASE_URL = "postgresql://neondb_owner:npg_jKSZablLD72J@ep-still-paper-anfodm11-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+DATABASE_URL = "postgresql://neondb_owner:npg_jKSZablLD72J@ep-proud-truth-any41xfp-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
 os.environ["DATABASE_URL"] = DATABASE_URL
 
