@@ -43,9 +43,11 @@ def _seed_user(db: Session, email: str, name: str = "User", phone: str | None = 
 
 
 def _seed_event(db: Session, organizer_user: User, *, title: str = "Event", end_offset_hours: int = 8) -> Event:
-    organizer = OrganizerProfile(user_id=organizer_user.id, business_name=organizer_user.full_name, display_name=organizer_user.full_name)
-    db.add(organizer)
-    db.flush()
+    organizer = db.query(OrganizerProfile).filter(OrganizerProfile.user_id == organizer_user.id).one_or_none()
+    if organizer is None:
+        organizer = OrganizerProfile(user_id=organizer_user.id, business_name=organizer_user.full_name, display_name=organizer_user.full_name)
+        db.add(organizer)
+        db.flush()
     venue = Venue(organizer_id=organizer.id, name="Main Hall", city="Georgetown")
     db.add(venue)
     db.flush()

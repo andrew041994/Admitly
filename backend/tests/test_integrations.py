@@ -39,9 +39,11 @@ def _seed_admin(db: Session, *, email: str = "admin@x.com") -> User:
 
 
 def _seed_order(db: Session, *, admin: User) -> Order:
-    organizer = OrganizerProfile(user_id=admin.id, business_name="Biz", display_name="Biz")
-    db.add(organizer)
-    db.flush()
+    organizer = db.execute(select(OrganizerProfile).where(OrganizerProfile.user_id == admin.id)).scalar_one_or_none()
+    if organizer is None:
+        organizer = OrganizerProfile(user_id=admin.id, business_name="Biz", display_name="Biz")
+        db.add(organizer)
+        db.flush()
     venue = Venue(organizer_id=organizer.id, name="Hall")
     db.add(venue)
     db.flush()

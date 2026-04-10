@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Generator
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.main import app
@@ -17,11 +18,7 @@ DATABASE_URL = "postgresql://neondb_owner:npg_jKSZablLD72J@ep-still-paper-anfodm
 os.environ["DATABASE_URL"] = DATABASE_URL
 
 engine = create_engine(DATABASE_URL)
-TestingSessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine,
-)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, future=True)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -32,21 +29,34 @@ def apply_test_migrations() -> None:
 
 @pytest.fixture
 def db_session() -> Generator[Session, None, None]:
-    connection = engine.connect()
-    transaction = connection.begin()
+    connection: Connection = engine.connect()
+    outer_transaction = connection.begin()
     session = TestingSessionLocal(bind=connection)
+
+    session.begin_nested()
+
+    @event.listens_for(session, "after_transaction_end")
+    def _restart_savepoint(sess: Session, transaction) -> None:  # noqa: ANN001
+        parent = getattr(transaction, "_parent", None)
+        if transaction.nested and parent is not None and not parent.nested:
+            sess.begin_nested()
 
     try:
         yield session
     finally:
+        event.remove(session, "after_transaction_end", _restart_savepoint)
         session.close()
-        transaction.rollback()
+        if outer_transaction.is_active:
+            outer_transaction.rollback()
         connection.close()
 
 
 @pytest.fixture(autouse=True)
 def override_fastapi_db_dependency(db_session: Session) -> Generator[None, None, None]:
-    app.dependency_overrides[get_db] = lambda: db_session
+    def _get_db_override() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[get_db] = _get_db_override
     try:
         yield
     finally:

@@ -1,222 +1,67 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_integrations.py b/backend/tests/test_integrations.py
-index 7d6016f90968d0bfa18350311057f7fe5fb901bc..5ca5aa9a64705373436e6965fb1be0f05579589e 100644
---- a/backend/tests/test_integrations.py
-+++ b/backend/tests/test_integrations.py
-@@ -1,53 +1,58 @@
- import json
- from datetime import datetime, timezone
- from decimal import Decimal
-+from pathlib import Path
- from sqlalchemy.orm import Session
-+from sqlalchemy import select
- from app.models import Event, Order, OrganizerProfile, User, Venue
- from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
- from app.services.integrations import (
-     DELIVERY_KIND_MANUAL_REDELIVERY,
-     SCOPE_READ,
-     SCOPE_WRITE,
-     authenticate_api_key,
-     build_order_paid_payload,
-     build_refund_payload,
-     build_transfer_payload,
-     create_api_key,
-     create_webhook_endpoint,
-     dispatch_pending_webhook_deliveries,
-     list_deliveries,
-     publish_webhook_event,
-     redeliver_webhook_delivery,
-     require_scope,
-     revoke_api_key,
-     verify_webhook_signature,
- )
+diff --git a/backend/tests/test_organizer_recovery_phase.py b/backend/tests/test_organizer_recovery_phase.py
+index 0b5541c6936ad60df63958f2e2028a6a9a13e5c9..fa600ebdc506038dc5c9ab975659dcc74245927b 100644
+--- a/backend/tests/test_organizer_recovery_phase.py
++++ b/backend/tests/test_organizer_recovery_phase.py
+@@ -21,53 +21,55 @@ from app.models.ticket_tier import TicketTier
+ from app.models.user import User
+ from app.models.venue import Venue
+ from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
  
  
  
- def _seed_admin(db: Session, *, email: str = "admin@x.com") -> User:
-+    existing = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
-+    if existing:
-+        return existing
-     admin = User(email=email, full_name="Admin", is_admin=True)
-     db.add(admin)
-     db.commit()
-     db.refresh(admin)
-     return admin
+ @pytest.fixture
+ def client(db_session: Session):
+     def _get_db():
+         yield db_session
+ 
+     app.dependency_overrides[get_db] = _get_db
+     with TestClient(app) as test_client:
+         yield test_client
+     app.dependency_overrides.clear()
  
  
- def _seed_order(db: Session, *, admin: User) -> Order:
-     organizer = OrganizerProfile(user_id=admin.id, business_name="Biz", display_name="Biz")
-     db.add(organizer)
+ def _seed_user(db: Session, email: str, name: str = "User", phone: str | None = None) -> User:
+     user = User(email=email, full_name=name, phone=phone)
+     db.add(user)
      db.flush()
-     venue = Venue(organizer_id=organizer.id, name="Hall")
+     return user
+ 
+ 
+ def _seed_event(db: Session, organizer_user: User, *, title: str = "Event", end_offset_hours: int = 8) -> Event:
+-    organizer = OrganizerProfile(user_id=organizer_user.id, business_name=organizer_user.full_name, display_name=organizer_user.full_name)
+-    db.add(organizer)
+-    db.flush()
++    organizer = db.query(OrganizerProfile).filter(OrganizerProfile.user_id == organizer_user.id).one_or_none()
++    if organizer is None:
++        organizer = OrganizerProfile(user_id=organizer_user.id, business_name=organizer_user.full_name, display_name=organizer_user.full_name)
++        db.add(organizer)
++        db.flush()
+     venue = Venue(organizer_id=organizer.id, name="Main Hall", city="Georgetown")
      db.add(venue)
      db.flush()
      event = Event(
          organizer_id=organizer.id,
          venue_id=venue.id,
-         title="Event",
-         slug=f"event-{admin.id}",
-         start_at=datetime(2026, 4, 7, 10, 0, tzinfo=timezone.utc),
-         end_at=datetime(2026, 4, 7, 11, 0, tzinfo=timezone.utc),
+         title=title,
+         slug=f"{title.lower()}-{organizer_user.id}",
+         start_at=datetime.now(UTC) + timedelta(hours=1),
+         end_at=datetime.now(UTC) + timedelta(hours=end_offset_hours),
+         timezone="UTC",
          status=EventStatus.PUBLISHED,
          visibility=EventVisibility.PUBLIC,
          approval_status=EventApprovalStatus.APPROVED,
-         timezone="America/Guyana",
-@@ -67,149 +72,149 @@ def test_api_key_create_auth_scope_and_revoke(db_session: Session) -> None:
-     key, raw = create_api_key(db, user_id=admin.id, name="Main", scopes=[SCOPE_READ, SCOPE_WRITE, "bad:scope"])
-     db.commit()
- 
-     assert "bad:scope" not in key.scopes_csv
-     authed = authenticate_api_key(db, raw_key=raw)
-     assert authed is not None
-     assert authed.last_used_at is not None
-     assert require_scope(authed, SCOPE_READ)
-     assert require_scope(authed, SCOPE_WRITE)
- 
-     revoke_api_key(db, key_id=key.id, user_id=admin.id)
-     db.commit()
-     assert authenticate_api_key(db, raw_key=raw) is None
- 
- 
- def test_webhook_signature_contract() -> None:
-     timestamp = "1712500000"
-     body = '{"id":"evt_1"}'
-     secret = "whsec_test"
-     import hashlib, hmac
- 
-     digest = hmac.new(secret.encode(), f"{timestamp}.{body}".encode(), hashlib.sha256).hexdigest()
-     assert verify_webhook_signature(secret=secret, timestamp=timestamp, body=body, signature_header=f"v1={digest}")
- 
- 
--def test_webhook_delivery_retry_and_success_audit() -> None:
-+def test_webhook_delivery_retry_and_success_audit(db_session: Session) -> None:
-     db = db_session
-     admin = _seed_admin(db)
-     create_webhook_endpoint(
-         db,
-         user_id=admin.id,
-         name="Main endpoint",
-         target_url="https://example.com/webhook",
-         subscribed_events=["order.paid"],
      )
-     publish_webhook_event(db, event_type="order.paid", payload={"order_id": 1})
-     db.commit()
- 
-     calls = {"count": 0}
- 
-     def flaky(*, endpoint, body):
-         calls["count"] += 1
-         if calls["count"] == 1:
-             return type("Res", (), {"ok": False, "status_code": 500, "error": "boom"})
-         return type("Res", (), {"ok": True, "status_code": 200, "error": None})
- 
-     assert dispatch_pending_webhook_deliveries(db, transport=flaky) == 1
-     db.commit()
-     assert dispatch_pending_webhook_deliveries(db, transport=flaky) == 0
- 
-     deliveries = list_deliveries(db, user_id=admin.id)
-     retry = next(item.delivery for item in deliveries if item.delivery.attempt_number == 2)
-     retry.next_retry_at = retry.requested_at
-     db.commit()
- 
-     assert dispatch_pending_webhook_deliveries(db, transport=flaky) == 1
-     db.commit()
-     final = list_deliveries(db, user_id=admin.id)
-     assert any(item.delivery.status == "delivered" for item in final)
-     assert any(item.delivery.delivery_kind == "automatic_retry" for item in final)
+     db.add(event)
+     db.flush()
+     return event
  
  
--def test_manual_redelivery_creates_new_attempt_with_same_event_id() -> None:
-+def test_manual_redelivery_creates_new_attempt_with_same_event_id(db_session: Session) -> None:
-     db = db_session
-     admin = _seed_admin(db)
-     create_webhook_endpoint(
-         db,
-         user_id=admin.id,
-         name="Main endpoint",
-         target_url="https://example.com/webhook",
-         subscribed_events=["order.paid"],
-     )
-     publish_webhook_event(db, event_type="order.paid", payload={"order_id": 1})
-     db.commit()
- 
-     first = list_deliveries(db, user_id=admin.id)[0].delivery
-     replay = redeliver_webhook_delivery(db, delivery_id=first.id, user_id=admin.id)
-     db.commit()
- 
-     assert replay is not None
-     assert replay.event_id == first.event_id
-     assert replay.payload_json == first.payload_json
-     assert replay.attempt_number == first.attempt_number + 1
-     assert replay.delivery_kind == DELIVERY_KIND_MANUAL_REDELIVERY
- 
- 
--def test_manual_redelivery_requires_owner_boundary() -> None:
-+def test_manual_redelivery_requires_owner_boundary(db_session: Session) -> None:
-     db = db_session
-     admin = _seed_admin(db)
-     other = _seed_admin(db, email="other@x.com")
-     create_webhook_endpoint(
-         db,
-         user_id=admin.id,
-         name="Main endpoint",
-         target_url="https://example.com/webhook",
-         subscribed_events=["order.paid"],
-     )
-     publish_webhook_event(db, event_type="order.paid", payload={"order_id": 1})
-     db.commit()
- 
-     first = list_deliveries(db, user_id=admin.id)[0].delivery
-     denied = redeliver_webhook_delivery(db, delivery_id=first.id, user_id=other.id)
-     assert denied is None
- 
- 
--def test_event_schema_stability_for_order_and_refund_examples() -> None:
-+def test_event_schema_stability_for_order_and_refund_examples(db_session: Session) -> None:
-     db = db_session
-     admin = _seed_admin(db)
-     order = _seed_order(db, admin=admin)
- 
-     create_webhook_endpoint(db, user_id=admin.id, name="E", target_url="https://example.com", subscribed_events=["order.paid", "order.refunded"])
-     publish_webhook_event(db, event_type="order.paid", payload=build_order_paid_payload(order))
-     publish_webhook_event(db, event_type="order.refunded", payload=build_refund_payload(order, refund_id=9, amount=2.5))
-     db.commit()
- 
-     payloads = [json.loads(item.delivery.payload_json) for item in list_deliveries(db, user_id=admin.id)]
-     for envelope in payloads:
-         assert set(envelope.keys()) == {"id", "type", "version", "created_at", "data"}
-         assert envelope["id"].startswith("evt_")
-         assert envelope["version"] == "v1"
-         assert envelope["created_at"]
- 
- 
--def test_delivery_history_exposes_diagnostics_fields() -> None:
-+def test_delivery_history_exposes_diagnostics_fields(db_session: Session) -> None:
-     db = db_session
-     admin = _seed_admin(db)
-     create_webhook_endpoint(
-         db,
-         user_id=admin.id,
-         name="Main endpoint",
-         target_url="https://example.com/webhook",
-         subscribed_events=["order.paid"],
-     )
-     publish_webhook_event(db, event_type="order.paid", payload={"order_id": 1})
-     db.commit()
- 
-     rows = list_deliveries(db, user_id=admin.id)
-     assert rows[0].endpoint_url == "https://example.com/webhook"
-     assert rows[0].delivery.event_type == "order.paid"
-     assert rows[0].delivery.event_id.startswith("evt_")
-     assert rows[0].delivery.status in {"pending", "retry_scheduled", "delivered", "failed"}
- 
- 
- def test_example_fixture_contract_matches_required_envelope_shape() -> None:
-     fixture = Path(__file__).with_name("fixtures").joinpath("webhook_envelope_examples.json")
-     data = json.loads(fixture.read_text())
-     assert {"order.paid", "order.refunded", "transfer.accepted", "checkin.completed"}.issubset(set(data.keys()))
- 
-     for event_type, envelope in data.items():
+ def test_event_creation_and_creator_ownership(client: TestClient, db_session: Session) -> None:
+     creator = _seed_user(db_session, "creator@example.com", "Creator")
+     payload = {
+         "title": "Organizer Launch",
+         "short_description": "Short",
  
 EOF
 )
