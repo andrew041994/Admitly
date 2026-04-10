@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import os
+import uuid
 
 from fastapi import HTTPException
 from datetime import datetime, timedelta, timezone
@@ -73,13 +74,16 @@ from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
 def _seed_order(
     db: Session,
     *,
-    user_email: str = "buyer@example.com",
+    user_email: str | None = None,
+    suffix: str | None = None,
     quantity: int = 3,
     status: OrderStatus = OrderStatus.COMPLETED,
     payment_verification_status: str = "verified",
 ) -> tuple[Order, OrderItem, TicketTier, User, Event]:
     now = datetime.now(timezone.utc)
-    user = User(email=user_email, full_name="Buyer")
+    suffix = suffix or str(uuid.uuid4())[:8]
+    email = user_email or f"buyer_{suffix}@example.com"
+    user = User(email=email, full_name="Buyer")
     db.add(user)
     db.flush()
 
@@ -95,7 +99,7 @@ def _seed_order(
         organizer_id=organizer_profile.id,
         venue_id=venue.id,
         title="Show",
-        slug=f"show-{user_email}-{quantity}",
+        slug=f"show-{email}-{quantity}",
         start_at=now + timedelta(days=2),
         end_at=now + timedelta(days=2, hours=2),
         status=EventStatus.PUBLISHED,
