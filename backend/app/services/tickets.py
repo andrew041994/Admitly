@@ -4,7 +4,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload, object_session
 
 from app.core.config import settings
@@ -543,7 +543,9 @@ def create_ticket_transfer_invite(
         if recipient_user_id == sender_user_id:
             raise TicketTransferError("Cannot transfer a ticket to yourself.")
     elif normalized_email is not None:
-        matched_user = db.execute(select(User).where(User.email == normalized_email)).scalar_one_or_none()
+        matched_user = db.execute(
+            select(User).where(func.lower(User.email) == normalized_email)
+        ).scalar_one_or_none()
         if matched_user is not None:
             recipient_user_id = matched_user.id
     elif normalized_phone is not None:
@@ -659,7 +661,9 @@ def accept_ticket_transfer_invite(
 
     if invite.recipient_user_id is not None and invite.recipient_user_id != accepting_user_id:
         raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
-    if invite.recipient_email is not None and normalize_email(accepting_user.email) != invite.recipient_email:
+    if invite.recipient_email is not None and (
+        normalize_email(accepting_user.email) != normalize_email(invite.recipient_email)
+    ):
         raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
     if invite.recipient_phone is not None and _normalize_phone(accepting_user.phone) != invite.recipient_phone:
         raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
@@ -753,7 +757,7 @@ def can_actor_check_in_event(db: Session, *, user_id: int, event_id: int) -> boo
         db,
         user_id=user_id,
         event_id=event_id,
-        action=EventPermissionAction.CHECKIN_TICKETS,
+        action=EventPermissionAction.CHECK_IN,
     )
 
 
@@ -775,7 +779,7 @@ def can_scan_event(db: Session, *, user: User, event: Event) -> bool:
         db,
         user_id=user.id,
         event_id=event.id,
-        action=EventPermissionAction.CHECKIN_TICKETS,
+        action=EventPermissionAction.CHECK_IN,
     )
 
 
@@ -1323,7 +1327,13 @@ def check_in_ticket_for_event(
     )
     if result.status == CHECK_IN_STATUS_UNAUTHORIZED:
         raise TicketAuthorizationError(result.message)
-    if result.status in {CHECK_IN_STATUS_NOT_FOUND, CHECK_IN_STATUS_INVALID}:
+    if result.status == CHECK_IN_STATUS_INVALID:
+        raise TicketNotFoundError(result.message)
+    if result.status == CHECK_IN_STATUS_NOT_FOUND:
+        lookup_value = qr_payload or ticket_code
+        fallback_ticket = get_ticket_by_qr_payload(db, qr_payload=lookup_value or "")
+        if fallback_ticket is not None and fallback_ticket.event_id == event_id:
+            raise TicketCheckInConflictError("Ticket check-in is already being processed.")
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_WRONG_EVENT:
         raise TicketCrossEventError(result.message)

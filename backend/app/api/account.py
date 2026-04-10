@@ -1,8 +1,9 @@
 from sqlalchemy import func, select
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.api.ticket_holds import get_current_user_id
 from app.db.session import get_db
 from app.models.event import Event
 from app.models.event_staff import EventStaff
@@ -45,8 +46,12 @@ def patch_profile(
 @router.get("/profile", response_model=AccountProfileResponse)
 def get_profile(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    user_id: int = Depends(get_current_user_id),
 ) -> AccountProfileResponse:
+    current_user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if current_user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
+
     my_tickets_count = db.execute(select(func.count(Ticket.id)).where(Ticket.owner_user_id == current_user.id)).scalar_one()
     my_events_count = db.execute(
         select(func.count(Event.id))

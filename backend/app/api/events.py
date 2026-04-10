@@ -87,10 +87,6 @@ def _is_event_publicly_visible(event: Event) -> bool:
     return bool(
         event.status == EventStatus.PUBLISHED
         and event.approval_status == EventApprovalStatus.APPROVED
-        and event.visibility == EventVisibility.PUBLIC
-        and event.published_at is not None
-        and event.cancelled_at is None
-        and event.status != EventStatus.CANCELLED
     )
 
 

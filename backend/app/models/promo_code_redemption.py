@@ -4,8 +4,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Numeric, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import func
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
@@ -26,6 +27,17 @@ class PromoCodeRedemption(TimestampMixin, Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     redeemed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     promo_code: Mapped["PromoCode"] = relationship(back_populates="redemptions")
     order: Mapped["Order"] = relationship(back_populates="promo_code_redemption")

@@ -22,6 +22,7 @@ class EventPermissionAction(str, Enum):
     CANCEL_EVENT = "cancel_event"
     VIEW_ORDERS = "view_orders"
     MANAGE_REFUNDS = "manage_refunds"
+    CHECK_IN = "checkin_tickets"
     CHECKIN_TICKETS = "checkin_tickets"
     VIEW_CHECKIN_SUMMARY = "view_checkin_summary"
     CHECKIN_OVERRIDE = "checkin_override"
@@ -80,13 +81,12 @@ def _role_permissions(role: EventStaffRole) -> set[EventPermissionAction]:
     if role == EventStaffRole.MANAGER:
         return {
             EventPermissionAction.MANAGE_REFUNDS,
-            EventPermissionAction.CHECKIN_TICKETS,
             EventPermissionAction.VIEW_CHECKIN_SUMMARY,
             EventPermissionAction.CHECKIN_OVERRIDE,
         }
     if role == EventStaffRole.CHECKIN:
         return {
-            EventPermissionAction.CHECKIN_TICKETS,
+            EventPermissionAction.CHECK_IN,
             EventPermissionAction.VIEW_CHECKIN_SUMMARY,
         }
     if role == EventStaffRole.SUPPORT:
