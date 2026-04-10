@@ -22,6 +22,7 @@ from app.services.payments import (
 )
 from app.services.ticket_holds import get_ticket_type_availability
 from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
+from tests.utils import unique_email
 
 
 
@@ -32,9 +33,10 @@ def mmg_config() -> None:
     settings.mmg_agent_auto_verify_enabled = True
 
 
-def _seed_order_with_hold(db: Session, *, user_email: str = "u@example.com") -> tuple[Order, TicketTier, User]:
+def _seed_order_with_hold(db: Session, *, user_email: str | None = None) -> tuple[Order, TicketTier, User]:
     now = datetime.now(timezone.utc)
-    user = User(email=user_email, full_name="User")
+    email = user_email or unique_email("user")
+    user = User(email=email, full_name="User")
     db.add(user)
     db.flush()
 
@@ -50,7 +52,7 @@ def _seed_order_with_hold(db: Session, *, user_email: str = "u@example.com") -> 
         organizer_id=organizer.id,
         venue_id=venue.id,
         title="Concert",
-        slug=f"concert-{user_email}-{int(now.timestamp())}",
+        slug=f"concert-{email}-{int(now.timestamp())}",
         start_at=now + timedelta(days=3),
         end_at=now + timedelta(days=3, hours=3),
         status=EventStatus.PUBLISHED,
@@ -184,7 +186,7 @@ def test_mmg_agent_initiation_and_submit_outcomes(db_session: Session) -> None:
 
 def test_mmg_agent_submit_pending_and_rejected_paths(db_session: Session) -> None:
     settings.mmg_agent_auto_verify_enabled = False
-    order, _, user = _seed_order_with_hold(db_session, user_email="pending@example.com")
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("pending"))
     initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
 
     pending = submit_mmg_agent_payment(
@@ -197,7 +199,7 @@ def test_mmg_agent_submit_pending_and_rejected_paths(db_session: Session) -> Non
     assert pending.status == "payment_submitted"
 
     settings.mmg_agent_auto_verify_enabled = True
-    order2, _, user2 = _seed_order_with_hold(db_session, user_email="reject@example.com")
+    order2, _, user2 = _seed_order_with_hold(db_session, user_email=unique_email("reject"))
     initiated2 = create_mmg_agent_checkout_for_order(db_session, order_id=order2.id, user_id=user2.id)
     rejected = submit_mmg_agent_payment(
         db_session,
@@ -210,14 +212,14 @@ def test_mmg_agent_submit_pending_and_rejected_paths(db_session: Session) -> Non
 
 
 def test_manual_agent_verify_hook_and_callback_scaffold(db_session: Session) -> None:
-    order, _, user = _seed_order_with_hold(db_session, user_email="manual@example.com")
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("manual"))
     initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
 
     mark_agent_payment_verified(db_session, order_id=order.id, payment_reference=initiated.payment_reference)
     db_session.refresh(order)
     assert order.status == OrderStatus.COMPLETED
 
-    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email="cb@example.com")
+    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email=unique_email("cb"))
     create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
     callback = handle_mmg_callback(
         db_session,
@@ -227,7 +229,7 @@ def test_manual_agent_verify_hook_and_callback_scaffold(db_session: Session) -> 
 
 
 def test_paid_callback_is_idempotent_and_does_not_double_issue_tickets(db_session: Session) -> None:
-    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email="idempotent@example.com")
+    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email=unique_email("idempotent"))
     create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
 
     first = handle_mmg_callback(
@@ -245,7 +247,7 @@ def test_paid_callback_is_idempotent_and_does_not_double_issue_tickets(db_sessio
 
 
 def test_unpaid_callback_after_completion_is_ignored(db_session: Session) -> None:
-    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email="outoforder@example.com")
+    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email=unique_email("outoforder"))
     create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
     handle_mmg_callback(
         db_session,
@@ -262,7 +264,7 @@ def test_unpaid_callback_after_completion_is_ignored(db_session: Session) -> Non
 
 
 def test_duplicate_agent_submit_after_completion_is_safe(db_session: Session) -> None:
-    order, _, user = _seed_order_with_hold(db_session, user_email="dup-agent@example.com")
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dup_agent"))
     initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     first = submit_mmg_agent_payment(
         db_session,
@@ -283,7 +285,7 @@ def test_duplicate_agent_submit_after_completion_is_safe(db_session: Session) ->
 
 
 def test_callback_cannot_complete_order_after_hold_expiration(db_session: Session) -> None:
-    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email="expired-callback@example.com")
+    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email=unique_email("expired_callback"))
     create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
     checkout_order.ticket_holds[0].expires_at = datetime.now(timezone.utc) - timedelta(days=1)
     db_session.commit()
@@ -306,13 +308,13 @@ def test_live_mode_missing_config_fails_clearly(db_session: Session) -> None:
     settings.mmg_api_secret = None
     settings.mmg_callback_url = None
 
-    order, _, user = _seed_order_with_hold(db_session, user_email="live@example.com")
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("live"))
     with pytest.raises(Exception) as exc:
         create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     assert "missing required config" in str(exc.value).lower()
 
 def test_mmg_checkout_uses_discounted_total_amount(db_session: Session) -> None:
-    order, _, user = _seed_order_with_hold(db_session, user_email="discounted@example.com")
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("discounted"))
     order.subtotal_amount = Decimal("200.00")
     order.discount_amount = Decimal("50.00")
     order.total_amount = Decimal("150.00")
@@ -324,7 +326,7 @@ def test_mmg_checkout_uses_discounted_total_amount(db_session: Session) -> None:
 
 def test_dev_test_checkout_disabled_by_default(db_session: Session) -> None:
     settings.enable_dev_test_checkout = False
-    order, _, user = _seed_order_with_hold(db_session, user_email="dev-disabled@example.com")
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dev_disabled"))
     with pytest.raises(PaymentError, match="Dev test checkout is unavailable"):
         complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
 
@@ -332,7 +334,7 @@ def test_dev_test_checkout_disabled_by_default(db_session: Session) -> None:
 def test_dev_test_checkout_hard_disabled_in_production_env(db_session: Session) -> None:
     settings.enable_dev_test_checkout = True
     settings.env = "production"
-    order, _, user = _seed_order_with_hold(db_session, user_email="dev-prod-guard@example.com")
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dev_prod_guard"))
     with pytest.raises(PaymentError, match="Dev test checkout is unavailable"):
         complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     settings.env = "development"
@@ -341,7 +343,7 @@ def test_dev_test_checkout_hard_disabled_in_production_env(db_session: Session) 
 
 def test_dev_test_checkout_completes_order_issues_tickets_and_wallet_payload(db_session: Session) -> None:
     settings.enable_dev_test_checkout = True
-    order, _, user = _seed_order_with_hold(db_session, user_email="dev-success@example.com")
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dev_success"))
 
     snapshot = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     db_session.refresh(order)
@@ -370,7 +372,7 @@ def test_dev_test_checkout_completes_order_issues_tickets_and_wallet_payload(db_
 
 def test_dev_test_checkout_rejects_wrong_user(db_session: Session) -> None:
     settings.enable_dev_test_checkout = True
-    order, _, _ = _seed_order_with_hold(db_session, user_email="dev-owner@example.com")
+    order, _, _ = _seed_order_with_hold(db_session, user_email=unique_email("dev_owner"))
     with pytest.raises(PaymentAuthorizationError):
         complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=999)
     settings.enable_dev_test_checkout = False
@@ -378,7 +380,7 @@ def test_dev_test_checkout_rejects_wrong_user(db_session: Session) -> None:
 
 def test_dev_test_checkout_is_idempotent_and_does_not_duplicate_tickets(db_session: Session) -> None:
     settings.enable_dev_test_checkout = True
-    order, _, user = _seed_order_with_hold(db_session, user_email="dev-idempotent@example.com")
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dev_idempotent"))
 
     first = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     second = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)

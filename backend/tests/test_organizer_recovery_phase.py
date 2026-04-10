@@ -21,6 +21,7 @@ from app.models.ticket_tier import TicketTier
 from app.models.user import User
 from app.models.venue import Venue
 from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
+from tests.utils import unique_email
 
 
 
@@ -69,7 +70,7 @@ def _seed_event(db: Session, organizer_user: User, *, title: str = "Event", end_
 
 
 def test_event_creation_and_creator_ownership(client: TestClient, db_session: Session) -> None:
-    creator = _seed_user(db_session, "creator@example.com", "Creator")
+    creator = _seed_user(db_session, unique_email("creator"), "Creator")
     payload = {
         "title": "Organizer Launch",
         "short_description": "Short",
@@ -115,7 +116,7 @@ def test_event_creation_and_creator_ownership(client: TestClient, db_session: Se
 
 
 def test_event_creation_with_multiple_tiers_and_defaults(client: TestClient, db_session: Session) -> None:
-    creator = _seed_user(db_session, "multi-tier@example.com", "Multi Tier")
+    creator = _seed_user(db_session, unique_email("multi_tier"), "Multi Tier")
     payload = {
         "title": "Festival Night",
         "start_at": (datetime.now(UTC) + timedelta(days=3)).isoformat(),
@@ -156,7 +157,7 @@ def test_event_creation_with_multiple_tiers_and_defaults(client: TestClient, db_
 
 
 def test_event_creation_validation_errors(client: TestClient, db_session: Session) -> None:
-    creator = _seed_user(db_session, "invalid@example.com", "Invalid User")
+    creator = _seed_user(db_session, unique_email("invalid"), "Invalid User")
     base_payload = {
         "title": "Bad Event",
         "start_at": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
@@ -196,7 +197,7 @@ def test_event_creation_validation_errors(client: TestClient, db_session: Sessio
 
 
 def test_event_creation_is_atomic_when_tier_validation_fails(client: TestClient, db_session: Session) -> None:
-    creator = _seed_user(db_session, "atomic@example.com", "Atomic User")
+    creator = _seed_user(db_session, unique_email("atomic"), "Atomic User")
     payload = {
         "title": "Atomic Event",
         "start_at": (datetime.now(UTC) + timedelta(days=4)).isoformat(),
@@ -228,8 +229,8 @@ def test_event_creation_is_atomic_when_tier_validation_fails(client: TestClient,
 
 
 def test_mine_and_active_event_listing(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "owner@example.com", "Owner")
-    other = _seed_user(db_session, "other@example.com", "Other")
+    owner = _seed_user(db_session, unique_email("owner"), "Owner")
+    other = _seed_user(db_session, unique_email("other"), "Other")
     _seed_event(db_session, owner, title="Active Event", end_offset_hours=10)
     ended = _seed_event(db_session, owner, title="Ended Event", end_offset_hours=-1)
     ended.end_at = datetime.now(UTC) - timedelta(hours=1)
@@ -247,7 +248,7 @@ def test_mine_and_active_event_listing(client: TestClient, db_session: Session) 
 
 
 def test_mine_active_listing_with_multiple_tiers_has_no_duplicates(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "owner-tiers@example.com", "Owner Tiers")
+    owner = _seed_user(db_session, unique_email("owner_tiers"), "Owner Tiers")
     event = _seed_event(db_session, owner, title="Tiered Active Event", end_offset_hours=10)
     db_session.add_all(
         [
@@ -292,9 +293,9 @@ def test_mine_active_listing_with_multiple_tiers_has_no_duplicates(client: TestC
 
 
 def test_staff_assignment_permissions_and_expiration(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "org@example.com", "Organizer")
-    staff = _seed_user(db_session, "staff@example.com", "Staff")
-    outsider = _seed_user(db_session, "outsider@example.com", "Outsider")
+    owner = _seed_user(db_session, unique_email("org"), "Organizer")
+    staff = _seed_user(db_session, unique_email("staff"), "Staff")
+    outsider = _seed_user(db_session, unique_email("outsider"), "Outsider")
     event = _seed_event(db_session, owner, title="Checkin", end_offset_hours=2)
     outsider_event = _seed_event(db_session, outsider, title="Other", end_offset_hours=2)
     db_session.commit()
@@ -316,9 +317,9 @@ def test_staff_assignment_permissions_and_expiration(client: TestClient, db_sess
 
 
 def test_dashboard_profile_and_user_search(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "owner2@example.com", "Owner Two", phone="+15550002222")
-    staff = _seed_user(db_session, "staff2@example.com", "Staff Two")
-    buyer = _seed_user(db_session, "buyer2@example.com", "Buyer Person")
+    owner = _seed_user(db_session, unique_email("owner2"), "Owner Two", phone="+15550002222")
+    staff = _seed_user(db_session, unique_email("staff2"), "Staff Two")
+    buyer = _seed_user(db_session, unique_email("buyer2"), "Buyer Person")
     event = _seed_event(db_session, owner, title="Dash Event", end_offset_hours=12)
     tier = TicketTier(
         event_id=event.id,

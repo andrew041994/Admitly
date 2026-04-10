@@ -28,16 +28,17 @@ from app.services.finance_reporting import (
     validate_organizer_finance_access,
 )
 from app.services.orders import complete_paid_order
+from tests.utils import unique_email
 
 
 
 def _seed_finance_data(db: Session):
     now = datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc)
 
-    organizer_user = User(email="organizer-finance@example.com", full_name="Organizer")
-    unrelated_user = User(email="unrelated-finance@example.com", full_name="Unrelated")
-    admin_user = User(email="admin-finance@example.com", full_name="Admin", is_admin=True)
-    buyer = User(email="buyer-finance@example.com", full_name="Buyer")
+    organizer_user = User(email=unique_email("organizer_finance"), full_name="Organizer")
+    unrelated_user = User(email=unique_email("unrelated_finance"), full_name="Unrelated")
+    admin_user = User(email=unique_email("admin_finance"), full_name="Admin", is_admin=True)
+    buyer = User(email=unique_email("buyer_finance"), full_name="Buyer")
     db.add_all([organizer_user, unrelated_user, admin_user, buyer])
     db.flush()
 

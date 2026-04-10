@@ -23,14 +23,15 @@ from app.models.enums import (
     RefundStatus,
 )
 from app.services.finance_reporting import get_admin_finance_summary, list_admin_finance_orders
+from tests.utils import unique_email
 
 
 
 def _seed(db: Session):
     now = datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc)
-    admin = User(email="admin-fin-report@example.com", full_name="Admin", is_admin=True)
-    user = User(email="user-fin-report@example.com", full_name="User")
-    organizer_user = User(email="organizer-fin-report@example.com", full_name="Org")
+    admin = User(email=unique_email("admin_fin_report"), full_name="Admin", is_admin=True)
+    user = User(email=unique_email("user_fin_report"), full_name="User")
+    organizer_user = User(email=unique_email("organizer_fin_report"), full_name="Org")
     db.add_all([admin, user, organizer_user])
     db.flush()
 

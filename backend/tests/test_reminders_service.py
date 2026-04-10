@@ -24,12 +24,13 @@ from app.services.reminders import (
     should_send_reminder_for_event,
 )
 from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
+from tests.utils import unique_email
 
 
 
 def _seed_order(db: Session, *, suffix: str, event_start_at: datetime) -> tuple[Order, User, Event]:
-    buyer = User(email=f"buyer-{suffix}@example.com", full_name="Buyer")
-    organizer_user = User(email=f"org-{suffix}@example.com", full_name="Organizer")
+    buyer = User(email=unique_email("buyer"), full_name="Buyer")
+    organizer_user = User(email=unique_email("organizer"), full_name="Organizer")
     db.add_all([buyer, organizer_user])
     db.flush()
 
@@ -137,7 +138,7 @@ def test_recipients_use_current_owner_after_transfer(db_session: Session) -> Non
     order, buyer, event = _seed_order(db_session, suffix="transfer-owner", event_start_at=now + timedelta(hours=24, minutes=5))
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
 
-    recipient = User(email="recipient-reminder@example.com", full_name="Recipient")
+    recipient = User(email=unique_email("recipient_reminder"), full_name="Recipient")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)

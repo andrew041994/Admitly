@@ -9,11 +9,12 @@ from app.db.base import Base
 from app.models import User
 from app.schemas.notification import PushTokenDeleteRequest, PushTokenRegisterRequest
 from app.services.notifications import PushMessage, _send_push, register_push_token
+from tests.utils import unique_email
 
 
 
 def _seed_user(db: Session, suffix: str) -> User:
-    user = User(email=f"push-{suffix}@example.com", full_name="Push User")
+    user = User(email=unique_email(f"push_{suffix}"), full_name="Push User")
     db.add(user)
     db.commit()
     db.refresh(user)

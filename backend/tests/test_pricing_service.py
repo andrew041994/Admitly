@@ -13,12 +13,13 @@ from app.models.promo_code_redemption import PromoCodeRedemption
 from app.models.promo_code_ticket_tier import PromoCodeTicketTier
 from app.services.orders import create_pending_order_from_holds
 from app.services.promo_codes import PromoCodeValidationError
+from tests.utils import unique_email
 
 
 
 def _seed(db: Session):
     now = datetime(2026, 4, 7, 10, 0, tzinfo=timezone.utc)
-    user = User(email="buyer@example.com", full_name="Buyer")
+    user = User(email=unique_email("buyer"), full_name="Buyer")
     db.add(user)
     db.flush()
     organizer = OrganizerProfile(user_id=user.id, business_name="Org", display_name="Org")

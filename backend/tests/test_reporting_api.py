@@ -21,18 +21,19 @@ from app.services.reporting import (
     EventReportingAuthorizationError,
 )
 from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user, void_ticket, check_in_ticket_for_event
+from tests.utils import unique_email
 
 
 
 def _seed_reporting_data(db: Session):
     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
 
-    organizer_user = User(email="organizer@example.com", full_name="Organizer")
-    unrelated_user = User(email="viewer@example.com", full_name="Viewer")
-    admin_user = User(email="admin@example.com", full_name="Admin", is_admin=True)
-    buyer = User(email="buyer@example.com", full_name="Buyer")
-    recipient = User(email="recipient@example.com", full_name="Recipient")
-    scanner = User(email="scanner@example.com", full_name="Scanner")
+    organizer_user = User(email=unique_email("organizer"), full_name="Organizer")
+    unrelated_user = User(email=unique_email("viewer"), full_name="Viewer")
+    admin_user = User(email=unique_email("admin"), full_name="Admin", is_admin=True)
+    buyer = User(email=unique_email("buyer"), full_name="Buyer")
+    recipient = User(email=unique_email("recipient"), full_name="Recipient")
+    scanner = User(email=unique_email("scanner"), full_name="Scanner")
     db.add_all([organizer_user, unrelated_user, admin_user, buyer, recipient, scanner])
     db.flush()
 

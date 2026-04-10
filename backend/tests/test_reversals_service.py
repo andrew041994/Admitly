@@ -23,6 +23,7 @@ from app.services.tickets import (
     issue_tickets_for_completed_order,
     transfer_ticket_to_user,
 )
+from tests.utils import unique_email
 
 
 
@@ -112,8 +113,8 @@ def _seed_order(
 
 
 def test_cancel_pending_order_owner_only_and_not_payable(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    owner = User(email="owner_cancel@example.com", full_name="Owner")
-    other = User(email="other_cancel@example.com", full_name="Other")
+    owner = User(email=unique_email("owner_cancel"), full_name="Owner")
+    other = User(email=unique_email("other_cancel"), full_name="Other")
     db_session.add_all([owner, other])
     db_session.flush()
     event = _seed_event(db_session, organizer_user=owner, slug="cancel-pending")
@@ -140,7 +141,7 @@ def test_cancel_pending_order_owner_only_and_not_payable(db_session: Session, mo
 
 
 def test_cancel_pending_order_rejects_completed_and_repeat_cancel(db_session: Session) -> None:
-    owner = User(email="owner_cancel2@example.com", full_name="Owner")
+    owner = User(email=unique_email("owner_cancel2"), full_name="Owner")
     db_session.add(owner)
     db_session.flush()
     event = _seed_event(db_session, organizer_user=owner, slug="cancel-completed")
@@ -156,8 +157,8 @@ def test_cancel_pending_order_rejects_completed_and_repeat_cancel(db_session: Se
 
 
 def test_refund_completed_order_invalidates_tickets_and_records_audit(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    organizer_user = User(email="organizer_refund@example.com", full_name="Organizer")
-    buyer = User(email="buyer_refund@example.com", full_name="Buyer")
+    organizer_user = User(email=unique_email("organizer_refund"), full_name="Organizer")
+    buyer = User(email=unique_email("buyer_refund"), full_name="Buyer")
     db_session.add_all([organizer_user, buyer])
     db_session.flush()
 
@@ -200,7 +201,7 @@ def test_refund_completed_order_invalidates_tickets_and_records_audit(db_session
             ticket_code=None,
         )
 
-    recipient = User(email="recipient_refund@example.com", full_name="Recipient")
+    recipient = User(email=unique_email("recipient_refund"), full_name="Recipient")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)
@@ -214,9 +215,9 @@ def test_refund_completed_order_invalidates_tickets_and_records_audit(db_session
 
 
 def test_refund_rejects_unauthorized_repeat_and_checked_in_ticket(db_session: Session) -> None:
-    organizer_user = User(email="organizer_refund2@example.com", full_name="Organizer")
-    buyer = User(email="buyer_refund2@example.com", full_name="Buyer")
-    outsider = User(email="outsider_refund2@example.com", full_name="Outsider")
+    organizer_user = User(email=unique_email("organizer_refund2"), full_name="Organizer")
+    buyer = User(email=unique_email("buyer_refund2"), full_name="Buyer")
+    outsider = User(email=unique_email("outsider_refund2"), full_name="Outsider")
     db_session.add_all([organizer_user, buyer, outsider])
     db_session.flush()
 
@@ -248,9 +249,9 @@ def test_refund_rejects_unauthorized_repeat_and_checked_in_ticket(db_session: Se
 
 
 def test_cancel_event_voids_issued_tickets_and_cancels_pending_orders(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    organizer_user = User(email="organizer_event_cancel@example.com", full_name="Organizer")
-    buyer = User(email="buyer_event_cancel@example.com", full_name="Buyer")
-    outsider = User(email="outsider_event_cancel@example.com", full_name="Outsider")
+    organizer_user = User(email=unique_email("organizer_event_cancel"), full_name="Organizer")
+    buyer = User(email=unique_email("buyer_event_cancel"), full_name="Buyer")
+    outsider = User(email=unique_email("outsider_event_cancel"), full_name="Outsider")
     db_session.add_all([organizer_user, buyer, outsider])
     db_session.flush()
 

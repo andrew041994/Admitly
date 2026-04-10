@@ -68,6 +68,7 @@ from app.services.tickets import (
     scan_ticket,
 )
 from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
+from tests.utils import unique_email
 
 
 
@@ -82,7 +83,7 @@ def _seed_order(
 ) -> tuple[Order, OrderItem, TicketTier, User, Event]:
     now = datetime.now(timezone.utc)
     suffix = suffix or str(uuid.uuid4())[:8]
-    email = user_email or f"buyer_{suffix}@example.com"
+    email = user_email or unique_email("buyer")
     user = User(email=email, full_name="Buyer")
     db.add(user)
     db.flush()
@@ -169,7 +170,7 @@ def test_pending_cancelled_expired_orders_do_not_issue_tickets(db_session: Sessi
     for status in (OrderStatus.PENDING, OrderStatus.CANCELLED, OrderStatus.EXPIRED):
         order, _, _, _, _ = _seed_order(
             db_session,
-            user_email=f"{status.value}@example.com",
+            user_email=unique_email(status.value),
             status=status,
             payment_verification_status="verified",
         )
@@ -214,7 +215,7 @@ def test_user_can_retrieve_own_tickets_only(db_session: Session) -> None:
     own_tickets = list_tickets_for_user(db_session, user_id=buyer.id)
     assert len(own_tickets) == 2
 
-    other = User(email="other-buyer@example.com", full_name="Other")
+    other = User(email=unique_email("other_buyer"), full_name="Other")
     db_session.add(other)
     db_session.commit()
     db_session.refresh(other)
@@ -224,7 +225,7 @@ def test_user_can_retrieve_own_tickets_only(db_session: Session) -> None:
 def test_owner_can_transfer_ticket_and_purchaser_is_immutable(db_session: Session) -> None:
     order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    recipient = User(email="recipient@example.com", full_name="Recipient")
+    recipient = User(email=unique_email("recipient"), full_name="Recipient")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)
@@ -246,8 +247,8 @@ def test_owner_can_transfer_ticket_and_purchaser_is_immutable(db_session: Sessio
 def test_transfer_rejects_non_owner_checked_in_voided_self_and_unknown_user(db_session: Session) -> None:
     order, _, _, buyer, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    unrelated = User(email="unrelated@example.com", full_name="Unrelated")
-    recipient = User(email="recipient-2@example.com", full_name="Recipient")
+    unrelated = User(email=unique_email("unrelated"), full_name="Unrelated")
+    recipient = User(email=unique_email("recipient_2"), full_name="Recipient")
     db_session.add_all([unrelated, recipient])
     db_session.commit()
     db_session.refresh(unrelated)
@@ -284,7 +285,7 @@ def test_transfer_rejects_non_owner_checked_in_voided_self_and_unknown_user(db_s
             to_user_id=recipient.id,
         )
 
-    order_2, _, _, buyer_2, _ = _seed_order(db_session, user_email="buyer2@example.com", quantity=1)
+    order_2, _, _, buyer_2, _ = _seed_order(db_session, user_email=unique_email("buyer2"), quantity=1)
     ticket_2 = issue_tickets_for_completed_order(db_session, order_2)[0]
     ticket_2.status = TicketStatus.VOIDED
     db_session.commit()
@@ -308,7 +309,7 @@ def test_transfer_rejects_non_owner_checked_in_voided_self_and_unknown_user(db_s
 def test_partial_and_full_transfer_and_order_history_views(db_session: Session) -> None:
     order, _, _, buyer, _ = _seed_order(db_session, quantity=4)
     tickets = issue_tickets_for_completed_order(db_session, order)
-    recipient = User(email="recipient-3@example.com", full_name="Recipient")
+    recipient = User(email=unique_email("recipient_3"), full_name="Recipient")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)
@@ -331,7 +332,7 @@ def test_user_cannot_retrieve_another_users_order_tickets(db_session: Session) -
     order, _, _, _, _ = _seed_order(db_session, quantity=1)
     issue_tickets_for_completed_order(db_session, order)
 
-    other = User(email="forbidden@example.com", full_name="Forbidden")
+    other = User(email=unique_email("forbidden"), full_name="Forbidden")
     db_session.add(other)
     db_session.commit()
     db_session.refresh(other)
@@ -347,7 +348,7 @@ def test_organizer_and_staff_authz_for_checkin(db_session: Session) -> None:
     organizer_user_id = event.organizer.user_id
     assert can_check_in_event_tickets(db_session, user_id=organizer_user_id, event_id=event.id)
 
-    staff_user = User(email="staff@example.com", full_name="Staff")
+    staff_user = User(email=unique_email("staff"), full_name="Staff")
     db_session.add(staff_user)
     db_session.flush()
     db_session.add(
@@ -374,7 +375,7 @@ def test_organizer_and_staff_authz_for_checkin(db_session: Session) -> None:
 def test_unrelated_user_cannot_check_in(db_session: Session) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    outsider = User(email="outsider@example.com", full_name="Outsider")
+    outsider = User(email=unique_email("outsider"), full_name="Outsider")
     db_session.add(outsider)
     db_session.commit()
     db_session.refresh(outsider)
@@ -443,8 +444,8 @@ def test_event_scoped_one_step_route_returns_green_on_admit_and_red_on_duplicate
 
 
 def test_event_scoped_one_step_route_returns_red_for_wrong_event_and_unauthorized(db_session: Session) -> None:
-    order_1, _, _, _, event_1 = _seed_order(db_session, user_email="route-a@example.com", quantity=1)
-    order_2, _, _, _, event_2 = _seed_order(db_session, user_email="route-b@example.com", quantity=1)
+    order_1, _, _, _, event_1 = _seed_order(db_session, user_email=unique_email("route_a"), quantity=1)
+    order_2, _, _, _, event_2 = _seed_order(db_session, user_email=unique_email("route_b"), quantity=1)
     ticket_1 = issue_tickets_for_completed_order(db_session, order_1)[0]
     issue_tickets_for_completed_order(db_session, order_2)
 
@@ -460,7 +461,7 @@ def test_event_scoped_one_step_route_returns_red_for_wrong_event_and_unauthorize
     assert wrong_event.ui_signal == "red"
     assert wrong_event.ticket_id == ticket_1.id
 
-    outsider = User(email="route-outsider@example.com", full_name="Outsider")
+    outsider = User(email=unique_email("route_outsider"), full_name="Outsider")
     db_session.add(outsider)
     db_session.commit()
     db_session.refresh(outsider)
@@ -545,7 +546,7 @@ def test_validate_ticket_statuses_for_qr_flow(db_session: Session) -> None:
 def test_transferred_ticket_can_still_be_checked_in(db_session: Session) -> None:
     order, _, _, buyer, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    recipient = User(email="recipient-4@example.com", full_name="Recipient")
+    recipient = User(email=unique_email("recipient_4"), full_name="Recipient")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)
@@ -569,8 +570,8 @@ def test_transferred_ticket_can_still_be_checked_in(db_session: Session) -> None
 
 
 def test_ticket_for_different_event_is_rejected(db_session: Session) -> None:
-    order_1, _, _, _, event_1 = _seed_order(db_session, user_email="a@example.com", quantity=1)
-    order_2, _, _, _, event_2 = _seed_order(db_session, user_email="b@example.com", quantity=1)
+    order_1, _, _, _, event_1 = _seed_order(db_session, user_email=unique_email("a"), quantity=1)
+    order_2, _, _, _, event_2 = _seed_order(db_session, user_email=unique_email("b"), quantity=1)
     ticket_1 = issue_tickets_for_completed_order(db_session, order_1)[0]
     issue_tickets_for_completed_order(db_session, order_2)
 
@@ -635,7 +636,7 @@ def test_refunded_and_cancelled_event_tickets_are_not_admittable(db_session: Ses
     assert not refunded.valid
     assert refunded.status == CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE
 
-    order_2, _, _, _, event_2 = _seed_order(db_session, user_email="cancelled-event@example.com", quantity=1)
+    order_2, _, _, _, event_2 = _seed_order(db_session, user_email=unique_email("cancelled_event"), quantity=1)
     ticket_2 = issue_tickets_for_completed_order(db_session, order_2)[0]
     event_2.status = EventStatus.CANCELLED
     db_session.commit()
@@ -747,7 +748,7 @@ def test_organizer_can_void_ticket_and_audit_fields_are_set(db_session: Session)
 def test_unrelated_user_cannot_void_ticket(db_session: Session) -> None:
     order, _, _, _, _ = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    outsider = User(email="void-outsider@example.com", full_name="Outsider")
+    outsider = User(email=unique_email("void_outsider"), full_name="Outsider")
     db_session.add(outsider)
     db_session.commit()
     db_session.refresh(outsider)
@@ -795,7 +796,7 @@ def test_checked_in_and_already_voided_tickets_cannot_be_voided(db_session: Sess
 def test_voided_ticket_cannot_be_transferred_or_checked_in(db_session: Session) -> None:
     order, _, _, buyer, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    recipient = User(email="void-recipient@example.com", full_name="Recipient")
+    recipient = User(email=unique_email("void_recipient"), full_name="Recipient")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)
@@ -826,10 +827,10 @@ def test_voided_ticket_cannot_be_transferred_or_checked_in(db_session: Session) 
 
 
 def test_void_permissions_are_event_scoped_and_organizer_only(db_session: Session) -> None:
-    order, _, _, _, event = _seed_order(db_session, user_email="void-scope@example.com", quantity=1)
+    order, _, _, _, event = _seed_order(db_session, user_email=unique_email("void_scope"), quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
 
-    staff_user = User(email="void-staff@example.com", full_name="Staff")
+    staff_user = User(email=unique_email("void_staff"), full_name="Staff")
     db_session.add(staff_user)
     db_session.flush()
     db_session.add(
@@ -870,9 +871,9 @@ def test_ticket_lifecycle_notification_hooks_are_called(db_session: Session, mon
         lambda ticket, **_: calls.append(("voided", ticket.id)),
     )
 
-    order, _, _, buyer, event = _seed_order(db_session, user_email="hooks@example.com", quantity=1)
+    order, _, _, buyer, event = _seed_order(db_session, user_email=unique_email("hooks"), quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    recipient = User(email="hooks-recipient@example.com", full_name="Recipient")
+    recipient = User(email=unique_email("hooks_recipient"), full_name="Recipient")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)
@@ -978,8 +979,8 @@ def test_checkin_attempts_are_audited_for_validate_and_duplicate(db_session: Ses
 def test_manual_override_requires_manager_and_notes(db_session: Session) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    support_user = User(email="support-override@example.com", full_name="Support")
-    manager_user = User(email="manager-override@example.com", full_name="Manager")
+    support_user = User(email=unique_email("support_override"), full_name="Support")
+    manager_user = User(email=unique_email("manager_override"), full_name="Manager")
     db_session.add_all([support_user, manager_user])
     db_session.flush()
     db_session.add_all(
@@ -1043,7 +1044,7 @@ def test_ticket_qr_endpoint_requires_ticket_ownership(db_session: Session) -> No
     assert owner_view.ticket_public_token == (ticket.qr_token or ticket.qr_payload)
     assert owner_view.qr_data_uri.startswith("data:image/png;base64,")
 
-    outsider = User(email="qr-outsider@example.com", full_name="Outsider")
+    outsider = User(email=unique_email("qr_outsider"), full_name="Outsider")
     db_session.add(outsider)
     db_session.commit()
     db_session.refresh(outsider)
@@ -1055,7 +1056,7 @@ def test_ticket_qr_endpoint_requires_ticket_ownership(db_session: Session) -> No
 def test_wallet_list_only_returns_current_owner_tickets(db_session: Session) -> None:
     order, _, _, buyer, _ = _seed_order(db_session, quantity=2)
     issued = issue_tickets_for_completed_order(db_session, order)
-    recipient = User(email="wallet-recipient@example.com", full_name="Recipient")
+    recipient = User(email=unique_email("wallet_recipient"), full_name="Recipient")
     db_session.add(recipient)
     db_session.commit()
     transfer_ticket_to_user(db_session, ticket_id=issued[0].id, from_user_id=buyer.id, to_user_id=recipient.id)
@@ -1069,14 +1070,14 @@ def test_wallet_list_only_returns_current_owner_tickets(db_session: Session) -> 
 
 def test_wallet_list_orders_upcoming_before_past(db_session: Session) -> None:
     now = datetime.now(timezone.utc)
-    order_upcoming_far, _, _, buyer, event_upcoming_far = _seed_order(db_session, user_email="wallet-sort@example.com", quantity=1)
+    order_upcoming_far, _, _, buyer, event_upcoming_far = _seed_order(db_session, user_email=unique_email("wallet_sort"), quantity=1)
     issue_tickets_for_completed_order(db_session, order_upcoming_far)
 
-    order_past_recent, _, _, _, event_past_recent = _seed_order(db_session, user_email="wallet-sort-2@example.com", quantity=1)
+    order_past_recent, _, _, _, event_past_recent = _seed_order(db_session, user_email=unique_email("wallet_sort_2"), quantity=1)
     order_past_recent.user_id = buyer.id
     issue_tickets_for_completed_order(db_session, order_past_recent)
 
-    order_upcoming_near, _, _, _, event_upcoming_near = _seed_order(db_session, user_email="wallet-sort-3@example.com", quantity=1)
+    order_upcoming_near, _, _, _, event_upcoming_near = _seed_order(db_session, user_email=unique_email("wallet_sort_3"), quantity=1)
     order_upcoming_near.user_id = buyer.id
     issue_tickets_for_completed_order(db_session, order_upcoming_near)
 
@@ -1105,14 +1106,14 @@ def test_wallet_ticket_detail_owned_vs_non_owned(db_session: Session) -> None:
     assert owner_detail.ticket.order is not None
     assert owner_detail.ticket.order.reference_code.startswith("ORD-")
 
-    other = User(email="wallet-other@example.com", full_name="Other")
+    other = User(email=unique_email("wallet_other"), full_name="Other")
     db_session.add(other)
     db_session.commit()
     assert get_wallet_ticket(db_session, user_id=other.id, ticket_id=ticket.id) is None
 
 
 def test_wallet_status_used_and_invalid(db_session: Session) -> None:
-    order_used, _, _, buyer, event = _seed_order(db_session, user_email="wallet-used@example.com", quantity=1)
+    order_used, _, _, buyer, event = _seed_order(db_session, user_email=unique_email("wallet_used"), quantity=1)
     used_ticket = issue_tickets_for_completed_order(db_session, order_used)[0]
     check_in_ticket_for_event(
         db_session,
@@ -1122,7 +1123,7 @@ def test_wallet_status_used_and_invalid(db_session: Session) -> None:
         ticket_code=None,
     )
 
-    order_invalid, _, _, _, _ = _seed_order(db_session, user_email="wallet-invalid@example.com", quantity=1)
+    order_invalid, _, _, _, _ = _seed_order(db_session, user_email=unique_email("wallet_invalid"), quantity=1)
     order_invalid.user_id = buyer.id
     invalid_ticket = issue_tickets_for_completed_order(db_session, order_invalid)[0]
     invalid_ticket.status = TicketStatus.VOIDED
@@ -1136,7 +1137,7 @@ def test_wallet_status_used_and_invalid(db_session: Session) -> None:
 def test_wallet_transferred_acceptance_behavior(db_session: Session) -> None:
     order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    new_owner = User(email="wallet-new-owner@example.com", full_name="New Owner")
+    new_owner = User(email=unique_email("wallet_new_owner"), full_name="New Owner")
     db_session.add(new_owner)
     db_session.commit()
 
@@ -1166,8 +1167,8 @@ def test_wallet_uses_issued_tickets_not_only_orders(db_session: Session) -> None
     issue_tickets_for_completed_order(db_session, order)
     assert len(list_wallet_tickets(db_session, user_id=buyer.id)) == 2
 
-def _add_checkin_staff(db: Session, *, event: Event, owner_user_id: int, email: str = "scanner@example.com") -> User:
-    scanner = User(email=email, full_name="Scanner")
+def _add_checkin_staff(db: Session, *, event: Event, owner_user_id: int, email: str | None = None) -> User:
+    scanner = User(email=email or unique_email("scanner"), full_name="Scanner")
     db.add(scanner)
     db.flush()
     db.add(
@@ -1186,7 +1187,7 @@ def _add_checkin_staff(db: Session, *, event: Event, owner_user_id: int, email: 
 def test_scan_valid_ticket(db_session: Session) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-valid@example.com")
+    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_valid"))
 
     result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
 
@@ -1200,7 +1201,7 @@ def test_scan_valid_ticket(db_session: Session) -> None:
 def test_scan_already_used_ticket(db_session: Session) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-used@example.com")
+    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_used"))
 
     first = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
     second = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
@@ -1212,7 +1213,7 @@ def test_scan_already_used_ticket(db_session: Session) -> None:
 def test_scan_invalid_signature(db_session: Session) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-invalid@example.com")
+    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_invalid"))
 
     payload = generate_ticket_qr_payload(ticket)
     payload["hash"] = "bad-signature"
@@ -1225,7 +1226,7 @@ def test_scan_invalid_signature(db_session: Session) -> None:
 def test_scan_wrong_event(db_session: Session) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-wrong-event@example.com")
+    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_wrong_event"))
 
     payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id + 999)
 
@@ -1237,7 +1238,7 @@ def test_scan_wrong_event(db_session: Session) -> None:
 def test_only_authorized_can_scan(db_session: Session) -> None:
     order, _, _, _, _ = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    outsider = User(email="outsider-scanner@example.com", full_name="Outsider Scanner")
+    outsider = User(email=unique_email("outsider_scanner"), full_name="Outsider Scanner")
     db_session.add(outsider)
     db_session.commit()
     db_session.refresh(outsider)
@@ -1251,7 +1252,7 @@ def test_only_authorized_can_scan(db_session: Session) -> None:
 def test_scan_logs_created(db_session: Session) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email="scanner-logs@example.com")
+    scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_logs"))
 
     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
@@ -1272,8 +1273,8 @@ def test_ticket_issuance_populates_qr_fields_and_unique_tokens(db_session: Sessi
 
 
 def test_qr_token_is_unique_across_orders(db_session: Session) -> None:
-    order_a, _, _, _, _ = _seed_order(db_session, user_email="uniq-a@example.com", quantity=2)
-    order_b, _, _, _, _ = _seed_order(db_session, user_email="uniq-b@example.com", quantity=2)
+    order_a, _, _, _, _ = _seed_order(db_session, user_email=unique_email("uniq_a"), quantity=2)
+    order_b, _, _, _, _ = _seed_order(db_session, user_email=unique_email("uniq_b"), quantity=2)
     issued = issue_tickets_for_completed_order(db_session, order_a) + issue_tickets_for_completed_order(db_session, order_b)
     assert len({ticket.qr_token for ticket in issued}) == len(issued)
 
@@ -1306,7 +1307,7 @@ def test_ticket_detail_response_shape_and_auth(db_session: Session) -> None:
     assert detail.ticket_status == ticket.status.value
     assert detail.qr_payload == f"{QR_PAYLOAD_PREFIX}{ticket.qr_token}"
 
-    outsider = User(email="ticket-detail-outsider@example.com", full_name="Outsider")
+    outsider = User(email=unique_email("ticket_detail_outsider"), full_name="Outsider")
     db_session.add(outsider)
     db_session.commit()
     db_session.refresh(outsider)

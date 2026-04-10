@@ -15,11 +15,12 @@ from app.services.ticket_holds import (
     get_ticket_tier_capacity_summary,
     get_ticket_type_availability,
 )
+from tests.utils import unique_email
 
 
 
 def _seed_ticket_tier(db: Session, start_at: datetime, quantity_total: int = 100) -> TicketTier:
-    user = User(email="owner@example.com", full_name="Owner")
+    user = User(email=unique_email("owner"), full_name="Owner")
     db.add(user)
     db.flush()
 

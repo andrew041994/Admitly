@@ -21,6 +21,7 @@ from app.services.orders import (
 )
 from app.lib.order_references import format_order_reference
 from app.services.ticket_holds import get_ticket_type_availability
+from tests.utils import unique_email
 
 
 
@@ -115,7 +116,7 @@ def test_create_pending_order_from_single_active_hold(db_session: Session) -> No
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, tiers = _seed_event_with_tiers(
         db_session,
-        owner_email="owner1@example.com",
+        owner_email=unique_email("owner1"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("150.00")],
     )
@@ -145,7 +146,7 @@ def test_create_pending_order_from_multiple_holds_same_event(db_session: Session
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, tiers = _seed_event_with_tiers(
         db_session,
-        owner_email="owner2@example.com",
+        owner_email=unique_email("owner2"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00"), Decimal("250.00")],
     )
@@ -183,7 +184,7 @@ def test_manual_order_insert_gets_reference_code_after_flush(db_session: Session
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, _ = _seed_event_with_tiers(
         db_session,
-        owner_email="manual-ref@example.com",
+        owner_email=unique_email("manual_ref"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
     )
@@ -207,7 +208,7 @@ def test_order_reference_codes_are_unique_for_multiple_orders(db_session: Sessio
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, _ = _seed_event_with_tiers(
         db_session,
-        owner_email="unique-ref@example.com",
+        owner_email=unique_email("unique_ref"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
     )
@@ -248,11 +249,11 @@ def test_create_pending_order_rejects_hold_belonging_to_another_user(db_session:
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, tiers = _seed_event_with_tiers(
         db_session,
-        owner_email="owner3@example.com",
+        owner_email=unique_email("owner3"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
     )
-    other_user = User(email="other@example.com", full_name="Other")
+    other_user = User(email=unique_email("other"), full_name="Other")
     db_session.add(other_user)
     db_session.commit()
     db_session.refresh(other_user)
@@ -274,7 +275,7 @@ def test_create_pending_order_rejects_expired_hold(db_session: Session) -> None:
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, tiers = _seed_event_with_tiers(
         db_session,
-        owner_email="owner4@example.com",
+        owner_email=unique_email("owner4"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
     )
@@ -295,7 +296,7 @@ def test_create_pending_order_rejects_already_attached_hold(db_session: Session)
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, tiers = _seed_event_with_tiers(
         db_session,
-        owner_email="owner5@example.com",
+        owner_email=unique_email("owner5"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
     )
@@ -328,13 +329,13 @@ def test_create_pending_order_rejects_holds_from_multiple_events(db_session: Ses
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user_1, event_1, tiers_1 = _seed_event_with_tiers(
         db_session,
-        owner_email="owner6a@example.com",
+        owner_email=unique_email("owner6a"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
     )
     user_2, event_2, tiers_2 = _seed_event_with_tiers(
         db_session,
-        owner_email="owner6b@example.com",
+        owner_email=unique_email("owner6b"),
         start_at=now + timedelta(days=4),
         tier_prices=[Decimal("120.00")],
     )
@@ -371,7 +372,7 @@ def test_pending_orders_do_not_count_as_sold_and_no_double_count_after_conversio
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, tiers = _seed_event_with_tiers(
         db_session,
-        owner_email="owner7@example.com",
+        owner_email=unique_email("owner7"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
         quantity_total=10,
@@ -398,7 +399,7 @@ def test_create_comp_order_marks_zero_total_and_comp_flags(db_session: Session) 
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, tiers = _seed_event_with_tiers(
         db_session,
-        owner_email="compowner@example.com",
+        owner_email=unique_email("compowner"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
         quantity_total=10,
@@ -423,12 +424,12 @@ def test_unrelated_user_cannot_create_comp_order(db_session: Session) -> None:
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     user, event, tiers = _seed_event_with_tiers(
         db_session,
-        owner_email="compowner2@example.com",
+        owner_email=unique_email("compowner2"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
         quantity_total=10,
     )
-    outsider = User(email="outsider@example.com", full_name="Out")
+    outsider = User(email=unique_email("outsider"), full_name="Out")
     db_session.add(outsider)
     db_session.commit()
 
@@ -446,7 +447,7 @@ def test_comp_order_respects_active_hold_capacity(db_session: Session) -> None:
     now = datetime.now(timezone.utc)
     user, event, tiers = _seed_event_with_tiers(
         db_session,
-        owner_email="compowner3@example.com",
+        owner_email=unique_email("compowner3"),
         start_at=now + timedelta(days=3),
         tier_prices=[Decimal("100.00")],
         quantity_total=2,

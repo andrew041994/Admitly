@@ -25,13 +25,14 @@ from app.services.notifications import (
 )
 from app.services.orders import complete_paid_order, refund_completed_order
 from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
+from tests.utils import unique_email
 
 
 
 def _seed_order(db: Session, *, suffix: str, completed: bool = True) -> tuple[Order, User, Event]:
     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-    buyer = User(email=f"buyer-{suffix}@example.com", full_name="Buyer")
-    organizer_user = User(email=f"org-{suffix}@example.com", full_name="Organizer")
+    buyer = User(email=unique_email("buyer"), full_name="Buyer")
+    organizer_user = User(email=unique_email("organizer"), full_name="Organizer")
     db.add_all([buyer, organizer_user])
     db.flush()
 
@@ -108,7 +109,7 @@ def test_complete_paid_order_triggers_notification_hooks(db_session: Session, mo
 def test_ticket_transfer_triggers_notification(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     order, buyer, _ = _seed_order(db_session, suffix="transfer")
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    recipient = User(email="recipient-notify@example.com", full_name="Recipient")
+    recipient = User(email=unique_email("recipient_notify"), full_name="Recipient")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)

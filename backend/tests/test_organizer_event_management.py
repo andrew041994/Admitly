@@ -19,6 +19,7 @@ from app.models.organizer_profile import OrganizerProfile
 from app.models.ticket_tier import TicketTier
 from app.models.user import User
 from app.models.venue import Venue
+from tests.utils import unique_email
 
 
 
@@ -91,8 +92,8 @@ def _seed_event(
 
 
 def test_organizer_list_and_access_controls(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "owner-mgmt@example.com", "Owner")
-    other = _seed_user(db_session, "other-mgmt@example.com", "Other")
+    owner = _seed_user(db_session, unique_email("owner_mgmt"), "Owner")
+    other = _seed_user(db_session, unique_email("other_mgmt"), "Other")
     mine = _seed_event(db_session, owner, title="Mine")
     _seed_event(db_session, other, title="Theirs")
 
@@ -107,7 +108,7 @@ def test_organizer_list_and_access_controls(client: TestClient, db_session: Sess
 
 
 def test_publish_unpublish_and_validation(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "publish-owner@example.com", "Publisher")
+    owner = _seed_user(db_session, unique_email("publish_owner"), "Publisher")
     event = _seed_event(db_session, owner, title="Draft Publish", status=EventStatus.DRAFT)
 
     ok = client.post(f"/events/organizer/events/{event.id}/publish", headers={"x-user-id": str(owner.id)})
@@ -128,7 +129,7 @@ def test_publish_unpublish_and_validation(client: TestClient, db_session: Sessio
 
 
 def test_cancel_and_tier_editing_rules(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "cancel-owner@example.com", "Canceller")
+    owner = _seed_user(db_session, unique_email("cancel_owner"), "Canceller")
     event = _seed_event(db_session, owner, title="To Cancel", status=EventStatus.PUBLISHED)
     tier = db_session.query(TicketTier).filter(TicketTier.event_id == event.id).one()
 
@@ -213,7 +214,7 @@ def test_cancel_and_tier_editing_rules(client: TestClient, db_session: Session) 
 
 
 def test_dashboard_metrics_defaults(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "metrics-owner@example.com", "Metrics")
+    owner = _seed_user(db_session, unique_email("metrics_owner"), "Metrics")
     event = _seed_event(db_session, owner, title="Metrics Event", status=EventStatus.PUBLISHED)
     tier = db_session.query(TicketTier).filter(TicketTier.event_id == event.id).one()
     tier.quantity_sold = 3
@@ -244,7 +245,7 @@ def test_dashboard_metrics_defaults(client: TestClient, db_session: Session) -> 
 
 
 def test_discovery_requires_published_and_approved(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "discover-owner@example.com", "Discover Owner")
+    owner = _seed_user(db_session, unique_email("discover_owner"), "Discover Owner")
     approved = _seed_event(
         db_session,
         owner,
@@ -271,7 +272,7 @@ def test_discovery_requires_published_and_approved(client: TestClient, db_sessio
 
 
 def test_organizer_event_status_variants_are_explicit(client: TestClient, db_session: Session) -> None:
-    owner = _seed_user(db_session, "states-owner@example.com", "States Owner")
+    owner = _seed_user(db_session, unique_email("states_owner"), "States Owner")
     draft = _seed_event(db_session, owner, title="Draft State", status=EventStatus.DRAFT, approval_status=EventApprovalStatus.PENDING)
     published_pending = _seed_event(
         db_session,

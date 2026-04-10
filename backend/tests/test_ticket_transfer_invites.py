@@ -22,13 +22,14 @@ from app.services.tickets import (
     transfer_ticket_to_user,
     validate_ticket_for_check_in,
 )
+from tests.utils import unique_email
 
 
 
 def _seed_order(db: Session, *, suffix: str) -> tuple[Order, User, Event]:
     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-    buyer = User(email=f"buyer-{suffix}@example.com", full_name="Buyer", phone=f"+592700{suffix[-2:]}")
-    organizer_user = User(email=f"organizer-{suffix}@example.com", full_name="Organizer")
+    buyer = User(email=unique_email("buyer"), full_name="Buyer", phone=f"+592700{suffix[-2:]}")
+    organizer_user = User(email=unique_email("organizer"), full_name="Organizer")
     db.add_all([buyer, organizer_user])
     db.flush()
 
@@ -88,8 +89,8 @@ def _seed_order(db: Session, *, suffix: str) -> tuple[Order, User, Event]:
 def test_invite_creation_and_acceptance_and_revocation_flow(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     order, owner, _ = _seed_order(db_session, suffix="01")
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    recipient = User(email="recipient@example.com", full_name="Recipient", phone="+59270099")
-    other = User(email="other@example.com", full_name="Other")
+    recipient = User(email=unique_email("recipient"), full_name="Recipient", phone="+59270099")
+    other = User(email=unique_email("other"), full_name="Other")
     db_session.add_all([recipient, other])
     db_session.commit()
     db_session.refresh(recipient)
@@ -117,7 +118,7 @@ def test_invite_creation_and_acceptance_and_revocation_flow(db_session: Session,
             db_session,
             ticket_id=ticket.id,
             sender_user_id=owner.id,
-            recipient_email="next@example.com",
+            recipient_email=unique_email("next"),
         )
 
     with pytest.raises(TicketAuthorizationError):
@@ -140,7 +141,7 @@ def test_invite_creation_and_acceptance_and_revocation_flow(db_session: Session,
         db_session,
         ticket_id=ticket.id,
         sender_user_id=recipient.id,
-        recipient_email="newperson@example.com",
+        recipient_email=unique_email("newperson"),
     )
     revoked = revoke_ticket_transfer_invite(db_session, invite_token=invite_2.invite_token, actor_user_id=recipient.id)
     assert revoked.status == TransferInviteStatus.REVOKED
@@ -160,14 +161,14 @@ def test_invite_rejects_checked_in_voided_and_expired_and_self(db_session: Sessi
     checked_in_ticket.status = TicketStatus.CHECKED_IN
     db_session.commit()
     with pytest.raises(TicketTransferError):
-        create_ticket_transfer_invite(db_session, ticket_id=checked_in_ticket.id, sender_user_id=owner.id, recipient_email="a@example.com")
+        create_ticket_transfer_invite(db_session, ticket_id=checked_in_ticket.id, sender_user_id=owner.id, recipient_email=unique_email("a"))
 
     order_2, owner_2, _ = _seed_order(db_session, suffix="03")
     ticket_2 = issue_tickets_for_completed_order(db_session, order_2)[0]
     ticket_2.status = TicketStatus.VOIDED
     db_session.commit()
     with pytest.raises(TicketTransferError):
-        create_ticket_transfer_invite(db_session, ticket_id=ticket_2.id, sender_user_id=owner_2.id, recipient_email="a@example.com")
+        create_ticket_transfer_invite(db_session, ticket_id=ticket_2.id, sender_user_id=owner_2.id, recipient_email=unique_email("a"))
 
     order_3, owner_3, _ = _seed_order(db_session, suffix="04")
     ticket_3 = issue_tickets_for_completed_order(db_session, order_3)[0]
@@ -175,7 +176,7 @@ def test_invite_rejects_checked_in_voided_and_expired_and_self(db_session: Sessi
         db_session,
         ticket_id=ticket_3.id,
         sender_user_id=owner_3.id,
-        recipient_email="late@example.com",
+        recipient_email=unique_email("late"),
         expires_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
     )
     with pytest.raises(TicketTransferError):
@@ -189,9 +190,9 @@ def test_invite_rejects_checked_in_voided_and_expired_and_self(db_session: Sessi
 def test_acceptance_requires_matching_email_or_phone(db_session: Session) -> None:
     order, owner, _ = _seed_order(db_session, suffix="06")
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    correct = User(email="claim@example.com", full_name="Claim User", phone="+59270066")
-    wrong_email = User(email="wrong@example.com", full_name="Wrong Email", phone="+59270066")
-    wrong_phone = User(email="claim2@example.com", full_name="Wrong Phone", phone="+59212345")
+    correct = User(email=unique_email("claim"), full_name="Claim User", phone="+59270066")
+    wrong_email = User(email=unique_email("wrong"), full_name="Wrong Email", phone="+59270066")
+    wrong_phone = User(email=unique_email("claim2"), full_name="Wrong Phone", phone="+59212345")
     db_session.add_all([correct, wrong_email, wrong_phone])
     db_session.commit()
     db_session.refresh(correct)
@@ -202,7 +203,7 @@ def test_acceptance_requires_matching_email_or_phone(db_session: Session) -> Non
         db_session,
         ticket_id=ticket.id,
         sender_user_id=owner.id,
-        recipient_email="claim@example.com",
+        recipient_email=unique_email("claim"),
         recipient_phone="+59270066",
     )
 
@@ -222,7 +223,7 @@ def test_pending_transfer_blocks_checkin_and_allows_after_cancel(db_session: Ses
         db_session,
         ticket_id=ticket.id,
         sender_user_id=owner.id,
-        recipient_email="pending@example.com",
+        recipient_email=unique_email("pending"),
     )
 
     pending = get_active_pending_transfer_for_ticket(db_session, ticket_id=ticket.id)
@@ -251,7 +252,7 @@ def test_pending_transfer_blocks_checkin_and_allows_after_cancel(db_session: Ses
 def test_transfer_invite_auto_binds_existing_user_by_email(db_session: Session) -> None:
     order, owner, _ = _seed_order(db_session, suffix="08")
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    recipient = User(email="known@example.com", full_name="Known User")
+    recipient = User(email=unique_email("known"), full_name="Known User")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)
@@ -260,7 +261,7 @@ def test_transfer_invite_auto_binds_existing_user_by_email(db_session: Session) 
         db_session,
         ticket_id=ticket.id,
         sender_user_id=owner.id,
-        recipient_email="KNOWN@example.com",
+        recipient_email=unique_email("KNOWN"),
     )
     assert invite.recipient_user_id == recipient.id
 
@@ -268,7 +269,7 @@ def test_transfer_invite_auto_binds_existing_user_by_email(db_session: Session) 
 def test_direct_transfer_compatibility(db_session: Session) -> None:
     order, owner, _ = _seed_order(db_session, suffix="05")
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
-    recipient = User(email="direct@example.com", full_name="Direct Recipient")
+    recipient = User(email=unique_email("direct"), full_name="Direct Recipient")
     db_session.add(recipient)
     db_session.commit()
     db_session.refresh(recipient)
