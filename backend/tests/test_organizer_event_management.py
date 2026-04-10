@@ -48,7 +48,14 @@ def _seed_user(db: Session, email: str, name: str) -> User:
     return user
 
 
-def _seed_event(db: Session, organizer_user: User, *, title: str, status: EventStatus = EventStatus.DRAFT) -> Event:
+def _seed_event(
+    db: Session,
+    organizer_user: User,
+    *,
+    title: str,
+    status: EventStatus = EventStatus.DRAFT,
+    approval_status: EventApprovalStatus = EventApprovalStatus.APPROVED,
+) -> Event:
     organizer = OrganizerProfile(user_id=organizer_user.id, business_name=organizer_user.full_name, display_name=organizer_user.full_name)
     db.add(organizer)
     db.flush()
@@ -65,7 +72,7 @@ def _seed_event(db: Session, organizer_user: User, *, title: str, status: EventS
         timezone="America/Guyana",
         status=status,
         visibility=EventVisibility.PUBLIC,
-        approval_status=EventApprovalStatus.APPROVED,
+        approval_status=approval_status,
         custom_venue_name=venue.name,
     )
     db.add(event)
@@ -112,6 +119,8 @@ def test_publish_unpublish_and_validation(client: TestClient, db_session: Sessio
     ok = client.post(f"/events/organizer/events/{event.id}/publish", headers={"x-user-id": str(owner.id)})
     assert ok.status_code == 200
     assert ok.json()["status"] == "published"
+    assert ok.json()["approval_status"] == "approved"
+    assert ok.json()["is_publicly_visible"] is True
 
     unpub = client.post(f"/events/organizer/events/{event.id}/unpublish", headers={"x-user-id": str(owner.id)})
     assert unpub.status_code == 200
@@ -234,5 +243,89 @@ def test_dashboard_metrics_defaults(client: TestClient, db_session: Session) -> 
     assert listed.status_code == 200
     row = listed.json()[0]
     assert row["status"] == "published"
+    assert row["approval_status"] == "approved"
+    assert row["is_publicly_visible"] is True
     assert row["sold_count"] == 3
     assert row["gross_revenue"] == 3000.0
+
+
+def test_discovery_requires_published_and_approved(client: TestClient, db_session: Session) -> None:
+    owner = _seed_user(db_session, "discover-owner@example.com", "Discover Owner")
+    approved = _seed_event(
+        db_session,
+        owner,
+        title="Approved Discovery Event",
+        status=EventStatus.PUBLISHED,
+        approval_status=EventApprovalStatus.APPROVED,
+    )
+    pending = _seed_event(
+        db_session,
+        owner,
+        title="Pending Discovery Event",
+        status=EventStatus.PUBLISHED,
+        approval_status=EventApprovalStatus.PENDING,
+    )
+    approved.published_at = datetime.now(UTC)
+    pending.published_at = datetime.now(UTC)
+    db_session.flush()
+
+    response = client.get("/events/discover", headers={"x-user-id": str(owner.id)})
+    assert response.status_code == 200
+    ids = [row["id"] for row in response.json()]
+    assert approved.id in ids
+    assert pending.id not in ids
+
+
+def test_organizer_event_status_variants_are_explicit(client: TestClient, db_session: Session) -> None:
+    owner = _seed_user(db_session, "states-owner@example.com", "States Owner")
+    draft = _seed_event(db_session, owner, title="Draft State", status=EventStatus.DRAFT, approval_status=EventApprovalStatus.PENDING)
+    published_pending = _seed_event(
+        db_session,
+        owner,
+        title="Published Pending State",
+        status=EventStatus.PUBLISHED,
+        approval_status=EventApprovalStatus.PENDING,
+    )
+    published_pending.published_at = datetime.now(UTC)
+    published_approved = _seed_event(
+        db_session,
+        owner,
+        title="Published Approved State",
+        status=EventStatus.PUBLISHED,
+        approval_status=EventApprovalStatus.APPROVED,
+    )
+    published_approved.published_at = datetime.now(UTC)
+    cancelled = _seed_event(db_session, owner, title="Cancelled State", status=EventStatus.CANCELLED, approval_status=EventApprovalStatus.APPROVED)
+    db_session.flush()
+
+    listed = client.get("/events/organizer/events", headers={"x-user-id": str(owner.id)})
+    assert listed.status_code == 200
+    by_title = {row["title"]: row for row in listed.json()}
+
+    assert by_title[draft.title]["status"] == "draft"
+    assert by_title[draft.title]["approval_status"] == "pending"
+    assert by_title[draft.title]["is_publicly_visible"] is False
+
+    assert by_title[published_pending.title]["status"] == "published"
+    assert by_title[published_pending.title]["approval_status"] == "pending"
+    assert by_title[published_pending.title]["visibility_state"] == "pending_review"
+    assert by_title[published_pending.title]["is_publicly_visible"] is False
+
+    assert by_title[published_approved.title]["status"] == "published"
+    assert by_title[published_approved.title]["approval_status"] == "approved"
+    assert by_title[published_approved.title]["visibility_state"] is None
+    assert by_title[published_approved.title]["is_publicly_visible"] is True
+
+    assert by_title[cancelled.title]["status"] == "cancelled"
+    assert by_title[cancelled.title]["approval_status"] == "approved"
+    assert by_title[cancelled.title]["is_publicly_visible"] is False
+
+    detail = client.get(
+        f"/events/organizer/events/{published_pending.id}",
+        headers={"x-user-id": str(owner.id)},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "published"
+    assert detail.json()["approval_status"] == "pending"
+    assert detail.json()["visibility_state"] == "pending_review"
+    assert detail.json()["is_publicly_visible"] is False

@@ -75,6 +75,23 @@ from app.services.reporting import get_event_reporting_summary, get_event_tier_s
 router = APIRouter(prefix="/events", tags=["events"])
 
 
+def _is_event_publicly_visible(event: Event) -> bool:
+    return bool(
+        event.status == EventStatus.PUBLISHED
+        and event.approval_status == EventApprovalStatus.APPROVED
+        and event.visibility == EventVisibility.PUBLIC
+        and event.published_at is not None
+        and event.cancelled_at is None
+        and event.status != EventStatus.CANCELLED
+    )
+
+
+def _get_visibility_state(event: Event) -> str | None:
+    if event.status == EventStatus.PUBLISHED and event.approval_status != EventApprovalStatus.APPROVED:
+        return "pending_review"
+    return None
+
+
 def _discoverable_event_query() -> select:
     return (
         select(Event)
@@ -84,6 +101,7 @@ def _discoverable_event_query() -> select:
             Event.visibility == EventVisibility.PUBLIC,
             Event.approval_status == EventApprovalStatus.APPROVED,
             Event.published_at.is_not(None),
+            Event.cancelled_at.is_(None),
         )
     )
 
@@ -428,6 +446,9 @@ def _to_organizer_event_detail(event: Event) -> OrganizerEventDetailResponse:
         timezone=event.timezone,
         visibility=event.visibility.value,
         status=event.status.value,
+        approval_status=event.approval_status.value,
+        is_publicly_visible=_is_event_publicly_visible(event),
+        visibility_state=_get_visibility_state(event),
         custom_venue_name=event.custom_venue_name,
         custom_address_text=event.custom_address_text,
         ticket_tiers=[
@@ -501,6 +522,9 @@ def get_organizer_events(
                 start_at=event.start_at,
                 end_at=event.end_at,
                 status=event.status.value,
+                approval_status=event.approval_status.value,
+                is_publicly_visible=_is_event_publicly_visible(event),
+                visibility_state=_get_visibility_state(event),
                 total_ticket_types=len(tiers),
                 total_quantity=sum(int(t.quantity_total) for t in tiers),
                 sold_count=metrics.sold_count,

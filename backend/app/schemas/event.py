@@ -282,6 +282,9 @@ class OrganizerEventDashboardItemResponse(BaseModel):
     start_at: datetime
     end_at: datetime
     status: str
+    approval_status: str
+    is_publicly_visible: bool
+    visibility_state: str | None = None
     total_ticket_types: int
     total_quantity: int
     sold_count: int
@@ -305,6 +308,9 @@ class OrganizerEventDetailResponse(BaseModel):
     timezone: str
     visibility: str
     status: str
+    approval_status: str
+    is_publicly_visible: bool
+    visibility_state: str | None = None
     custom_venue_name: str | None
     custom_address_text: str | None
     ticket_tiers: list[EventCreateTicketTierResponse]
