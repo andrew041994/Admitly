@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import Enum
 
 from sqlalchemy import select
@@ -10,7 +11,6 @@ from app.models.event import Event
 from app.models.event_staff import EventStaff
 from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
-from app.services.ticket_holds import get_guyana_now
 
 
 class EventPermissionAction(str, Enum):
@@ -37,6 +37,12 @@ class EventPermissionNotFoundError(EventPermissionError):
     """Raised when event does not exist."""
 
 
+def _to_utc_aware(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 def _is_event_owner(db: Session, *, event: Event, user_id: int) -> bool:
     organizer_user_id = db.execute(
         select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
@@ -45,27 +51,44 @@ def _is_event_owner(db: Session, *, event: Event, user_id: int) -> bool:
 
 
 def _get_staff_role(db: Session, *, event_id: int, user_id: int) -> EventStaffRole | None:
-    now = get_guyana_now()
-    return db.execute(
-        select(EventStaff.role)
+    now = datetime.now(UTC)
+    staff = db.execute(
+        select(EventStaff)
         .join(Event, Event.id == EventStaff.event_id)
         .where(
             EventStaff.event_id == event_id,
             EventStaff.user_id == user_id,
             EventStaff.is_active.is_(True),
-            Event.end_at > now,
             Event.status != EventStatus.CANCELLED,
-            Event.cancelled_at.is_(None),
         )
     ).scalar_one_or_none()
+
+    if staff is None:
+        return None
+    if staff.event.cancelled_at is not None:
+        return None
+    if _to_utc_aware(staff.event.end_at) <= now:
+        return None
+    return staff.role
 
 
 def _role_permissions(role: EventStaffRole) -> set[EventPermissionAction]:
     if role == EventStaffRole.OWNER:
         return set(EventPermissionAction)
-    if role in {EventStaffRole.MANAGER, EventStaffRole.CHECKIN, EventStaffRole.SUPPORT}:
+    if role == EventStaffRole.MANAGER:
+        return {
+            EventPermissionAction.MANAGE_REFUNDS,
+            EventPermissionAction.CHECKIN_TICKETS,
+            EventPermissionAction.VIEW_CHECKIN_SUMMARY,
+            EventPermissionAction.CHECKIN_OVERRIDE,
+        }
+    if role == EventStaffRole.CHECKIN:
         return {
             EventPermissionAction.CHECKIN_TICKETS,
+            EventPermissionAction.VIEW_CHECKIN_SUMMARY,
+        }
+    if role == EventStaffRole.SUPPORT:
+        return {
             EventPermissionAction.VIEW_CHECKIN_SUMMARY,
         }
     return set()

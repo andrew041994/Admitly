@@ -199,6 +199,7 @@ def create_pending_order_from_holds(
                     ticket_tier_id=hold.ticket_tier_id,
                     quantity=hold.quantity,
                     unit_price=tier.price_amount,
+                    currency=tier.currency,
                 )
             )
             hold.order_id = order.id
@@ -373,6 +374,7 @@ def create_comp_order_for_user(
                 ticket_tier_id=tier.id,
                 quantity=tier_quantities[tier.id],
                 unit_price=tier.price_amount,
+                currency=tier.currency,
             )
         )
     db.flush()

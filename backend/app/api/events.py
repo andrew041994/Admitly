@@ -76,6 +76,11 @@ from app.services.reporting import get_event_reporting_summary, get_event_tier_s
 
 router = APIRouter(prefix="/events", tags=["events"])
 
+def _to_utc_aware(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
 
 def _is_event_publicly_visible(event: Event) -> bool:
     return bool(
@@ -213,7 +218,7 @@ def _is_effective_staff_active(staff: EventStaff, *, event: Event | None = None)
     now = datetime.now(UTC)
     return bool(
         staff.is_active
-        and source_event.end_at > now
+        and _to_utc_aware(source_event.end_at) > now
         and source_event.status != EventStatus.CANCELLED
         and source_event.cancelled_at is None
     )
@@ -484,7 +489,7 @@ def _list_events_for_organizer(db: Session, *, user_id: int, active_only: bool) 
     if active_only:
         query = query.where(
             Event.status != EventStatus.CANCELLED,
-            Event.end_at > now,
+            Event.end_at > _to_utc_aware(now),
         )
     return (
         db.execute(query.order_by(Event.start_at.asc()))
@@ -647,7 +652,7 @@ def get_event_dashboard(
         select(func.count(Order.id)).where(Order.event_id == event_id, Order.refund_status == "refunded")
     ).scalar_one()
     transfer_count = db.execute(select(func.coalesce(func.sum(Ticket.transfer_count), 0)).where(Ticket.event_id == event_id)).scalar_one()
-    event_operational = event.end_at > datetime.now(UTC) and event.status != EventStatus.CANCELLED and event.cancelled_at is None
+    event_operational = _to_utc_aware(event.end_at) > datetime.now(UTC) and event.status != EventStatus.CANCELLED and event.cancelled_at is None
     active_staff = (
         db.execute(
             select(func.count(EventStaff.id)).where(

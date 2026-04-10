@@ -1,38 +1,112 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_organizer_recovery_phase.py b/backend/tests/test_organizer_recovery_phase.py
-index 069d9400bd645b46e66a11d27350cac5d6c82b18..f278e6e6778779f07844a07af6a857da0a5ca9ef 100644
---- a/backend/tests/test_organizer_recovery_phase.py
-+++ b/backend/tests/test_organizer_recovery_phase.py
-@@ -1,26 +1,28 @@
--from datetime import UTC, datetime, timedelta
-+from datetime import datetime, timedelta, timezone
-+
-+UTC = timezone.utc
- import os
+diff --git a/backend/app/services/orders.py b/backend/app/services/orders.py
+index 656c695a07369f91f14ffb1528edd0e121f18db5..ff490cca7a19eb14d3212252aac1aa74a034777e 100644
+--- a/backend/app/services/orders.py
++++ b/backend/app/services/orders.py
+@@ -177,50 +177,51 @@ def create_pending_order_from_holds(
+             subtotal_amount=pricing.subtotal_amount,
+             discount_amount=pricing.discount_amount,
+             total_amount=pricing.total_amount,
+             currency=next(iter(currencies)),
+             promo_code_id=pricing.promo_code_id,
+             promo_code_text=pricing.promo_code_text,
+             discount_type=pricing.discount_type,
+             discount_value_snapshot=pricing.discount_value_snapshot,
+             pricing_source=pricing.pricing_source,
+             is_comp=False,
+         )
+         db.add(order)
+         db.flush()
+         if not order.reference_code:
+             order.reference_code = format_order_reference(order.id)
+             db.flush()
  
- os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+         for hold in holds:
+             tier = tiers_by_id[hold.ticket_tier_id]
+             db.add(
+                 OrderItem(
+                     order_id=order.id,
+                     ticket_tier_id=hold.ticket_tier_id,
+                     quantity=hold.quantity,
+                     unit_price=tier.price_amount,
++                    currency=tier.currency,
+                 )
+             )
+             hold.order_id = order.id
  
- import pytest
- from fastapi.testclient import TestClient
- from sqlalchemy import create_engine
- from sqlalchemy.orm import Session, sessionmaker
+         db.flush()
  
- from app.db.base import Base
- from app.db.session import get_db
- from app.main import app
- from app.models.enums import EventApprovalStatus, EventStaffRole, EventStatus, EventVisibility, OrderStatus
- from app.models.event import Event
- from app.models.event_staff import EventStaff
- from app.models.order import Order
- from app.models.order_item import OrderItem
- from app.models.organizer_profile import OrganizerProfile
- from app.models.ticket_tier import TicketTier
- from app.models.user import User
- from app.models.venue import Venue
- from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
+     return (
+         db.execute(
+             select(Order)
+             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds))
+             .where(Order.id == order.id)
+         )
+         .unique()
+         .scalar_one()
+     )
  
  
- @pytest.fixture
+ def get_order_for_user(db: Session, *, order_id: int, user_id: int) -> Order | None:
+     return (
+         db.execute(
+             select(Order)
+             .options(joinedload(Order.order_items), joinedload(Order.ticket_holds), joinedload(Order.tickets))
+             .where(Order.id == order_id, Order.user_id == user_id)
+         )
+         .unique()
+@@ -351,50 +352,51 @@ def create_comp_order_for_user(
+         status=OrderStatus.COMPLETED,
+         subtotal_amount=pricing.subtotal_amount,
+         discount_amount=pricing.discount_amount,
+         total_amount=pricing.total_amount,
+         currency=tiers[0].currency,
+         payment_provider=None,
+         payment_method=None,
+         payment_verification_status="verified",
+         paid_at=get_guyana_now(),
+         reconciliation_status=ReconciliationStatus.UNRECONCILED,
+         payout_status=PayoutStatus.NOT_READY,
+         pricing_source=pricing.pricing_source,
+         comp_reason=reason.strip() if reason else None,
+         is_comp=True,
+     )
+     db.add(order)
+     db.flush()
+ 
+     for tier in tiers:
+         db.add(
+             OrderItem(
+                 order_id=order.id,
+                 ticket_tier_id=tier.id,
+                 quantity=tier_quantities[tier.id],
+                 unit_price=tier.price_amount,
++                currency=tier.currency,
+             )
+         )
+     db.flush()
+     issue_tickets_for_completed_order(db, order)
+     db.flush()
+     return get_order_with_holds(db, order_id=order.id) or order
+ 
+ 
+ def cancel_pending_order(
+     db: Session,
+     *,
+     order_id: int,
+     actor_user_id: int,
+     reason: str | None = None,
+ ) -> Order:
+     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+     with tx_ctx:
+         order = (
+             db.execute(
+                 select(Order)
+                 .options(joinedload(Order.ticket_holds))
+                 .where(Order.id == order_id)
+                 .with_for_update()
+             )
+             .unique()
  
 EOF
 )
