@@ -80,19 +80,18 @@ def _role_permissions(role: EventStaffRole) -> set[EventPermissionAction]:
         return set(EventPermissionAction)
     if role == EventStaffRole.MANAGER:
         return {
-            EventPermissionAction.MANAGE_REFUNDS,
+            EventPermissionAction.VIEW_EVENT_STAFF,
+            EventPermissionAction.VIEW_ORDERS,
             EventPermissionAction.VIEW_CHECKIN_SUMMARY,
+            EventPermissionAction.MANAGE_REFUNDS,
             EventPermissionAction.CHECKIN_OVERRIDE,
         }
     if role == EventStaffRole.CHECKIN:
         return {
             EventPermissionAction.CHECK_IN,
-            EventPermissionAction.VIEW_CHECKIN_SUMMARY,
         }
     if role == EventStaffRole.SUPPORT:
-        return {
-            EventPermissionAction.VIEW_CHECKIN_SUMMARY,
-        }
+        return set()
     return set()
 
 
