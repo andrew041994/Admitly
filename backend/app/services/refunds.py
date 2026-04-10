@@ -134,14 +134,13 @@ def request_refund(
     note: str | None,
 ) -> Refund:
     order = (
-        db.execute(select(Order).options(joinedload(Order.event)).where(Order.id == order_id).with_for_update())
-        .unique()
-        .scalar_one_or_none()
+        db.execute(select(Order).where(Order.id == order_id).with_for_update()).scalar_one_or_none()
     )
     if order is None:
         raise RefundNotFoundError("Order not found.")
     if order.user_id != user_id:
         raise RefundAuthorizationError("Order does not belong to the authenticated user.")
+    db.refresh(order, attribute_names=["event"])
 
     requested_amount = amount if amount is not None else get_order_remaining_refundable(db, order=order)
     validate_refund_request(db, order=order, requested_amount=requested_amount, reason=reason)
@@ -246,16 +245,13 @@ def process_refund_for_order(
     _assert_admin(db, actor_user_id=actor_user_id)
     order = (
         db.execute(
-            select(Order)
-            .options(joinedload(Order.event), joinedload(Order.tickets))
-            .where(Order.id == order_id)
-            .with_for_update()
+            select(Order).where(Order.id == order_id).with_for_update()
         )
-        .unique()
         .scalar_one_or_none()
     )
     if order is None:
         raise RefundNotFoundError("Order not found.")
+    db.refresh(order, attribute_names=["event", "tickets"])
 
     requested_amount = amount if amount is not None else get_order_remaining_refundable(db, order=order)
     validate_refund_request(
@@ -302,14 +298,11 @@ def approve_refund(
 
     order = (
         db.execute(
-            select(Order)
-            .options(joinedload(Order.event), joinedload(Order.tickets))
-            .where(Order.id == refund.order_id)
-            .with_for_update()
+            select(Order).where(Order.id == refund.order_id).with_for_update()
         )
-        .unique()
         .scalar_one()
     )
+    db.refresh(order, attribute_names=["event", "tickets"])
 
     if amount is not None:
         validate_refund_request(db, order=order, requested_amount=amount, reason=refund.reason, admin_override=True)
@@ -416,14 +409,11 @@ def resolve_dispute(
         db.flush()
         order = (
             db.execute(
-                select(Order)
-                .options(joinedload(Order.event), joinedload(Order.tickets))
-                .where(Order.id == dispute.order_id)
-                .with_for_update()
+                select(Order).where(Order.id == dispute.order_id).with_for_update()
             )
-            .unique()
             .scalar_one()
         )
+        db.refresh(order, attribute_names=["event", "tickets"])
         _process_refund_locked(db, refund=refund, order=order, actor_user_id=actor_user_id, admin_notes=admin_notes)
 
     db.flush()

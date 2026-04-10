@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.ticket_holds import get_current_user_id
@@ -191,13 +192,19 @@ def _ensure_organizer_profile(db: Session, *, user_id: int) -> OrganizerProfile:
     profile = db.execute(select(OrganizerProfile).where(OrganizerProfile.user_id == user_id)).scalar_one_or_none()
     if profile is not None:
         return profile
-    profile = OrganizerProfile(
-        user_id=user_id,
-        business_name="",
-        display_name="",
-    )
-    db.add(profile)
-    db.flush()
+    with db.begin_nested():
+        profile = OrganizerProfile(
+            user_id=user_id,
+            business_name="",
+            display_name="",
+        )
+        db.add(profile)
+        try:
+            db.flush()
+        except IntegrityError:
+            profile = db.execute(select(OrganizerProfile).where(OrganizerProfile.user_id == user_id)).scalar_one_or_none()
+            if profile is None:
+                raise
     return profile
 
 

@@ -315,16 +315,13 @@ def cancel_event(
 
         pending_orders = (
             db.execute(
-                select(Order)
-                .options(joinedload(Order.ticket_holds))
-                .where(Order.event_id == event.id, Order.status == OrderStatus.PENDING)
-                .with_for_update()
+                select(Order).where(Order.event_id == event.id, Order.status == OrderStatus.PENDING).with_for_update()
             )
-            .unique()
             .scalars()
             .all()
         )
         for order in pending_orders:
+            db.refresh(order, attribute_names=["ticket_holds"])
             order.status = OrderStatus.CANCELLED
             order.cancelled_at = now
             order.cancelled_by_user_id = actor_user_id

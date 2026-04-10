@@ -394,12 +394,8 @@ def cancel_pending_order(
     with tx_ctx:
         order = (
             db.execute(
-                select(Order)
-                .options(joinedload(Order.ticket_holds))
-                .where(Order.id == order_id)
-                .with_for_update()
+                select(Order).where(Order.id == order_id).with_for_update()
             )
-            .unique()
             .scalar_one_or_none()
         )
         if order is None:
@@ -410,6 +406,7 @@ def cancel_pending_order(
             raise OrderCancellationError("Order is already cancelled.")
         if order.status not in {OrderStatus.PENDING, OrderStatus.AWAITING_PAYMENT, OrderStatus.PAYMENT_SUBMITTED, OrderStatus.FAILED}:
             raise OrderCancellationError("Only pending orders can be cancelled.")
+        db.refresh(order, attribute_names=["ticket_holds"])
 
         now = get_guyana_now()
         order.status = OrderStatus.CANCELLED
@@ -433,12 +430,8 @@ def refund_completed_order(
     with tx_ctx:
         order = (
             db.execute(
-                select(Order)
-                .options(joinedload(Order.tickets), joinedload(Order.event), joinedload(Order.order_items))
-                .where(Order.id == order_id)
-                .with_for_update()
+                select(Order).where(Order.id == order_id).with_for_update()
             )
-            .unique()
             .scalar_one_or_none()
         )
         if order is None:
@@ -456,6 +449,7 @@ def refund_completed_order(
             raise OrderRefundError("Only verified-paid orders can be refunded.")
         if order.refund_status == "refunded" or order.refunded_at is not None:
             raise OrderRefundError("Order has already been refunded.")
+        db.refresh(order, attribute_names=["tickets", "event", "order_items"])
         if any(ticket.status == TicketStatus.CHECKED_IN for ticket in order.tickets):
             raise OrderRefundError("Orders with checked-in tickets cannot be fully refunded.")
 

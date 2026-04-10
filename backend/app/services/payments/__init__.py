@@ -404,16 +404,13 @@ def handle_mmg_callback(db: Session, *, payload: dict) -> OrderPaymentSnapshot:
     with tx_ctx:
         order = (
             db.execute(
-                select(Order)
-                .options(joinedload(Order.ticket_holds), joinedload(Order.order_items), joinedload(Order.tickets))
-                .where(Order.payment_reference == parsed.payment_reference)
-                .with_for_update()
+                select(Order).where(Order.payment_reference == parsed.payment_reference).with_for_update()
             )
-            .unique()
             .scalar_one_or_none()
         )
         if order is None:
             raise PaymentError("Order not found for payment reference.")
+        db.refresh(order, attribute_names=["ticket_holds", "order_items", "tickets"])
 
         if parsed.paid:
             if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":

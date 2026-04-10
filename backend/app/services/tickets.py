@@ -538,16 +538,13 @@ def create_ticket_transfer_invite(
     with tx_ctx:
         ticket = (
             db.execute(
-                select(Ticket)
-                .options(joinedload(Ticket.transfer_invites))
-                .where(Ticket.id == ticket_id)
-                .with_for_update()
+                select(Ticket).where(Ticket.id == ticket_id).with_for_update()
             )
-            .unique()
             .scalar_one_or_none()
         )
         if ticket is None:
             raise TicketNotFoundError("Ticket not found.")
+        db.refresh(ticket, attribute_names=["transfer_invites", "owner"])
 
         validate_ticket_transfer_invitable(ticket, current_user_id=sender_user_id)
         if recipient_user_id is not None:
@@ -640,16 +637,13 @@ def accept_ticket_transfer_invite(
     with tx_ctx:
         invite = (
             db.execute(
-                select(TicketTransferInvite)
-                .options(joinedload(TicketTransferInvite.ticket), joinedload(TicketTransferInvite.sender))
-                .where(TicketTransferInvite.invite_token == invite_token)
-                .with_for_update()
+                select(TicketTransferInvite).where(TicketTransferInvite.invite_token == invite_token).with_for_update()
             )
-            .unique()
             .scalar_one_or_none()
         )
         if invite is None:
             raise TicketNotFoundError("Transfer invite not found.")
+        db.refresh(invite, attribute_names=["ticket", "sender"])
         if (
             invite.status == TransferInviteStatus.ACCEPTED
             and invite.recipient_user_id == accepting_user_id
@@ -714,16 +708,13 @@ def revoke_ticket_transfer_invite(
     with tx_ctx:
         invite = (
             db.execute(
-                select(TicketTransferInvite)
-                .options(joinedload(TicketTransferInvite.ticket))
-                .where(TicketTransferInvite.invite_token == invite_token)
-                .with_for_update()
+                select(TicketTransferInvite).where(TicketTransferInvite.invite_token == invite_token).with_for_update()
             )
-            .unique()
             .scalar_one_or_none()
         )
         if invite is None:
             raise TicketNotFoundError("Transfer invite not found.")
+        db.refresh(invite, attribute_names=["ticket"])
         if invite.status != TransferInviteStatus.PENDING:
             raise TicketTransferError("Only pending invites can be revoked.")
         if actor_user_id not in {invite.sender_user_id, invite.ticket.owner_user_id}:
@@ -1095,11 +1086,9 @@ def check_in_ticket(
         ticket = (
             db.execute(
                 select(Ticket)
-                .options(joinedload(Ticket.event), joinedload(Ticket.order))
                 .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
                 .with_for_update()
             )
-            .unique()
             .scalars()
             .first()
         )
@@ -1123,6 +1112,7 @@ def check_in_ticket(
             )
             db.flush()
             return result
+        db.refresh(ticket, attribute_names=["event", "order"])
         result = _evaluate_ticket_for_entry(ticket=ticket, event_id=event_id)
         if not result.valid:
             _record_check_in_attempt(
@@ -1221,11 +1211,9 @@ def override_ticket_check_in(
         ticket = (
             db.execute(
                 select(Ticket)
-                .options(joinedload(Ticket.event), joinedload(Ticket.order))
                 .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
                 .with_for_update()
             )
-            .unique()
             .scalars()
             .first()
         )
@@ -1243,6 +1231,7 @@ def override_ticket_check_in(
             )
             db.flush()
             raise TicketNotFoundError("Ticket not found.")
+        db.refresh(ticket, attribute_names=["event", "order"])
         if ticket.event_id != event_id:
             raise TicketCrossEventError("Ticket does not belong to this event.")
 
@@ -1400,12 +1389,8 @@ def scan_ticket(
     with tx_ctx:
         ticket = (
             db.execute(
-                select(Ticket)
-                .options(joinedload(Ticket.event), joinedload(Ticket.order))
-                .where(Ticket.id == ticket_id)
-                .with_for_update()
+                select(Ticket).where(Ticket.id == ticket_id).with_for_update()
             )
-            .unique()
             .scalars()
             .first()
         )
@@ -1419,6 +1404,7 @@ def scan_ticket(
             )
             db.flush()
             return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid ticket.")
+        db.refresh(ticket, attribute_names=["event", "order"])
 
         user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
         if user is None or not can_scan_event(db, user=user, event=ticket.event):
