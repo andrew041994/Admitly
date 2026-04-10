@@ -529,7 +529,8 @@ def create_ticket_transfer_invite(
         db.execute(
             select(Ticket).where(Ticket.id == ticket_id).with_for_update()
         )
-        .scalar_one_or_none()
+        .scalars()
+        .first()
     )
     if ticket is None:
         raise TicketNotFoundError("Ticket not found.")
@@ -537,7 +538,7 @@ def create_ticket_transfer_invite(
 
     validate_ticket_transfer_invitable(ticket, current_user_id=sender_user_id)
     if recipient_user_id is not None:
-        recipient = db.execute(select(User).where(User.id == recipient_user_id)).scalar_one_or_none()
+        recipient = db.execute(select(User).where(User.id == recipient_user_id)).scalars().first()
         if recipient is None:
             raise TicketTransferError("Recipient user not found.")
         if recipient_user_id == sender_user_id:
@@ -546,11 +547,11 @@ def create_ticket_transfer_invite(
         if normalized_email is not None:
             matched_user = db.execute(
                 select(User).where(func.lower(User.email) == normalized_email)
-            ).scalar_one_or_none()
+            ).scalars().first()
             if matched_user is not None:
                 recipient_user_id = matched_user.id
         if recipient_user_id is None and normalized_phone is not None:
-            matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalar_one_or_none()
+            matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalars().first()
             if matched_user is not None:
                 recipient_user_id = matched_user.id
 
@@ -660,24 +661,24 @@ def accept_ticket_transfer_invite(
         raise TicketTransferError("Ticket ownership no longer matches invite sender.")
     validate_ticket_transferable(ticket, current_user_id=invite.sender_user_id)
 
-    if invite.recipient_user_id is not None and invite.recipient_user_id != accepting_user_id:
-        raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
-    email_match = (
-        invite.recipient_email is None
-        or normalize_email(accepting_user.email or "") == normalize_email(invite.recipient_email)
-    )
-    phone_match = (
-        invite.recipient_phone is None
-        or _normalize_phone(accepting_user.phone) == invite.recipient_phone
-    )
-    if not (email_match and phone_match):
-        if invite.recipient_email and invite.recipient_phone:
-            raise TicketAuthorizationError("This transfer invite is assigned to a different recipient.")
-        if invite.recipient_email:
-            raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
-        if invite.recipient_phone:
-            raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
-        raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
+    if invite.recipient_user_id is not None:
+        if invite.recipient_user_id != accepting_user_id:
+            raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
+    else:
+        user_email = normalize_email(accepting_user.email) if accepting_user.email else None
+        invite_email = normalize_email(invite.recipient_email) if invite.recipient_email else None
+        user_phone = _normalize_phone(accepting_user.phone)
+        invite_phone = invite.recipient_phone
+
+        if invite_email is not None and invite_phone is not None:
+            if not (user_email == invite_email and user_phone == invite_phone):
+                raise TicketAuthorizationError("This transfer invite is assigned to a different recipient.")
+        elif invite_email is not None:
+            if user_email != invite_email:
+                raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
+        elif invite_phone is not None:
+            if user_phone != invite_phone:
+                raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
 
     ticket.owner_user_id = accepting_user_id
     ticket.user_id = accepting_user_id
@@ -1341,15 +1342,18 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_INVALID:
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
-        existing = _find_ticket_for_checkin_conflict(
-            db,
-            event_id=event_id,
-            qr_payload=qr_payload,
-            ticket_code=ticket_code,
-        )
+        existing = db.execute(
+            select(Ticket).where(
+                Ticket.event_id == event_id,
+                or_(
+                    Ticket.qr_payload == qr_payload,
+                    Ticket.ticket_code == ticket_code,
+                ),
+            )
+        ).scalars().first()
         if existing is not None:
             raise TicketCheckInConflictError("Already processed")
-        raise TicketNotFoundError(result.message)
+        raise TicketNotFoundError("Ticket not found.")
     if result.status == CHECK_IN_STATUS_WRONG_EVENT:
         raise TicketCrossEventError(result.message)
     if not result.valid:
@@ -1357,42 +1361,6 @@ def check_in_ticket_for_event(
     if result.ticket is None:
         raise TicketNotFoundError("Ticket not found.")
     return result.ticket
-
-
-def _find_ticket_for_checkin_conflict(
-    db: Session,
-    *,
-    event_id: int,
-    qr_payload: str | None,
-    ticket_code: str | None,
-) -> Ticket | None:
-    lookup_values = {
-        value
-        for value in (
-            extract_ticket_lookup_value(qr_payload),
-            extract_ticket_lookup_value(ticket_code),
-        )
-        if value
-    }
-    for lookup in lookup_values:
-        ticket = (
-            db.execute(
-                select(Ticket).where(
-                    Ticket.event_id == event_id,
-                    or_(
-                        Ticket.ticket_code == lookup,
-                        Ticket.qr_payload == lookup,
-                        Ticket.qr_token == lookup,
-                        Ticket.display_code == lookup,
-                    ),
-                )
-            )
-            .scalars()
-            .first()
-        )
-        if ticket is not None:
-            return ticket
-    return None
 
 
 def scan_ticket(
