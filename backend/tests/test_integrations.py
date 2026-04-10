@@ -1,7 +1,9 @@
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 from app.models import Event, Order, OrganizerProfile, User, Venue
 from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
 from app.services.integrations import (
@@ -26,6 +28,9 @@ from app.services.integrations import (
 
 
 def _seed_admin(db: Session, *, email: str = "admin@x.com") -> User:
+    existing = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if existing:
+        return existing
     admin = User(email=email, full_name="Admin", is_admin=True)
     db.add(admin)
     db.commit()
@@ -89,7 +94,7 @@ def test_webhook_signature_contract() -> None:
     assert verify_webhook_signature(secret=secret, timestamp=timestamp, body=body, signature_header=f"v1={digest}")
 
 
-def test_webhook_delivery_retry_and_success_audit() -> None:
+def test_webhook_delivery_retry_and_success_audit(db_session: Session) -> None:
     db = db_session
     admin = _seed_admin(db)
     create_webhook_endpoint(
@@ -126,7 +131,7 @@ def test_webhook_delivery_retry_and_success_audit() -> None:
     assert any(item.delivery.delivery_kind == "automatic_retry" for item in final)
 
 
-def test_manual_redelivery_creates_new_attempt_with_same_event_id() -> None:
+def test_manual_redelivery_creates_new_attempt_with_same_event_id(db_session: Session) -> None:
     db = db_session
     admin = _seed_admin(db)
     create_webhook_endpoint(
@@ -150,7 +155,7 @@ def test_manual_redelivery_creates_new_attempt_with_same_event_id() -> None:
     assert replay.delivery_kind == DELIVERY_KIND_MANUAL_REDELIVERY
 
 
-def test_manual_redelivery_requires_owner_boundary() -> None:
+def test_manual_redelivery_requires_owner_boundary(db_session: Session) -> None:
     db = db_session
     admin = _seed_admin(db)
     other = _seed_admin(db, email="other@x.com")
@@ -169,7 +174,7 @@ def test_manual_redelivery_requires_owner_boundary() -> None:
     assert denied is None
 
 
-def test_event_schema_stability_for_order_and_refund_examples() -> None:
+def test_event_schema_stability_for_order_and_refund_examples(db_session: Session) -> None:
     db = db_session
     admin = _seed_admin(db)
     order = _seed_order(db, admin=admin)
@@ -187,7 +192,7 @@ def test_event_schema_stability_for_order_and_refund_examples() -> None:
         assert envelope["created_at"]
 
 
-def test_delivery_history_exposes_diagnostics_fields() -> None:
+def test_delivery_history_exposes_diagnostics_fields(db_session: Session) -> None:
     db = db_session
     admin = _seed_admin(db)
     create_webhook_endpoint(

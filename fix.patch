@@ -1,423 +1,222 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
-index 7f9e0de607c8e9ac65595efa708696d4dab919f9..b7557fc5305f595d966cbc640ae260a8274a5aa0 100644
---- a/backend/app/services/tickets.py
-+++ b/backend/app/services/tickets.py
-@@ -516,60 +516,57 @@ def transfer_ticket_to_user(
-             notify_ticket_transferred(db, ticket, from_user_id=from_user_id, to_user_id=to_user_id)
-         return ticket
+diff --git a/backend/tests/test_integrations.py b/backend/tests/test_integrations.py
+index 7d6016f90968d0bfa18350311057f7fe5fb901bc..5ca5aa9a64705373436e6965fb1be0f05579589e 100644
+--- a/backend/tests/test_integrations.py
++++ b/backend/tests/test_integrations.py
+@@ -1,53 +1,58 @@
+ import json
+ from datetime import datetime, timezone
+ from decimal import Decimal
++from pathlib import Path
+ from sqlalchemy.orm import Session
++from sqlalchemy import select
+ from app.models import Event, Order, OrganizerProfile, User, Venue
+ from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
+ from app.services.integrations import (
+     DELIVERY_KIND_MANUAL_REDELIVERY,
+     SCOPE_READ,
+     SCOPE_WRITE,
+     authenticate_api_key,
+     build_order_paid_payload,
+     build_refund_payload,
+     build_transfer_payload,
+     create_api_key,
+     create_webhook_endpoint,
+     dispatch_pending_webhook_deliveries,
+     list_deliveries,
+     publish_webhook_event,
+     redeliver_webhook_delivery,
+     require_scope,
+     revoke_api_key,
+     verify_webhook_signature,
+ )
  
  
- def create_ticket_transfer_invite(
-     db: Session,
-     *,
-     ticket_id: int,
-     sender_user_id: int,
-     recipient_user_id: int | None = None,
-     recipient_email: str | None = None,
-     recipient_phone: str | None = None,
-     recipient_name: str | None = None,
-     expires_at=None,
- ) -> TicketTransferInvite:
-     normalized_email = normalize_email(recipient_email) if _normalize_optional(recipient_email) else None
-     normalized_phone = _normalize_phone(recipient_phone)
-     normalized_name = _normalize_optional(recipient_name)
-     if recipient_user_id is None and normalized_email is None and normalized_phone is None:
-         raise TicketTransferError("Provide recipient_user_id, recipient_email, or recipient_phone.")
  
-     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-     with tx_ctx:
-         ticket = (
-             db.execute(
--                select(Ticket)
--                .options(joinedload(Ticket.transfer_invites))
--                .where(Ticket.id == ticket_id)
--                .with_for_update()
-+                select(Ticket).where(Ticket.id == ticket_id).with_for_update()
-             )
--            .unique()
-             .scalar_one_or_none()
-         )
-         if ticket is None:
-             raise TicketNotFoundError("Ticket not found.")
-+        db.refresh(ticket, attribute_names=["transfer_invites", "owner"])
+ def _seed_admin(db: Session, *, email: str = "admin@x.com") -> User:
++    existing = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
++    if existing:
++        return existing
+     admin = User(email=email, full_name="Admin", is_admin=True)
+     db.add(admin)
+     db.commit()
+     db.refresh(admin)
+     return admin
  
-         validate_ticket_transfer_invitable(ticket, current_user_id=sender_user_id)
-         if recipient_user_id is not None:
-             recipient = db.execute(select(User).where(User.id == recipient_user_id)).scalar_one_or_none()
-             if recipient is None:
-                 raise TicketTransferError("Recipient user not found.")
-             if recipient_user_id == sender_user_id:
-                 raise TicketTransferError("Cannot transfer a ticket to yourself.")
-         elif normalized_email is not None:
-             matched_user = db.execute(select(User).where(User.email == normalized_email)).scalar_one_or_none()
-             if matched_user is not None:
-                 recipient_user_id = matched_user.id
-         elif normalized_phone is not None:
-             matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalar_one_or_none()
-             if matched_user is not None:
-                 recipient_user_id = matched_user.id
  
-         if normalized_email and normalized_email == normalize_email(ticket.owner.email or ""):
-             raise TicketTransferError("Cannot transfer a ticket to yourself.")
-         if normalized_phone and _normalize_phone(ticket.owner.phone) and normalized_phone == _normalize_phone(ticket.owner.phone):
-             raise TicketTransferError("Cannot transfer a ticket to yourself.")
+ def _seed_order(db: Session, *, admin: User) -> Order:
+     organizer = OrganizerProfile(user_id=admin.id, business_name="Biz", display_name="Biz")
+     db.add(organizer)
+     db.flush()
+     venue = Venue(organizer_id=organizer.id, name="Hall")
+     db.add(venue)
+     db.flush()
+     event = Event(
+         organizer_id=organizer.id,
+         venue_id=venue.id,
+         title="Event",
+         slug=f"event-{admin.id}",
+         start_at=datetime(2026, 4, 7, 10, 0, tzinfo=timezone.utc),
+         end_at=datetime(2026, 4, 7, 11, 0, tzinfo=timezone.utc),
+         status=EventStatus.PUBLISHED,
+         visibility=EventVisibility.PUBLIC,
+         approval_status=EventApprovalStatus.APPROVED,
+         timezone="America/Guyana",
+@@ -67,149 +72,149 @@ def test_api_key_create_auth_scope_and_revoke(db_session: Session) -> None:
+     key, raw = create_api_key(db, user_id=admin.id, name="Main", scopes=[SCOPE_READ, SCOPE_WRITE, "bad:scope"])
+     db.commit()
  
-         now = get_guyana_now()
-         invite = TicketTransferInvite(
-             ticket_id=ticket.id,
-@@ -618,60 +615,57 @@ def list_ticket_transfer_invites_for_user(
-     invites = (
-         db.execute(
-             select(TicketTransferInvite)
-             .where(and_(*filters))
-             .order_by(TicketTransferInvite.created_at.desc(), TicketTransferInvite.id.desc())
-         )
-         .scalars()
-         .all()
+     assert "bad:scope" not in key.scopes_csv
+     authed = authenticate_api_key(db, raw_key=raw)
+     assert authed is not None
+     assert authed.last_used_at is not None
+     assert require_scope(authed, SCOPE_READ)
+     assert require_scope(authed, SCOPE_WRITE)
+ 
+     revoke_api_key(db, key_id=key.id, user_id=admin.id)
+     db.commit()
+     assert authenticate_api_key(db, raw_key=raw) is None
+ 
+ 
+ def test_webhook_signature_contract() -> None:
+     timestamp = "1712500000"
+     body = '{"id":"evt_1"}'
+     secret = "whsec_test"
+     import hashlib, hmac
+ 
+     digest = hmac.new(secret.encode(), f"{timestamp}.{body}".encode(), hashlib.sha256).hexdigest()
+     assert verify_webhook_signature(secret=secret, timestamp=timestamp, body=body, signature_header=f"v1={digest}")
+ 
+ 
+-def test_webhook_delivery_retry_and_success_audit() -> None:
++def test_webhook_delivery_retry_and_success_audit(db_session: Session) -> None:
+     db = db_session
+     admin = _seed_admin(db)
+     create_webhook_endpoint(
+         db,
+         user_id=admin.id,
+         name="Main endpoint",
+         target_url="https://example.com/webhook",
+         subscribed_events=["order.paid"],
      )
-     now = get_guyana_now()
-     for invite in invites:
-         _expire_pending_invite_if_needed(db, invite, now=now)
-     return invites
+     publish_webhook_event(db, event_type="order.paid", payload={"order_id": 1})
+     db.commit()
+ 
+     calls = {"count": 0}
+ 
+     def flaky(*, endpoint, body):
+         calls["count"] += 1
+         if calls["count"] == 1:
+             return type("Res", (), {"ok": False, "status_code": 500, "error": "boom"})
+         return type("Res", (), {"ok": True, "status_code": 200, "error": None})
+ 
+     assert dispatch_pending_webhook_deliveries(db, transport=flaky) == 1
+     db.commit()
+     assert dispatch_pending_webhook_deliveries(db, transport=flaky) == 0
+ 
+     deliveries = list_deliveries(db, user_id=admin.id)
+     retry = next(item.delivery for item in deliveries if item.delivery.attempt_number == 2)
+     retry.next_retry_at = retry.requested_at
+     db.commit()
+ 
+     assert dispatch_pending_webhook_deliveries(db, transport=flaky) == 1
+     db.commit()
+     final = list_deliveries(db, user_id=admin.id)
+     assert any(item.delivery.status == "delivered" for item in final)
+     assert any(item.delivery.delivery_kind == "automatic_retry" for item in final)
  
  
- def accept_ticket_transfer_invite(
-     db: Session,
-     *,
-     invite_token: str,
-     accepting_user_id: int,
- ) -> Ticket:
-     tx_ctx = db.begin() if not db.in_transaction() else nullcontext()
-     with tx_ctx:
-         invite = (
-             db.execute(
--                select(TicketTransferInvite)
--                .options(joinedload(TicketTransferInvite.ticket), joinedload(TicketTransferInvite.sender))
--                .where(TicketTransferInvite.invite_token == invite_token)
--                .with_for_update()
-+                select(TicketTransferInvite).where(TicketTransferInvite.invite_token == invite_token).with_for_update()
-             )
--            .unique()
-             .scalar_one_or_none()
-         )
-         if invite is None:
-             raise TicketNotFoundError("Transfer invite not found.")
-+        db.refresh(invite, attribute_names=["ticket", "sender"])
-         if (
-             invite.status == TransferInviteStatus.ACCEPTED
-             and invite.recipient_user_id == accepting_user_id
-             and invite.ticket.owner_user_id == accepting_user_id
-         ):
-             return invite.ticket
-         _expire_pending_invite_if_needed(db, invite)
-         if invite.status != TransferInviteStatus.PENDING:
-             raise TicketTransferError("Transfer invite is no longer pending.")
-         accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
-         if accepting_user is None:
-             raise TicketTransferError("Accepting user not found.")
+-def test_manual_redelivery_creates_new_attempt_with_same_event_id() -> None:
++def test_manual_redelivery_creates_new_attempt_with_same_event_id(db_session: Session) -> None:
+     db = db_session
+     admin = _seed_admin(db)
+     create_webhook_endpoint(
+         db,
+         user_id=admin.id,
+         name="Main endpoint",
+         target_url="https://example.com/webhook",
+         subscribed_events=["order.paid"],
+     )
+     publish_webhook_event(db, event_type="order.paid", payload={"order_id": 1})
+     db.commit()
  
-         now = get_guyana_now()
+     first = list_deliveries(db, user_id=admin.id)[0].delivery
+     replay = redeliver_webhook_delivery(db, delivery_id=first.id, user_id=admin.id)
+     db.commit()
  
-         ticket = (
-             db.execute(select(Ticket).where(Ticket.id == invite.ticket_id).with_for_update())
-             .scalars()
-             .first()
-         )
-         if ticket is None:
-             raise TicketNotFoundError("Ticket not found.")
-         if ticket.owner_user_id != invite.sender_user_id:
-             raise TicketTransferError("Ticket ownership no longer matches invite sender.")
-         validate_ticket_transferable(ticket, current_user_id=invite.sender_user_id)
-@@ -692,60 +686,57 @@ def accept_ticket_transfer_invite(
-         invite.status = TransferInviteStatus.ACCEPTED
-         invite.accepted_at = now
-         invite.accepted_by_user_id = accepting_user_id
-         if invite.recipient_user_id is None:
-             invite.recipient_user_id = accepting_user_id
-         if invite.recipient_name is None:
-             invite.recipient_name = _normalize_optional(accepting_user.full_name)
-         invite.updated_at = now
- 
-         db.flush()
-         notify_ticket_transfer_invite_accepted(invite, ticket)
-         publish_webhook_event(db, event_type="transfer.accepted", payload=build_transfer_payload(invite, ticket))
-         return ticket
+     assert replay is not None
+     assert replay.event_id == first.event_id
+     assert replay.payload_json == first.payload_json
+     assert replay.attempt_number == first.attempt_number + 1
+     assert replay.delivery_kind == DELIVERY_KIND_MANUAL_REDELIVERY
  
  
- def revoke_ticket_transfer_invite(
-     db: Session,
-     *,
-     invite_token: str,
-     actor_user_id: int,
- ) -> TicketTransferInvite:
-     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-     with tx_ctx:
-         invite = (
-             db.execute(
--                select(TicketTransferInvite)
--                .options(joinedload(TicketTransferInvite.ticket))
--                .where(TicketTransferInvite.invite_token == invite_token)
--                .with_for_update()
-+                select(TicketTransferInvite).where(TicketTransferInvite.invite_token == invite_token).with_for_update()
-             )
--            .unique()
-             .scalar_one_or_none()
-         )
-         if invite is None:
-             raise TicketNotFoundError("Transfer invite not found.")
-+        db.refresh(invite, attribute_names=["ticket"])
-         if invite.status != TransferInviteStatus.PENDING:
-             raise TicketTransferError("Only pending invites can be revoked.")
-         if actor_user_id not in {invite.sender_user_id, invite.ticket.owner_user_id}:
-             raise TicketAuthorizationError("Only the sender/current owner can revoke this invite.")
+-def test_manual_redelivery_requires_owner_boundary() -> None:
++def test_manual_redelivery_requires_owner_boundary(db_session: Session) -> None:
+     db = db_session
+     admin = _seed_admin(db)
+     other = _seed_admin(db, email="other@x.com")
+     create_webhook_endpoint(
+         db,
+         user_id=admin.id,
+         name="Main endpoint",
+         target_url="https://example.com/webhook",
+         subscribed_events=["order.paid"],
+     )
+     publish_webhook_event(db, event_type="order.paid", payload={"order_id": 1})
+     db.commit()
  
-         now = get_guyana_now()
-         invite.status = TransferInviteStatus.REVOKED
-         invite.revoked_at = now
-         invite.revoked_by_user_id = actor_user_id
-         invite.updated_at = now
-         db.flush()
-         notify_ticket_transfer_invite_revoked(invite)
-         return invite
+     first = list_deliveries(db, user_id=admin.id)[0].delivery
+     denied = redeliver_webhook_delivery(db, delivery_id=first.id, user_id=other.id)
+     assert denied is None
  
  
- def void_ticket(
-     db: Session,
-     *,
-     ticket_id: int,
-     actor_user_id: int,
-     reason: str | None = None,
- ) -> Ticket:
-     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-     with tx_ctx:
-         ticket = (
-@@ -1073,78 +1064,77 @@ def check_in_ticket(
-         result = TicketCheckInValidationResult(
-             valid=False,
-             status=CHECK_IN_STATUS_INVALID,
-             message="A ticket code or QR payload is required.",
-             event_id=event_id,
-             reason_code=CHECK_IN_STATUS_INVALID,
-         )
-         _record_check_in_attempt(
-             db,
-             event_id=event_id,
-             actor_user_id=scanner_user_id,
-             ticket=None,
-             result_code=result.status,
-             reason_code=result.reason_code,
-             reason_message=result.message,
-             method=method,
-         )
-         db.flush()
-         return result
+-def test_event_schema_stability_for_order_and_refund_examples() -> None:
++def test_event_schema_stability_for_order_and_refund_examples(db_session: Session) -> None:
+     db = db_session
+     admin = _seed_admin(db)
+     order = _seed_order(db, admin=admin)
  
-     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-     with tx_ctx:
-         ticket = (
-             db.execute(
-                 select(Ticket)
--                .options(joinedload(Ticket.event), joinedload(Ticket.order))
-                 .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
-                 .with_for_update()
-             )
--            .unique()
-             .scalars()
-             .first()
-         )
-         if ticket is None:
-             result = TicketCheckInValidationResult(
-                 valid=False,
-                 status=CHECK_IN_STATUS_NOT_FOUND,
-                 message="Ticket not found.",
-                 event_id=event_id,
-                 reason_code=CHECK_IN_STATUS_NOT_FOUND,
-             )
-             _record_check_in_attempt(
-                 db,
-                 event_id=event_id,
-                 actor_user_id=scanner_user_id,
-                 ticket=None,
-                 result_code=result.status,
-                 reason_code=result.reason_code,
-                 reason_message=result.message,
-                 method=method,
-             )
-             db.flush()
-             return result
-+        db.refresh(ticket, attribute_names=["event", "order"])
-         result = _evaluate_ticket_for_entry(ticket=ticket, event_id=event_id)
-         if not result.valid:
-             _record_check_in_attempt(
-                 db,
-                 event_id=event_id,
-                 actor_user_id=scanner_user_id,
-                 ticket=ticket,
-                 result_code=result.status,
-                 reason_code=result.reason_code,
-                 reason_message=result.message,
-                 method=method,
-             )
-             db.flush()
-             return result
+     create_webhook_endpoint(db, user_id=admin.id, name="E", target_url="https://example.com", subscribed_events=["order.paid", "order.refunded"])
+     publish_webhook_event(db, event_type="order.paid", payload=build_order_paid_payload(order))
+     publish_webhook_event(db, event_type="order.refunded", payload=build_refund_payload(order, refund_id=9, amount=2.5))
+     db.commit()
  
-         now = get_guyana_now()
-         ticket.status = TicketStatus.CHECKED_IN
-         ticket.checked_in_at = now
-         ticket.checked_in_by_user_id = scanner_user_id
-         ticket.check_in_status = CheckInStatus.CHECKED_IN
-         ticket.check_in_method = method
-         ticket.updated_at = now
-         _record_check_in_attempt(
-             db,
-             event_id=event_id,
-@@ -1199,72 +1189,71 @@ def get_event_check_in_summary(
+     payloads = [json.loads(item.delivery.payload_json) for item in list_deliveries(db, user_id=admin.id)]
+     for envelope in payloads:
+         assert set(envelope.keys()) == {"id", "type", "version", "created_at", "data"}
+         assert envelope["id"].startswith("evt_")
+         assert envelope["version"] == "v1"
+         assert envelope["created_at"]
  
- def override_ticket_check_in(
-     db: Session,
-     *,
-     actor_user_id: int,
-     event_id: int,
-     qr_payload: str | None = None,
-     ticket_code: str | None = None,
-     admit: bool,
-     notes: str,
- ) -> TicketCheckInValidationResult:
-     if not can_actor_override_check_in(db, user_id=actor_user_id, event_id=event_id):
-         raise TicketAuthorizationError("Not authorized to override ticket check-in for this event.")
-     if not _normalize_optional(notes):
-         raise TicketCheckInConflictError("Manual override notes are required.")
  
-     lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
-     if not lookup:
-         raise TicketNotFoundError("A ticket code or QR payload is required.")
+-def test_delivery_history_exposes_diagnostics_fields() -> None:
++def test_delivery_history_exposes_diagnostics_fields(db_session: Session) -> None:
+     db = db_session
+     admin = _seed_admin(db)
+     create_webhook_endpoint(
+         db,
+         user_id=admin.id,
+         name="Main endpoint",
+         target_url="https://example.com/webhook",
+         subscribed_events=["order.paid"],
+     )
+     publish_webhook_event(db, event_type="order.paid", payload={"order_id": 1})
+     db.commit()
  
-     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-     with tx_ctx:
-         ticket = (
-             db.execute(
-                 select(Ticket)
--                .options(joinedload(Ticket.event), joinedload(Ticket.order))
-                 .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
-                 .with_for_update()
-             )
--            .unique()
-             .scalars()
-             .first()
-         )
-         if ticket is None:
-             _record_check_in_attempt(
-                 db,
-                 event_id=event_id,
-                 actor_user_id=actor_user_id,
-                 ticket=None,
-                 result_code=CHECK_IN_STATUS_NOT_FOUND,
-                 reason_code=CHECK_IN_STATUS_NOT_FOUND,
-                 reason_message="Ticket not found for override.",
-                 method=CHECK_IN_METHOD_OVERRIDE,
-                 notes=notes,
-             )
-             db.flush()
-             raise TicketNotFoundError("Ticket not found.")
-+        db.refresh(ticket, attribute_names=["event", "order"])
-         if ticket.event_id != event_id:
-             raise TicketCrossEventError("Ticket does not belong to this event.")
+     rows = list_deliveries(db, user_id=admin.id)
+     assert rows[0].endpoint_url == "https://example.com/webhook"
+     assert rows[0].delivery.event_type == "order.paid"
+     assert rows[0].delivery.event_id.startswith("evt_")
+     assert rows[0].delivery.status in {"pending", "retry_scheduled", "delivered", "failed"}
  
-         now = get_guyana_now()
-         if admit:
-             if ticket.status == TicketStatus.CHECKED_IN:
-                 result = TicketCheckInValidationResult(
-                     valid=False,
-                     status=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
-                     message="Ticket has already been checked in.",
-                     event_id=event_id,
-                     ticket=ticket,
-                     checked_in_at=ticket.checked_in_at,
-                     reason_code=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
-                 )
-             else:
-                 ticket.status = TicketStatus.CHECKED_IN
-                 ticket.checked_in_at = now
-                 ticket.checked_in_by_user_id = actor_user_id
-                 ticket.check_in_status = CheckInStatus.CHECKED_IN
-                 ticket.check_in_method = CHECK_IN_METHOD_OVERRIDE
-                 ticket.updated_at = now
-                 result = TicketCheckInValidationResult(
-                     valid=True,
-                     status=CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
-@@ -1378,69 +1367,66 @@ def scan_ticket(
-             ticket=None,
-             scanned_by=user_id,
-             status=TicketScanStatus.INVALID,
-             note="Invalid ticket payload signature.",
-         )
-         db.flush()
-         return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid QR payload.")
  
-     ticket_id = payload.get("ticket_id")
-     payload_event_id = payload.get("event_id")
-     if not isinstance(ticket_id, int) or not isinstance(payload_event_id, int):
-         _record_ticket_scan_log(
-             db,
-             ticket=None,
-             scanned_by=user_id,
-             status=TicketScanStatus.INVALID,
-             note="QR payload is missing required identifiers.",
-         )
-         db.flush()
-         return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid QR payload.")
+ def test_example_fixture_contract_matches_required_envelope_shape() -> None:
+     fixture = Path(__file__).with_name("fixtures").joinpath("webhook_envelope_examples.json")
+     data = json.loads(fixture.read_text())
+     assert {"order.paid", "order.refunded", "transfer.accepted", "checkin.completed"}.issubset(set(data.keys()))
  
-     tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-     with tx_ctx:
-         ticket = (
-             db.execute(
--                select(Ticket)
--                .options(joinedload(Ticket.event), joinedload(Ticket.order))
--                .where(Ticket.id == ticket_id)
--                .with_for_update()
-+                select(Ticket).where(Ticket.id == ticket_id).with_for_update()
-             )
--            .unique()
-             .scalars()
-             .first()
-         )
-         if ticket is None:
-             _record_ticket_scan_log(
-                 db,
-                 ticket=None,
-                 scanned_by=user_id,
-                 status=TicketScanStatus.INVALID,
-                 note="Ticket not found.",
-             )
-             db.flush()
-             return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid ticket.")
-+        db.refresh(ticket, attribute_names=["event", "order"])
- 
-         user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-         if user is None or not can_scan_event(db, user=user, event=ticket.event):
-             _record_ticket_scan_log(
-                 db,
-                 ticket=ticket,
-                 scanned_by=user_id,
-                 status=TicketScanStatus.INVALID,
-                 note="Unauthorized scan attempt.",
-             )
-             db.flush()
-             return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Not authorized to scan this event.")
- 
-         if ticket.event_id != payload_event_id:
-             _record_ticket_scan_log(
-                 db,
-                 ticket=ticket,
-                 scanned_by=user_id,
-                 status=TicketScanStatus.WRONG_EVENT,
-                 note="Payload event does not match ticket event.",
-             )
-             db.flush()
-             return TicketScanResult(status=TicketScanStatus.WRONG_EVENT.value, message="Ticket is for a different event.")
- 
-         now = get_guyana_now()
+     for event_type, envelope in data.items():
  
 EOF
 )
