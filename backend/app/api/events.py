@@ -191,13 +191,10 @@ def _ensure_organizer_profile(db: Session, *, user_id: int) -> OrganizerProfile:
     profile = db.execute(select(OrganizerProfile).where(OrganizerProfile.user_id == user_id)).scalar_one_or_none()
     if profile is not None:
         return profile
-    user = db.execute(select(User).where(User.id == user_id)).scalar_one()
     profile = OrganizerProfile(
         user_id=user_id,
-        business_name=user.full_name,
-        display_name=user.full_name,
-        contact_email=user.email,
-        contact_phone=user.phone,
+        business_name="",
+        display_name="",
     )
     db.add(profile)
     db.flush()

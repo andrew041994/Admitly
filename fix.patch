@@ -1,14 +1,13 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/app/services/event_staff.py b/backend/app/services/event_staff.py
-index 64ce85485d1d64fbbdea70e8712e7157c83af49f..6130018eef105efe9c90e8d20e8a93b9e862a26d 100644
+index 64ce85485d1d64fbbdea70e8712e7157c83af49f..a9d4f1e5e571dc9548f29dcf07d45ee390bec441 100644
 --- a/backend/app/services/event_staff.py
 +++ b/backend/app/services/event_staff.py
-@@ -1,42 +1,44 @@
+@@ -1,49 +1,39 @@
  from __future__ import annotations
  
 -from datetime import UTC, datetime
-+from datetime import datetime, timezone
- 
+-
  from sqlalchemy import select
  from sqlalchemy.orm import Session
  
@@ -21,16 +20,14 @@ index 64ce85485d1d64fbbdea70e8712e7157c83af49f..6130018eef105efe9c90e8d20e8a93b9
      has_event_permission_by_id,
      require_event_permission,
  )
- 
-+UTC = timezone.utc
-+
- 
- def _to_utc_aware(dt: datetime) -> datetime:
-     if dt.tzinfo is None:
-         return dt.replace(tzinfo=UTC)
-     return dt.astimezone(UTC)
- 
- 
+-
+-
+-def _to_utc_aware(dt: datetime) -> datetime:
+-    if dt.tzinfo is None:
+-        return dt.replace(tzinfo=UTC)
+-    return dt.astimezone(UTC)
+-
+-
  class EventStaffError(ValueError):
      """Base staff management error."""
  
@@ -49,6 +46,68 @@ index 64ce85485d1d64fbbdea70e8712e7157c83af49f..6130018eef105efe9c90e8d20e8a93b9
  
  def list_event_staff(db: Session, *, actor_user_id: int, event_id: int) -> list[EventStaff]:
      require_event_permission(
+         db,
+         user_id=actor_user_id,
+         event_id=event_id,
+         action=EventPermissionAction.VIEW_EVENT_STAFF,
+     )
+     return db.execute(select(EventStaff).where(EventStaff.event_id == event_id).order_by(EventStaff.created_at.asc())).scalars().all()
+ 
+@@ -56,52 +46,52 @@ def can_manage_event_staff(db: Session, *, actor_user_id: int, event_id: int) ->
+         action=EventPermissionAction.MANAGE_EVENT_STAFF,
+     )
+ 
+ 
+ def add_event_staff(
+     db: Session,
+     *,
+     actor_user_id: int,
+     event_id: int,
+     user_id: int,
+     role: EventStaffRole,
+ ) -> EventStaff:
+     require_event_permission(
+         db,
+         user_id=actor_user_id,
+         event_id=event_id,
+         action=EventPermissionAction.MANAGE_EVENT_STAFF,
+     )
+     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+     if user is None:
+         raise EventStaffValidationError("User not found.")
+ 
+     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
+     if event is None:
+         raise EventStaffValidationError("Event not found.")
+-    if _to_utc_aware(event.end_at) <= datetime.now(UTC) or event.status == EventStatus.CANCELLED:
+-        raise EventStaffValidationError("Cannot assign staff to ended or cancelled events.")
++    if event.status == EventStatus.CANCELLED:
++        raise EventStaffValidationError("Cannot assign staff to cancelled events.")
+ 
+     existing = db.execute(
+         select(EventStaff).where(EventStaff.event_id == event_id, EventStaff.user_id == user_id)
+     ).scalar_one_or_none()
+     if existing is not None and existing.is_active:
+         raise EventStaffConflictError("User is already assigned to this event.")
+ 
+     if role == EventStaffRole.OWNER:
+         raise EventStaffValidationError("Owner role is derived from event ownership.")
+ 
+     if role not in {EventStaffRole.MANAGER, EventStaffRole.CHECKIN, EventStaffRole.SUPPORT}:
+         raise EventStaffValidationError("Only manager, check-in, or support staff can be assigned.")
+ 
+     if existing is not None:
+         existing.role = role
+         existing.is_active = True
+         existing.invited_by_user_id = actor_user_id
+         db.flush()
+         return existing
+ 
+     assignment = EventStaff(
+         event_id=event_id,
+         user_id=user_id,
+         role=role,
+         is_active=True,
  
 EOF
 )

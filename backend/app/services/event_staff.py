@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,16 +12,6 @@ from app.services.event_permissions import (
     has_event_permission_by_id,
     require_event_permission,
 )
-
-UTC = timezone.utc
-
-
-def _to_utc_aware(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=UTC)
-    return dt.astimezone(UTC)
-
-
 class EventStaffError(ValueError):
     """Base staff management error."""
 
@@ -80,8 +68,8 @@ def add_event_staff(
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
         raise EventStaffValidationError("Event not found.")
-    if _to_utc_aware(event.end_at) <= datetime.now(UTC) or event.status == EventStatus.CANCELLED:
-        raise EventStaffValidationError("Cannot assign staff to ended or cancelled events.")
+    if event.status == EventStatus.CANCELLED:
+        raise EventStaffValidationError("Cannot assign staff to cancelled events.")
 
     existing = db.execute(
         select(EventStaff).where(EventStaff.event_id == event_id, EventStaff.user_id == user_id)
