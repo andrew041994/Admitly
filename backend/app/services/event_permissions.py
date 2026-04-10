@@ -121,16 +121,24 @@ def has_event_permission_by_id(
     if _is_event_owner(db, event=event, user_id=user_id):
         return True
 
-    role = _get_staff_role(db, event_id=event_id, user_id=user_id)
-    if role is None:
-        return False
     if action in {EventPermissionAction.CHECKIN_TICKETS, EventPermissionAction.CHECK_IN}:
-        if role != EventStaffRole.CHECKIN:
+        staff = db.execute(
+            select(EventStaff).where(
+                EventStaff.event_id == event_id,
+                EventStaff.user_id == user_id,
+                EventStaff.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
+        if staff is None or staff.role != EventStaffRole.CHECKIN:
             return False
         now = datetime.now(UTC)
         event_end_at = event.end_at if event.end_at.tzinfo is not None else event.end_at.replace(tzinfo=UTC)
         if event_end_at < now:
             return False
+        return True
+    role = _get_staff_role(db, event_id=event_id, user_id=user_id)
+    if role is None:
+        return False
     return action in _role_permissions(role)
 
 

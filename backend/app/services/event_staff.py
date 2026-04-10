@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.enums import EventStaffRole, EventStatus
 from app.models.event import Event
 from app.models.event_staff import EventStaff
-from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
 from app.services.event_permissions import (
     EventPermissionAction,
@@ -31,22 +30,16 @@ class EventStaffValidationError(EventStaffError):
 
 
 def list_event_staff(db: Session, *, actor_user_id: int, event_id: int) -> list[EventStaff]:
-    event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
+    event = (
+        db.execute(select(Event).options(joinedload(Event.organizer)).where(Event.id == event_id))
+        .unique()
+        .scalar_one_or_none()
+    )
     if event is None:
         raise EventPermissionDeniedError("Not authorized for this event action.")
-    organizer_user_id = db.execute(
-        select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
-    ).scalar_one_or_none()
-    if organizer_user_id != actor_user_id:
-        admin_staff = db.execute(
-            select(EventStaff.id).where(
-                EventStaff.event_id == event_id,
-                EventStaff.user_id == actor_user_id,
-                EventStaff.is_active.is_(True),
-                EventStaff.role == EventStaffRole.ADMIN,
-            )
-        ).scalar_one_or_none()
-        if admin_staff is None:
+    if event.organizer.user_id != actor_user_id:
+        actor = db.execute(select(User).where(User.id == actor_user_id)).scalar_one_or_none()
+        if actor is None or actor.is_admin is not True:
             raise EventPermissionDeniedError("Not authorized for this event action.")
     return db.execute(select(EventStaff).where(EventStaff.event_id == event_id).order_by(EventStaff.created_at.asc())).scalars().all()
 

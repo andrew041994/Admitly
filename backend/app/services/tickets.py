@@ -546,7 +546,7 @@ def create_ticket_transfer_invite(
     else:
         if normalized_email is not None:
             matched_user = db.execute(
-                select(User).where(func.lower(func.trim(User.email)) == normalized_email)
+                select(User).where(func.lower(User.email) == normalized_email)
             ).scalars().first()
             if matched_user is not None:
                 recipient_user_id = matched_user.id
@@ -949,27 +949,6 @@ def validate_ticket_for_check_in(
     qr_payload: str | None = None,
     ticket_code: str | None = None,
 ) -> TicketCheckInValidationResult:
-    if not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
-        result = TicketCheckInValidationResult(
-            valid=False,
-            status=CHECK_IN_STATUS_UNAUTHORIZED,
-            message="Not authorized to check in tickets for this event.",
-            event_id=event_id,
-            reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
-        )
-        _record_check_in_attempt(
-            db,
-            event_id=event_id,
-            actor_user_id=actor_user_id,
-            ticket=None,
-            result_code=result.status,
-            reason_code=result.reason_code,
-            reason_message=result.message,
-            method="validate",
-        )
-        db.flush()
-        return result
-
     lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
     if not lookup:
         result = TicketCheckInValidationResult(
@@ -1009,6 +988,24 @@ def validate_ticket_for_check_in(
             message="Ticket not found.",
             event_id=event_id,
             reason_code=CHECK_IN_STATUS_NOT_FOUND,
+        )
+    elif get_active_pending_transfer_for_ticket(db, ticket_id=ticket.id) is not None:
+        result = TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_TRANSFER_PENDING,
+            message="Ticket transfer is pending acceptance.",
+            event_id=event_id,
+            ticket=ticket,
+            reason_code=CHECK_IN_STATUS_TRANSFER_PENDING,
+        )
+    elif not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
+        result = TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_UNAUTHORIZED,
+            message="Not authorized to check in tickets for this event.",
+            event_id=event_id,
+            ticket=ticket,
+            reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
         )
     else:
         result = _evaluate_ticket_for_entry(ticket=ticket, event_id=event_id)
@@ -1342,24 +1339,18 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_INVALID:
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
-        lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
         if qr_payload:
             existing = db.execute(
                 select(Ticket).where(
                     Ticket.event_id == event_id,
-                    Ticket.qr_payload == lookup,
+                    Ticket.qr_payload == qr_payload,
                 )
             ).scalars().first()
         elif ticket_code:
             existing = db.execute(
                 select(Ticket).where(
                     Ticket.event_id == event_id,
-                    or_(
-                        Ticket.ticket_code == lookup,
-                        Ticket.qr_payload == lookup,
-                        Ticket.qr_token == lookup,
-                        Ticket.display_code == lookup,
-                    ),
+                    Ticket.ticket_code == ticket_code,
                 )
             ).scalars().first()
         else:
