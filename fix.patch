@@ -1,113 +1,127 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/event_staff.py b/backend/app/services/event_staff.py
-index 64ce85485d1d64fbbdea70e8712e7157c83af49f..a9d4f1e5e571dc9548f29dcf07d45ee390bec441 100644
---- a/backend/app/services/event_staff.py
-+++ b/backend/app/services/event_staff.py
-@@ -1,49 +1,39 @@
- from __future__ import annotations
- 
--from datetime import UTC, datetime
--
- from sqlalchemy import select
- from sqlalchemy.orm import Session
- 
- from app.models.enums import EventStaffRole, EventStatus
- from app.models.event import Event
- from app.models.event_staff import EventStaff
- from app.models.user import User
- from app.services.event_permissions import (
-     EventPermissionAction,
-     has_event_permission_by_id,
-     require_event_permission,
+diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
+index 8d205cb581dee184055bc0d84b444a8075a91a10..2a8ec10993f718c71ef933b218a196e268ec535f 100644
+--- a/backend/tests/test_tickets_service.py
++++ b/backend/tests/test_tickets_service.py
+@@ -46,58 +46,50 @@ from app.services.tickets import (
+     TicketAuthorizationError,
+     TicketCheckInConflictError,
+     TicketCrossEventError,
+     TicketIssuanceError,
+     TicketNotFoundError,
+     TicketTransferError,
+     TicketVoidError,
+     check_in_ticket,
+     can_check_in_event_tickets,
+     can_void_event_ticket,
+     check_in_ticket_for_event,
+     get_event_check_in_summary,
+     issue_tickets_for_completed_order,
+     list_recent_check_in_attempts,
+     list_tickets_for_order_owner,
+     list_tickets_for_user,
+     override_ticket_check_in,
+     transfer_ticket_to_user,
+     validate_ticket_for_check_in,
+     void_ticket,
+     scan_ticket,
  )
+ from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
+ 
+ 
+-@pytest.fixture
+-def db_session() -> Session:
+-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+-    Base.metadata.create_all(engine)
+-    SessionLocal = sessionmaker(bind=engine, future=True)
+-    with SessionLocal() as session:
+-        yield session
 -
--
--def _to_utc_aware(dt: datetime) -> datetime:
--    if dt.tzinfo is None:
--        return dt.replace(tzinfo=UTC)
--    return dt.astimezone(UTC)
--
--
- class EventStaffError(ValueError):
-     """Base staff management error."""
  
- 
- class EventStaffNotFoundError(EventStaffError):
-     """Raised when staff assignment is not found."""
- 
- 
- class EventStaffConflictError(EventStaffError):
-     """Raised when duplicate assignment exists."""
- 
- 
- class EventStaffValidationError(EventStaffError):
-     """Raised when staff operation violates business rules."""
- 
- 
- def list_event_staff(db: Session, *, actor_user_id: int, event_id: int) -> list[EventStaff]:
-     require_event_permission(
-         db,
-         user_id=actor_user_id,
-         event_id=event_id,
-         action=EventPermissionAction.VIEW_EVENT_STAFF,
-     )
-     return db.execute(select(EventStaff).where(EventStaff.event_id == event_id).order_by(EventStaff.created_at.asc())).scalars().all()
- 
-@@ -56,52 +46,52 @@ def can_manage_event_staff(db: Session, *, actor_user_id: int, event_id: int) ->
-         action=EventPermissionAction.MANAGE_EVENT_STAFF,
-     )
- 
- 
- def add_event_staff(
+ def _seed_order(
      db: Session,
      *,
-     actor_user_id: int,
-     event_id: int,
-     user_id: int,
-     role: EventStaffRole,
- ) -> EventStaff:
-     require_event_permission(
-         db,
-         user_id=actor_user_id,
-         event_id=event_id,
-         action=EventPermissionAction.MANAGE_EVENT_STAFF,
+     user_email: str = "buyer@example.com",
+     quantity: int = 3,
+     status: OrderStatus = OrderStatus.COMPLETED,
+     payment_verification_status: str = "verified",
+ ) -> tuple[Order, OrderItem, TicketTier, User, Event]:
+     now = datetime.now(timezone.utc)
+     user = User(email=user_email, full_name="Buyer")
+     db.add(user)
+     db.flush()
+ 
+     organizer_profile = OrganizerProfile(user_id=user.id, business_name="Org", display_name="Org")
+     db.add(organizer_profile)
+     db.flush()
+ 
+     venue = Venue(organizer_id=organizer_profile.id, name="Venue")
+     db.add(venue)
+     db.flush()
+ 
+     event = Event(
+         organizer_id=organizer_profile.id,
+         venue_id=venue.id,
+@@ -663,57 +655,52 @@ def test_manual_checkin_and_summary_are_ticket_level(db_session: Session) -> Non
+         scanner_user_id=scanner_id,
+         event_id=event.id,
+         ticket_code=tickets[0].ticket_code,
+         method=CHECK_IN_METHOD_MANUAL,
      )
-     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-     if user is None:
-         raise EventStaffValidationError("User not found.")
+     assert first.valid
+     assert first.ticket is not None
+     assert first.ticket.check_in_method == CHECK_IN_METHOD_MANUAL
  
-     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
-     if event is None:
-         raise EventStaffValidationError("Event not found.")
--    if _to_utc_aware(event.end_at) <= datetime.now(UTC) or event.status == EventStatus.CANCELLED:
--        raise EventStaffValidationError("Cannot assign staff to ended or cancelled events.")
-+    if event.status == EventStatus.CANCELLED:
-+        raise EventStaffValidationError("Cannot assign staff to cancelled events.")
+     duplicate = check_in_ticket(
+         db_session,
+         scanner_user_id=scanner_id,
+         event_id=event.id,
+         ticket_code=tickets[0].ticket_code,
+         method=CHECK_IN_METHOD_MANUAL,
+     )
+     assert not duplicate.valid
+     assert duplicate.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN
  
-     existing = db.execute(
-         select(EventStaff).where(EventStaff.event_id == event_id, EventStaff.user_id == user_id)
-     ).scalar_one_or_none()
-     if existing is not None and existing.is_active:
-         raise EventStaffConflictError("User is already assigned to this event.")
+     summary = get_event_check_in_summary(db_session, actor_user_id=scanner_id, event_id=event.id)
+     assert summary.total_admittable_tickets == 3
+     assert summary.checked_in_tickets == 1
+     assert summary.remaining_tickets == 2
  
-     if role == EventStaffRole.OWNER:
-         raise EventStaffValidationError("Owner role is derived from event ownership.")
  
-     if role not in {EventStaffRole.MANAGER, EventStaffRole.CHECKIN, EventStaffRole.SUPPORT}:
-         raise EventStaffValidationError("Only manager, check-in, or support staff can be assigned.")
+-def test_concurrent_duplicate_scan_only_one_succeeds(tmp_path: Path) -> None:
+-    db_path = tmp_path / "tickets-concurrency.db"
+-    engine = create_engine(
+-        f"sqlite+pysqlite:///{db_path}",
+-        future=True,
+-        connect_args={"check_same_thread": False},
+-    )
++def test_concurrent_duplicate_scan_only_one_succeeds() -> None:
++    engine = create_engine("postgresql://neondb_owner:npg_jKSZablLD72J@ep-still-paper-anfodm11-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
+     Base.metadata.create_all(engine)
+     SessionLocal = sessionmaker(bind=engine, future=True)
  
-     if existing is not None:
-         existing.role = role
-         existing.is_active = True
-         existing.invited_by_user_id = actor_user_id
-         db.flush()
-         return existing
+     with SessionLocal() as session:
+         order, _, _, _, event = _seed_order(session, quantity=1)
+         ticket = issue_tickets_for_completed_order(session, order)[0]
+         scanner_user_id = event.organizer.user_id
+         event_id = event.id
+         qr_payload = ticket.qr_payload
  
-     assignment = EventStaff(
-         event_id=event_id,
-         user_id=user_id,
-         role=role,
-         is_active=True,
+     def _attempt() -> bool:
+         with SessionLocal() as local_session:
+             try:
+                 check_in_ticket_for_event(
+                     local_session,
+                     scanner_user_id=scanner_user_id,
+                     event_id=event_id,
+                     qr_payload=qr_payload,
+                     ticket_code=None,
+                 )
+                 local_session.commit()
+                 return True
+             except TicketCheckInConflictError:
+                 local_session.rollback()
+                 return False
  
 EOF
 )

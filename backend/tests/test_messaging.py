@@ -18,14 +18,6 @@ from app.services.notifications import notify_order_completed
 from app.services.tickets import issue_tickets_for_completed_order
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed(db: Session, *, admin: bool = True):
     now = datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc)

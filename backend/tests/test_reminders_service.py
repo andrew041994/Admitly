@@ -26,14 +26,6 @@ from app.services.reminders import (
 from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed_order(db: Session, *, suffix: str, event_start_at: datetime) -> tuple[Order, User, Event]:
     buyer = User(email=f"buyer-{suffix}@example.com", full_name="Buyer")

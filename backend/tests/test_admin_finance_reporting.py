@@ -7,8 +7,6 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-
 from app.db.base import Base
 from app.api.admin_finance import export_admin_orders_csv, get_admin_summary
 from app.models import Dispute, Event, OrganizerProfile, Order, Refund, User, Venue
@@ -26,14 +24,6 @@ from app.models.enums import (
 )
 from app.services.finance_reporting import get_admin_finance_summary, list_admin_finance_orders
 
-
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
 
 
 def _seed(db: Session):

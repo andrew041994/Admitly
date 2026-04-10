@@ -1,8 +1,6 @@
 import os
 from types import SimpleNamespace
 
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-
 from app.api.orders import complete_dev_test_checkout
 from app.core.config import settings
 from app.main import app

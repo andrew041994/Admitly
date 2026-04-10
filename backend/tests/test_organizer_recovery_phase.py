@@ -3,8 +3,6 @@ from datetime import datetime, timedelta, timezone
 UTC = timezone.utc
 import os
 
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -24,14 +22,6 @@ from app.models.user import User
 from app.models.venue import Venue
 from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
 
-
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
 
 
 @pytest.fixture

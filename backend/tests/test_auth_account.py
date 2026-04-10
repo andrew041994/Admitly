@@ -24,14 +24,6 @@ from app.services.auth import (
 )
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed_user(db: Session, suffix: str, *, password: str = "GoodPass123", is_active: bool = True) -> User:
     user, _ = register_user(db, email=f"USER-{suffix}@Example.COM", password=password, full_name="Auth User")

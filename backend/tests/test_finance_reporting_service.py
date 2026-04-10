@@ -6,8 +6,6 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-
 from app.db.base import Base
 from app.models import Event, OrganizerProfile, Order, User, Venue
 from app.models.enums import (
@@ -31,14 +29,6 @@ from app.services.finance_reporting import (
 )
 from app.services.orders import complete_paid_order
 
-
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
 
 
 def _seed_finance_data(db: Session):

@@ -23,14 +23,6 @@ from app.lib.order_references import format_order_reference
 from app.services.ticket_holds import get_ticket_type_availability
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed_event_with_tiers(
     db: Session,

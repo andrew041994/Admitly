@@ -68,14 +68,6 @@ from app.services.tickets import (
 from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed_order(
     db: Session,
@@ -685,13 +677,8 @@ def test_manual_checkin_and_summary_are_ticket_level(db_session: Session) -> Non
     assert summary.remaining_tickets == 2
 
 
-def test_concurrent_duplicate_scan_only_one_succeeds(tmp_path: Path) -> None:
-    db_path = tmp_path / "tickets-concurrency.db"
-    engine = create_engine(
-        f"sqlite+pysqlite:///{db_path}",
-        future=True,
-        connect_args={"check_same_thread": False},
-    )
+def test_concurrent_duplicate_scan_only_one_succeeds() -> None:
+    engine = create_engine("postgresql://neondb_owner:npg_jKSZablLD72J@ep-still-paper-anfodm11-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(bind=engine, future=True)
 

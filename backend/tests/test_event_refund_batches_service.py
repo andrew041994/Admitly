@@ -17,14 +17,6 @@ from app.services.events import (
 from app.services.refunds import process_refund_for_order
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed_event_with_orders(db: Session):
     now = datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc)

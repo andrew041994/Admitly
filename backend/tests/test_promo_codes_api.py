@@ -1,7 +1,5 @@
 import os
 
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-
 from app.main import app
 
 

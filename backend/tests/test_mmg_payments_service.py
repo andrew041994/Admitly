@@ -24,14 +24,6 @@ from app.services.ticket_holds import get_ticket_type_availability
 from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 @pytest.fixture(autouse=True)
 def mmg_config() -> None:

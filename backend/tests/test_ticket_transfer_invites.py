@@ -24,14 +24,6 @@ from app.services.tickets import (
 )
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed_order(db: Session, *, suffix: str) -> tuple[Order, User, Event]:
     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)

@@ -9,8 +9,6 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-
 from app.api.admin_support import create_support_note, get_support_snapshot, update_support_case
 from app.main import app
 from app.models import (
@@ -53,14 +51,6 @@ from app.services.support import (
 )
 from app.db.base import Base
 
-
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
 
 
 def _seed(db: Session, *, suffix: str = "support") -> tuple[Order, User, User]:

@@ -17,14 +17,6 @@ from app.services.ticket_holds import (
 )
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed_ticket_tier(db: Session, start_at: datetime, quantity_total: int = 100) -> TicketTier:
     user = User(email="owner@example.com", full_name="Owner")

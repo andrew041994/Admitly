@@ -11,14 +11,6 @@ from app.schemas.notification import PushTokenDeleteRequest, PushTokenRegisterRe
 from app.services.notifications import PushMessage, _send_push, register_push_token
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed_user(db: Session, suffix: str) -> User:
     user = User(email=f"push-{suffix}@example.com", full_name="Push User")

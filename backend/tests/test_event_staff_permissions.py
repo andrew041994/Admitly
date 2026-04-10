@@ -2,8 +2,6 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import os
 
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -22,14 +20,6 @@ from app.services.event_staff import (
 )
 from app.services.tickets import check_in_ticket, issue_tickets_for_completed_order
 
-
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
 
 
 def _seed_event(db: Session):

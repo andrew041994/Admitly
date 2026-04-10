@@ -27,14 +27,6 @@ from app.services.orders import complete_paid_order, refund_completed_order
 from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed_order(db: Session, *, suffix: str, completed: bool = True) -> tuple[Order, User, Event]:
     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)

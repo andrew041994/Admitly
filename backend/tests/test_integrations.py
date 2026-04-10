@@ -1,15 +1,7 @@
 import json
-import os
 from datetime import datetime, timezone
 from decimal import Decimal
-from pathlib import Path
-
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-
-from app.db.base import Base
+from sqlalchemy.orm import Session
 from app.models import Event, Order, OrganizerProfile, User, Venue
 from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
 from app.services.integrations import (
@@ -31,12 +23,6 @@ from app.services.integrations import (
     verify_webhook_signature,
 )
 
-
-def _db() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    return SessionLocal()
 
 
 def _seed_admin(db: Session, *, email: str = "admin@x.com") -> User:
@@ -75,8 +61,8 @@ def _seed_order(db: Session, *, admin: User) -> Order:
     return order
 
 
-def test_api_key_create_auth_scope_and_revoke() -> None:
-    db = _db()
+def test_api_key_create_auth_scope_and_revoke(db_session: Session) -> None:
+    db = db_session
     admin = _seed_admin(db)
     key, raw = create_api_key(db, user_id=admin.id, name="Main", scopes=[SCOPE_READ, SCOPE_WRITE, "bad:scope"])
     db.commit()
@@ -104,7 +90,7 @@ def test_webhook_signature_contract() -> None:
 
 
 def test_webhook_delivery_retry_and_success_audit() -> None:
-    db = _db()
+    db = db_session
     admin = _seed_admin(db)
     create_webhook_endpoint(
         db,
@@ -141,7 +127,7 @@ def test_webhook_delivery_retry_and_success_audit() -> None:
 
 
 def test_manual_redelivery_creates_new_attempt_with_same_event_id() -> None:
-    db = _db()
+    db = db_session
     admin = _seed_admin(db)
     create_webhook_endpoint(
         db,
@@ -165,7 +151,7 @@ def test_manual_redelivery_creates_new_attempt_with_same_event_id() -> None:
 
 
 def test_manual_redelivery_requires_owner_boundary() -> None:
-    db = _db()
+    db = db_session
     admin = _seed_admin(db)
     other = _seed_admin(db, email="other@x.com")
     create_webhook_endpoint(
@@ -184,7 +170,7 @@ def test_manual_redelivery_requires_owner_boundary() -> None:
 
 
 def test_event_schema_stability_for_order_and_refund_examples() -> None:
-    db = _db()
+    db = db_session
     admin = _seed_admin(db)
     order = _seed_order(db, admin=admin)
 
@@ -202,7 +188,7 @@ def test_event_schema_stability_for_order_and_refund_examples() -> None:
 
 
 def test_delivery_history_exposes_diagnostics_fields() -> None:
-    db = _db()
+    db = db_session
     admin = _seed_admin(db)
     create_webhook_endpoint(
         db,

@@ -15,14 +15,6 @@ from app.services.orders import create_pending_order_from_holds
 from app.services.promo_codes import PromoCodeValidationError
 
 
-@pytest.fixture
-def db_session() -> Session:
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
-        yield session
-
 
 def _seed(db: Session):
     now = datetime(2026, 4, 7, 10, 0, tzinfo=timezone.utc)
