@@ -149,41 +149,39 @@ def create_ticket_hold(
 
     reference_now = _to_aware(now) if now is not None else get_guyana_now()
 
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        ticket_tier = db.execute(
-            select(TicketTier)
-            .where(TicketTier.id == ticket_tier_id)
-            .with_for_update()
-        ).scalar_one_or_none()
+    ticket_tier = db.execute(
+        select(TicketTier)
+        .where(TicketTier.id == ticket_tier_id)
+        .with_for_update()
+    ).scalar_one_or_none()
 
-        if ticket_tier is None:
-            raise TicketHoldError("Ticket tier not found.")
+    if ticket_tier is None:
+        raise TicketHoldError("Ticket tier not found.")
 
-        event = db.execute(select(Event).where(Event.id == ticket_tier.event_id)).scalar_one_or_none()
-        if event is None:
-            raise TicketHoldError("Event not found.")
-        if not ticket_tier.is_active:
-            raise TicketHoldError("Ticket tier is not active.")
-        if event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
-            raise TicketHoldError("Event is not currently sellable.")
+    event = db.execute(select(Event).where(Event.id == ticket_tier.event_id)).scalar_one_or_none()
+    if event is None:
+        raise TicketHoldError("Event not found.")
+    if not ticket_tier.is_active:
+        raise TicketHoldError("Ticket tier is not active.")
+    if event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
+        raise TicketHoldError("Event is not currently sellable.")
 
-        availability_summary = get_ticket_tier_capacity_summary(db, ticket_tier_id=ticket_tier_id, now=reference_now)
-        availability = availability_summary.available_quantity
-        if quantity > availability:
-            raise InsufficientAvailabilityError("Insufficient availability for requested quantity.")
+    availability_summary = get_ticket_tier_capacity_summary(db, ticket_tier_id=ticket_tier_id, now=reference_now)
+    availability = availability_summary.available_quantity
+    if quantity > availability:
+        raise InsufficientAvailabilityError("Insufficient availability for requested quantity.")
 
-        expires_at = calculate_ticket_hold_expiry(event.start_at, now=reference_now)
+    expires_at = calculate_ticket_hold_expiry(event.start_at, now=reference_now)
 
-        hold = TicketHold(
-            event_id=event.id,
-            ticket_tier_id=ticket_tier.id,
-            user_id=user_id,
-            quantity=quantity,
-            expires_at=expires_at,
-        )
-        db.add(hold)
-        db.flush()
+    hold = TicketHold(
+        event_id=event.id,
+        ticket_tier_id=ticket_tier.id,
+        user_id=user_id,
+        quantity=quantity,
+        expires_at=expires_at,
+    )
+    db.add(hold)
+    db.flush()
 
     db.refresh(hold)
     return HoldCreationResult(hold=hold, availability_remaining=availability - quantity)

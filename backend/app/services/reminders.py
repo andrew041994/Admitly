@@ -198,9 +198,8 @@ def dispatch_due_event_reminders(
                     sent_at=reference_now,
                 )
                 try:
-                    with db.begin_nested():
-                        db.add(log)
-                        db.flush()
+                    db.add(log)
+                    db.flush()
                 except IntegrityError:
                     logger.info(
                         "Duplicate reminder log detected",

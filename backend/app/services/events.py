@@ -90,59 +90,57 @@ def create_event_with_ticket_tiers(
     organizer_profile: OrganizerProfile,
     payload,  # noqa: ANN001
 ) -> tuple[Event, list[TicketTier]]:
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        if not payload.ticket_tiers:
-            raise EventCreationValidationError("At least one ticket tier is required.")
-        if payload.doors_open_at and payload.doors_open_at > payload.start_at:
-            raise EventCreationValidationError("doors_open_at must be before or at start_at.")
+    if not payload.ticket_tiers:
+        raise EventCreationValidationError("At least one ticket tier is required.")
+    if payload.doors_open_at and payload.doors_open_at > payload.start_at:
+        raise EventCreationValidationError("doors_open_at must be before or at start_at.")
 
-        event = Event(
-            organizer_id=organizer_profile.id,
-            venue_id=payload.venue_id,
-            title=payload.title.strip(),
-            slug=build_event_slug(db, payload.title),
-            short_description=payload.short_description,
-            long_description=payload.long_description,
-            category=payload.category,
-            cover_image_url=payload.cover_image_url,
-            start_at=payload.start_at,
-            end_at=payload.end_at,
-            doors_open_at=payload.doors_open_at,
-            sales_start_at=payload.sales_start_at,
-            sales_end_at=payload.sales_end_at,
-            timezone=payload.timezone,
-            custom_venue_name=payload.custom_venue_name,
-            custom_address_text=payload.custom_address_text,
-            refund_policy_text=payload.refund_policy_text,
-            terms_text=payload.terms_text,
-            latitude=payload.latitude,
-            longitude=payload.longitude,
-            is_location_pinned=bool(payload.is_location_pinned) if payload.is_location_pinned is not None else False,
+    event = Event(
+        organizer_id=organizer_profile.id,
+        venue_id=payload.venue_id,
+        title=payload.title.strip(),
+        slug=build_event_slug(db, payload.title),
+        short_description=payload.short_description,
+        long_description=payload.long_description,
+        category=payload.category,
+        cover_image_url=payload.cover_image_url,
+        start_at=payload.start_at,
+        end_at=payload.end_at,
+        doors_open_at=payload.doors_open_at,
+        sales_start_at=payload.sales_start_at,
+        sales_end_at=payload.sales_end_at,
+        timezone=payload.timezone,
+        custom_venue_name=payload.custom_venue_name,
+        custom_address_text=payload.custom_address_text,
+        refund_policy_text=payload.refund_policy_text,
+        terms_text=payload.terms_text,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        is_location_pinned=bool(payload.is_location_pinned) if payload.is_location_pinned is not None else False,
+    )
+    db.add(event)
+    db.flush()
+
+    tiers: list[TicketTier] = []
+    for idx, tier_payload in enumerate(payload.ticket_tiers):
+        if tier_payload.max_per_order < tier_payload.min_per_order:
+            raise EventCreationValidationError("max_per_order must be greater than or equal to min_per_order.")
+        tier = TicketTier(
+            event_id=event.id,
+            name=tier_payload.name.strip(),
+            description=tier_payload.description,
+            tier_code=_build_ticket_tier_code(db, event_id=event.id, name=tier_payload.name),
+            price_amount=tier_payload.price_amount,
+            currency=tier_payload.currency,
+            quantity_total=tier_payload.quantity_total,
+            min_per_order=tier_payload.min_per_order,
+            max_per_order=tier_payload.max_per_order,
+            is_active=True if tier_payload.is_active is None else bool(tier_payload.is_active),
+            sort_order=tier_payload.sort_order if tier_payload.sort_order is not None else idx,
         )
-        db.add(event)
-        db.flush()
-
-        tiers: list[TicketTier] = []
-        for idx, tier_payload in enumerate(payload.ticket_tiers):
-            if tier_payload.max_per_order < tier_payload.min_per_order:
-                raise EventCreationValidationError("max_per_order must be greater than or equal to min_per_order.")
-            tier = TicketTier(
-                event_id=event.id,
-                name=tier_payload.name.strip(),
-                description=tier_payload.description,
-                tier_code=_build_ticket_tier_code(db, event_id=event.id, name=tier_payload.name),
-                price_amount=tier_payload.price_amount,
-                currency=tier_payload.currency,
-                quantity_total=tier_payload.quantity_total,
-                min_per_order=tier_payload.min_per_order,
-                max_per_order=tier_payload.max_per_order,
-                is_active=True if tier_payload.is_active is None else bool(tier_payload.is_active),
-                sort_order=tier_payload.sort_order if tier_payload.sort_order is not None else idx,
-            )
-            db.add(tier)
-            tiers.append(tier)
-        db.flush()
+        db.add(tier)
+        tiers.append(tier)
+    db.flush()
 
     return event, tiers
 
@@ -287,59 +285,57 @@ def cancel_event(
     actor_user_id: int,
     reason: str | None = None,
 ) -> tuple[Event, EventRefundBatch]:
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        event = (
-            db.execute(select(Event).where(Event.id == event_id).with_for_update())
-            .scalars()
-            .first()
-        )
-        if event is None:
-            raise EventNotFoundError("Event not found.")
-        if not has_event_permission(
-            db,
-            user_id=actor_user_id,
-            event=event,
-            action=EventPermissionAction.CANCEL_EVENT,
-        ):
-            raise EventAuthorizationError("Not authorized to cancel this event.")
-        if event.status == EventStatus.CANCELLED:
-            raise EventCancellationError("Event is already cancelled.")
+    event = (
+        db.execute(select(Event).where(Event.id == event_id).with_for_update())
+        .scalars()
+        .first()
+    )
+    if event is None:
+        raise EventNotFoundError("Event not found.")
+    if not has_event_permission(
+        db,
+        user_id=actor_user_id,
+        event=event,
+        action=EventPermissionAction.CANCEL_EVENT,
+    ):
+        raise EventAuthorizationError("Not authorized to cancel this event.")
+    if event.status == EventStatus.CANCELLED:
+        raise EventCancellationError("Event is already cancelled.")
 
-        now = get_guyana_now()
-        event.status = EventStatus.CANCELLED
-        event.cancelled_at = now
-        event.cancelled_by_user_id = actor_user_id
-        event.cancellation_reason = reason.strip() if reason else None
-        event.updated_at = now
+    now = get_guyana_now()
+    event.status = EventStatus.CANCELLED
+    event.cancelled_at = now
+    event.cancelled_by_user_id = actor_user_id
+    event.cancellation_reason = reason.strip() if reason else None
+    event.updated_at = now
 
-        pending_orders = (
-            db.execute(
-                select(Order).where(Order.event_id == event.id, Order.status == OrderStatus.PENDING).with_for_update()
-            )
-            .scalars()
-            .all()
+    pending_orders = (
+        db.execute(
+            select(Order).where(Order.event_id == event.id, Order.status == OrderStatus.PENDING).with_for_update()
         )
-        for order in pending_orders:
-            db.refresh(order, attribute_names=["ticket_holds"])
-            order.status = OrderStatus.CANCELLED
-            order.cancelled_at = now
-            order.cancelled_by_user_id = actor_user_id
-            order.cancel_reason = f"Event cancelled: {reason.strip()}" if reason else "Event cancelled"
-            order.updated_at = now
+        .scalars()
+        .all()
+    )
+    for order in pending_orders:
+        db.refresh(order, attribute_names=["ticket_holds"])
+        order.status = OrderStatus.CANCELLED
+        order.cancelled_at = now
+        order.cancelled_by_user_id = actor_user_id
+        order.cancel_reason = f"Event cancelled: {reason.strip()}" if reason else "Event cancelled"
+        order.updated_at = now
 
-        db.flush()
-        invalidate_event_tickets(
-            db,
-            event_id=event.id,
-            actor_user_id=actor_user_id,
-            reason=reason or "Event cancelled",
-        )
-        batch = enqueue_event_refund_batch(db, event_id=event.id, actor_user_id=actor_user_id)
-        try:
-            notify_event_cancelled(event, actor_user_id=actor_user_id)
-        except TypeError:
-            notify_event_cancelled(db, event, actor_user_id=actor_user_id)
+    db.flush()
+    invalidate_event_tickets(
+        db,
+        event_id=event.id,
+        actor_user_id=actor_user_id,
+        reason=reason or "Event cancelled",
+    )
+    batch = enqueue_event_refund_batch(db, event_id=event.id, actor_user_id=actor_user_id)
+    try:
+        notify_event_cancelled(event, actor_user_id=actor_user_id)
+    except TypeError:
+        notify_event_cancelled(db, event, actor_user_id=actor_user_id)
 
     process_event_refund_batch(db, batch_id=batch.id, actor_user_id=actor_user_id)
     return event, batch

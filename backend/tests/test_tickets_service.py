@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import os
 
 from fastapi import HTTPException
 from datetime import datetime, timedelta, timezone
@@ -678,7 +679,11 @@ def test_manual_checkin_and_summary_are_ticket_level(db_session: Session) -> Non
 
 
 def test_concurrent_duplicate_scan_only_one_succeeds() -> None:
-    engine = create_engine("postgresql://neondb_owner:npg_jKSZablLD72J@ep-still-paper-anfodm11-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("DATABASE_URL must be configured for concurrent duplicate scan test.")
+
+    engine = create_engine(database_url)
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(bind=engine, future=True)
 
