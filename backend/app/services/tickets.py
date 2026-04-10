@@ -1342,15 +1342,22 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_INVALID:
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
-        existing = db.execute(
-            select(Ticket).where(
-                Ticket.event_id == event_id,
-                or_(
+        if qr_payload:
+            existing = db.execute(
+                select(Ticket).where(
+                    Ticket.event_id == event_id,
                     Ticket.qr_payload == qr_payload,
+                )
+            ).scalars().first()
+        elif ticket_code:
+            existing = db.execute(
+                select(Ticket).where(
+                    Ticket.event_id == event_id,
                     Ticket.ticket_code == ticket_code,
-                ),
-            )
-        ).scalars().first()
+                )
+            ).scalars().first()
+        else:
+            existing = None
         if existing is not None:
             raise TicketCheckInConflictError("Already processed")
         raise TicketNotFoundError("Ticket not found.")

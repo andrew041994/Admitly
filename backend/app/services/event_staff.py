@@ -6,9 +6,11 @@ from sqlalchemy.orm import Session
 from app.models.enums import EventStaffRole, EventStatus
 from app.models.event import Event
 from app.models.event_staff import EventStaff
+from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
 from app.services.event_permissions import (
     EventPermissionAction,
+    EventPermissionDeniedError,
     has_event_permission_by_id,
     require_event_permission,
 )
@@ -29,12 +31,23 @@ class EventStaffValidationError(EventStaffError):
 
 
 def list_event_staff(db: Session, *, actor_user_id: int, event_id: int) -> list[EventStaff]:
-    require_event_permission(
-        db,
-        user_id=actor_user_id,
-        event_id=event_id,
-        action=EventPermissionAction.VIEW_EVENT_STAFF,
-    )
+    event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
+    is_owner = False
+    if event is not None:
+        organizer_user_id = db.execute(
+            select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
+        ).scalar_one_or_none()
+        is_owner = organizer_user_id == actor_user_id
+    if not (
+        is_owner
+        or has_event_permission_by_id(
+            db,
+            user_id=actor_user_id,
+            event_id=event_id,
+            action=EventPermissionAction.MANAGE_EVENT,
+        )
+    ):
+        raise EventPermissionDeniedError("Not authorized for this event action.")
     return db.execute(select(EventStaff).where(EventStaff.event_id == event_id).order_by(EventStaff.created_at.asc())).scalars().all()
 
 

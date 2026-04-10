@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import select
@@ -113,6 +113,11 @@ def has_event_permission_by_id(
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
         return False
+    if action in {EventPermissionAction.CHECKIN_TICKETS, EventPermissionAction.CHECKIN_OVERRIDE}:
+        now = datetime.now(UTC)
+        event_end_at = event.end_at if event.end_at.tzinfo is not None else event.end_at.replace(tzinfo=UTC)
+        if event_end_at < now:
+            return False
     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
     if user is None:
         return False
