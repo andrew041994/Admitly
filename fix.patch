@@ -1,119 +1,15 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
-index 270255ec00320a9363fca93ea89c58fe861ef5e3..b9a7c7a3f53898377e5ad59f7d373452d2de535a 100644
---- a/backend/tests/test_tickets_service.py
-+++ b/backend/tests/test_tickets_service.py
-@@ -1,29 +1,30 @@
- from __future__ import annotations
- 
- from concurrent.futures import ThreadPoolExecutor
- import os
+diff --git a/backend/tests/utils.py b/backend/tests/utils.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cce890a8e8d114c291bafa517ada88d2863897d3
+--- /dev/null
++++ b/backend/tests/utils.py
+@@ -0,0 +1,5 @@
 +import uuid
- 
- from fastapi import HTTPException
- from datetime import datetime, timedelta, timezone
- from decimal import Decimal
- from pathlib import Path
- 
- import pytest
- from sqlalchemy import create_engine, select
- from sqlalchemy.exc import OperationalError
- from sqlalchemy.orm import Session, sessionmaker
- 
- from app.db.base import Base
- from app.models import Event, EventStaff, OrganizerProfile, Order, OrderItem, Ticket, TicketScanLog, TicketTier, User, Venue
- from app.models.enums import (
-     CheckInStatus,
-     EventApprovalStatus,
-     EventStaffRole,
-     EventStatus,
-     EventVisibility,
-     OrderStatus,
-     TicketStatus,
- )
- from app.api.tickets import check_in_event_ticket, get_ticket_detail, get_ticket_qr_by_ticket_id
- from app.schemas.ticket import TicketCheckInRequest
- from app.services.orders import complete_paid_order
-@@ -51,73 +52,76 @@ from app.services.tickets import (
-     TicketNotFoundError,
-     TicketTransferError,
-     TicketVoidError,
-     check_in_ticket,
-     can_check_in_event_tickets,
-     can_void_event_ticket,
-     check_in_ticket_for_event,
-     get_event_check_in_summary,
-     issue_tickets_for_completed_order,
-     list_recent_check_in_attempts,
-     list_tickets_for_order_owner,
-     list_tickets_for_user,
-     override_ticket_check_in,
-     transfer_ticket_to_user,
-     validate_ticket_for_check_in,
-     void_ticket,
-     scan_ticket,
- )
- from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
- 
- 
- 
- def _seed_order(
-     db: Session,
-     *,
--    user_email: str = "buyer@example.com",
-+    user_email: str | None = None,
-+    suffix: str | None = None,
-     quantity: int = 3,
-     status: OrderStatus = OrderStatus.COMPLETED,
-     payment_verification_status: str = "verified",
- ) -> tuple[Order, OrderItem, TicketTier, User, Event]:
-     now = datetime.now(timezone.utc)
--    user = User(email=user_email, full_name="Buyer")
-+    suffix = suffix or str(uuid.uuid4())[:8]
-+    email = user_email or f"buyer_{suffix}@example.com"
-+    user = User(email=email, full_name="Buyer")
-     db.add(user)
-     db.flush()
- 
-     organizer_profile = OrganizerProfile(user_id=user.id, business_name="Org", display_name="Org")
-     db.add(organizer_profile)
-     db.flush()
- 
-     venue = Venue(organizer_id=organizer_profile.id, name="Venue")
-     db.add(venue)
-     db.flush()
- 
-     event = Event(
-         organizer_id=organizer_profile.id,
-         venue_id=venue.id,
-         title="Show",
--        slug=f"show-{user_email}-{quantity}",
-+        slug=f"show-{email}-{quantity}",
-         start_at=now + timedelta(days=2),
-         end_at=now + timedelta(days=2, hours=2),
-         status=EventStatus.PUBLISHED,
-         visibility=EventVisibility.PUBLIC,
-         approval_status=EventApprovalStatus.APPROVED,
-         timezone="America/Guyana",
-         is_location_pinned=False,
-     )
-     db.add(event)
-     db.flush()
- 
-     tier = TicketTier(
-         event_id=event.id,
-         name="General",
-         tier_code=f"GEN-{user.id}",
-         price_amount=Decimal("150.00"),
-         currency="GYD",
-         quantity_total=100,
-         quantity_sold=0,
-         quantity_held=0,
-         min_per_order=1,
-         max_per_order=10,
-         is_active=True,
-         sort_order=0,
-     )
++
++
++def unique_email(prefix: str = "user") -> str:
++    return f"{prefix}_{uuid.uuid4().hex[:8]}@example.com"
  
 EOF
 )
