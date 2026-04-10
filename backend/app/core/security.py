@@ -20,8 +20,8 @@ class TokenError(Exception):
     pass
 
 
-def normalize_email(value: str) -> str:
-    return value.strip().lower()
+def normalize_email(email):
+    return (email or "").strip().lower()
 
 
 def _password_digest(password: str, salt_hex: str) -> str:

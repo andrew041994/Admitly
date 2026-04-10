@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import select
@@ -11,9 +10,6 @@ from app.models.event import Event
 from app.models.event_staff import EventStaff
 from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
-
-UTC = timezone.utc
-
 
 class EventPermissionAction(str, Enum):
     VIEW_EVENT_STAFF = "view_event_staff"
@@ -121,21 +117,17 @@ def has_event_permission_by_id(
     if _is_event_owner(db, event=event, user_id=user_id):
         return True
 
-    if action in {EventPermissionAction.CHECKIN_TICKETS, EventPermissionAction.CHECK_IN}:
+    if action == EventPermissionAction.CHECKIN_TICKETS:
         staff = db.execute(
             select(EventStaff).where(
                 EventStaff.event_id == event_id,
                 EventStaff.user_id == user_id,
-                EventStaff.is_active.is_(True),
+                EventStaff.is_active == True,
             )
-        ).scalar_one_or_none()
-        if staff is None or staff.role != EventStaffRole.CHECKIN:
-            return False
-        now = datetime.now(UTC)
-        event_end_at = event.end_at if event.end_at.tzinfo is not None else event.end_at.replace(tzinfo=UTC)
-        if event_end_at < now:
-            return False
-        return True
+        ).scalars().first()
+        if staff and staff.role == EventStaffRole.CHECKIN:
+            return True
+        return False
     role = _get_staff_role(db, event_id=event_id, user_id=user_id)
     if role is None:
         return False

@@ -545,11 +545,11 @@ def create_ticket_transfer_invite(
             raise TicketTransferError("Cannot transfer a ticket to yourself.")
     else:
         if normalized_email is not None:
-            matched_user = db.execute(
+            user = db.execute(
                 select(User).where(func.lower(User.email) == normalized_email)
             ).scalars().first()
-            if matched_user is not None:
-                recipient_user_id = matched_user.id
+            if user:
+                recipient_user_id = user.id
         if recipient_user_id is None and normalized_phone is not None:
             matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalars().first()
             if matched_user is not None:
@@ -769,7 +769,7 @@ def can_actor_check_in_event(db: Session, *, user_id: int, event_id: int) -> boo
         db,
         user_id=user_id,
         event_id=event_id,
-        action=EventPermissionAction.CHECK_IN,
+        action=EventPermissionAction.CHECKIN_TICKETS,
     )
 
 
@@ -791,7 +791,7 @@ def can_scan_event(db: Session, *, user: User, event: Event) -> bool:
         db,
         user_id=user.id,
         event_id=event.id,
-        action=EventPermissionAction.CHECK_IN,
+        action=EventPermissionAction.CHECKIN_TICKETS,
     )
 
 
@@ -1339,6 +1339,7 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_INVALID:
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
+        existing = None
         if qr_payload:
             existing = db.execute(
                 select(Ticket).where(
@@ -1353,9 +1354,7 @@ def check_in_ticket_for_event(
                     Ticket.ticket_code == ticket_code,
                 )
             ).scalars().first()
-        else:
-            existing = None
-        if existing is not None:
+        if existing:
             raise TicketCheckInConflictError("Already processed")
         raise TicketNotFoundError("Ticket not found.")
     if result.status == CHECK_IN_STATUS_WRONG_EVENT:
