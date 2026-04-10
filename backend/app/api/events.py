@@ -463,7 +463,12 @@ def _list_events_for_organizer(db: Session, *, user_id: int, active_only: bool) 
             Event.status != EventStatus.CANCELLED,
             Event.end_at > now,
         )
-    return db.execute(query.order_by(Event.start_at.asc())).scalars().all()
+    return (
+        db.execute(query.order_by(Event.start_at.asc()))
+        .unique()
+        .scalars()
+        .all()
+    )
 
 
 @router.get("/mine", response_model=list[MyEventItemResponse])

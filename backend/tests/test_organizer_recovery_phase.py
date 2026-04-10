@@ -252,6 +252,51 @@ def test_mine_and_active_event_listing(client: TestClient, db_session: Session) 
     assert titles == ["Active Event"]
 
 
+def test_mine_active_listing_with_multiple_tiers_has_no_duplicates(client: TestClient, db_session: Session) -> None:
+    owner = _seed_user(db_session, "owner-tiers@example.com", "Owner Tiers")
+    event = _seed_event(db_session, owner, title="Tiered Active Event", end_offset_hours=10)
+    db_session.add_all(
+        [
+            TicketTier(
+                event_id=event.id,
+                name="General",
+                tier_code="GEN",
+                price_amount=100,
+                currency="GYD",
+                quantity_total=50,
+                quantity_sold=0,
+                quantity_held=0,
+                min_per_order=1,
+                max_per_order=5,
+                is_active=True,
+                sort_order=0,
+            ),
+            TicketTier(
+                event_id=event.id,
+                name="VIP",
+                tier_code="VIP",
+                price_amount=250,
+                currency="GYD",
+                quantity_total=25,
+                quantity_sold=0,
+                quantity_held=0,
+                min_per_order=1,
+                max_per_order=2,
+                is_active=True,
+                sort_order=1,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    active = client.get("/events/mine/active", headers={"x-user-id": str(owner.id)})
+    assert active.status_code == 200
+    body = active.json()
+    assert len(body) == 1
+    assert body[0]["id"] == event.id
+
+
+
 def test_staff_assignment_permissions_and_expiration(client: TestClient, db_session: Session) -> None:
     owner = _seed_user(db_session, "org@example.com", "Organizer")
     staff = _seed_user(db_session, "staff@example.com", "Staff")

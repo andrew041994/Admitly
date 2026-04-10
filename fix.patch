@@ -1,85 +1,104 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/screens/MyEventsScreen.tsx b/mobile/src/navigation/screens/MyEventsScreen.tsx
-index d2e8f94cf04a91155cfb62505628f0f17e02124a..fc27e78b29542c2c9ad08017ace65d4e7f117658 100644
---- a/mobile/src/navigation/screens/MyEventsScreen.tsx
-+++ b/mobile/src/navigation/screens/MyEventsScreen.tsx
-@@ -1,41 +1,72 @@
- import { useEffect, useState } from 'react';
- import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+diff --git a/backend/tests/test_organizer_recovery_phase.py b/backend/tests/test_organizer_recovery_phase.py
+index ace36728a5cc326e041cef89fe9f5aad2ce3bd47..069d9400bd645b46e66a11d27350cac5d6c82b18 100644
+--- a/backend/tests/test_organizer_recovery_phase.py
++++ b/backend/tests/test_organizer_recovery_phase.py
+@@ -230,50 +230,95 @@ def test_event_creation_is_atomic_when_tier_validation_fails(client: TestClient,
+     before_count = db_session.query(Event).count()
+     response = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
+     assert response.status_code == 422
+     assert db_session.query(Event).count() == before_count
  
- import { ApiError } from '../../api/client';
--import { listMyEvents, MyEventItem } from '../../api/organizer';
-+import {
-+  cancelOrganizerEvent,
-+  listOrganizerEvents,
-+  OrganizerEventDashboardItem,
-+  publishOrganizerEvent,
-+  unpublishOrganizerEvent,
-+} from '../../api/organizer';
- import { theme } from '../../theme';
  
- export function MyEventsScreen({ onOpenEvent }: { onOpenEvent: (eventId: number) => void }) {
--  const [events, setEvents] = useState<MyEventItem[]>([]);
-+  const [events, setEvents] = useState<OrganizerEventDashboardItem[]>([]);
-   const [error, setError] = useState<string | null>(null);
+ def test_mine_and_active_event_listing(client: TestClient, db_session: Session) -> None:
+     owner = _seed_user(db_session, "owner@example.com", "Owner")
+     other = _seed_user(db_session, "other@example.com", "Other")
+     _seed_event(db_session, owner, title="Active Event", end_offset_hours=10)
+     ended = _seed_event(db_session, owner, title="Ended Event", end_offset_hours=-1)
+     ended.end_at = datetime.now(UTC) - timedelta(hours=1)
+     _seed_event(db_session, other, title="Other Event", end_offset_hours=10)
+     db_session.commit()
  
-+  const load = () =>
-+    listOrganizerEvents().then(setEvents).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load events.'));
+     mine = client.get("/events/mine", headers={"x-user-id": str(owner.id)})
+     assert mine.status_code == 200
+     assert len(mine.json()) == 2
+ 
+     active = client.get("/events/mine/active", headers={"x-user-id": str(owner.id)})
+     assert active.status_code == 200
+     titles = [row["title"] for row in active.json()]
+     assert titles == ["Active Event"]
+ 
+ 
++def test_mine_active_listing_with_multiple_tiers_has_no_duplicates(client: TestClient, db_session: Session) -> None:
++    owner = _seed_user(db_session, "owner-tiers@example.com", "Owner Tiers")
++    event = _seed_event(db_session, owner, title="Tiered Active Event", end_offset_hours=10)
++    db_session.add_all(
++        [
++            TicketTier(
++                event_id=event.id,
++                name="General",
++                tier_code="GEN",
++                price_amount=100,
++                currency="GYD",
++                quantity_total=50,
++                quantity_sold=0,
++                quantity_held=0,
++                min_per_order=1,
++                max_per_order=5,
++                is_active=True,
++                sort_order=0,
++            ),
++            TicketTier(
++                event_id=event.id,
++                name="VIP",
++                tier_code="VIP",
++                price_amount=250,
++                currency="GYD",
++                quantity_total=25,
++                quantity_sold=0,
++                quantity_held=0,
++                min_per_order=1,
++                max_per_order=2,
++                is_active=True,
++                sort_order=1,
++            ),
++        ]
++    )
++    db_session.commit()
 +
-   useEffect(() => {
--    listMyEvents().then(setEvents).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load events.'));
-+    load();
-   }, []);
++    active = client.get("/events/mine/active", headers={"x-user-id": str(owner.id)})
++    assert active.status_code == 200
++    body = active.json()
++    assert len(body) == 1
++    assert body[0]["id"] == event.id
++
++
++
+ def test_staff_assignment_permissions_and_expiration(client: TestClient, db_session: Session) -> None:
+     owner = _seed_user(db_session, "org@example.com", "Organizer")
+     staff = _seed_user(db_session, "staff@example.com", "Staff")
+     outsider = _seed_user(db_session, "outsider@example.com", "Outsider")
+     event = _seed_event(db_session, owner, title="Checkin", end_offset_hours=2)
+     outsider_event = _seed_event(db_session, outsider, title="Other", end_offset_hours=2)
+     db_session.commit()
  
-   return (
-     <View style={styles.container}>
-       <Text style={styles.title}>My Events</Text>
-       {error ? <Text style={styles.error}>{error}</Text> : null}
-       <FlatList
-         data={events}
-         keyExtractor={(item) => String(item.id)}
-         renderItem={({ item }) => (
-           <Pressable style={styles.item} onPress={() => onOpenEvent(item.id)}>
-             <Text style={styles.itemTitle}>{item.title}</Text>
--            <Text style={styles.meta}>{new Date(item.start_at).toLocaleString()} • {item.is_active ? 'Active' : 'Ended'}</Text>
-+            <Text style={styles.meta}>{new Date(item.start_at).toLocaleString()} • {item.venue_name ?? 'Venue TBA'}</Text>
-+            <Text style={styles.meta}>Status: {item.status}</Text>
-+            <Text style={styles.meta}>Sold: {item.sold_count} • Revenue: {item.gross_revenue.toFixed(2)}</Text>
-+            <View style={styles.actions}>
-+              {(item.status === 'draft' || item.status === 'unpublished') ? (
-+                <Pressable style={styles.actionButton} onPress={() => publishOrganizerEvent(item.id).then(load)}>
-+                  <Text style={styles.actionText}>Publish</Text>
-+                </Pressable>
-+              ) : null}
-+              {item.status === 'published' ? (
-+                <Pressable style={styles.actionButton} onPress={() => unpublishOrganizerEvent(item.id).then(load)}>
-+                  <Text style={styles.actionText}>Unpublish</Text>
-+                </Pressable>
-+              ) : null}
-+              {item.status !== 'cancelled' ? (
-+                <Pressable style={styles.actionButton} onPress={() => cancelOrganizerEvent(item.id).then(load)}>
-+                  <Text style={styles.actionText}>Cancel</Text>
-+                </Pressable>
-+              ) : null}
-+            </View>
-           </Pressable>
-         )}
-       />
-     </View>
-   );
- }
+     assign = client.post(f"/events/{event.id}/staff", json={"user_id": staff.id, "role": EventStaffRole.CHECKIN.value}, headers={"x-user-id": str(owner.id)})
+     assert assign.status_code == 201
+     duplicate = client.post(f"/events/{event.id}/staff", json={"user_id": staff.id, "role": EventStaffRole.CHECKIN.value}, headers={"x-user-id": str(owner.id)})
+     assert duplicate.status_code == 409
+     forbidden = client.post(f"/events/{event.id}/staff", json={"user_id": owner.id, "role": EventStaffRole.CHECKIN.value}, headers={"x-user-id": str(outsider.id)})
+     assert forbidden.status_code == 403
  
- const styles = StyleSheet.create({
-   container: { flex: 1, padding: theme.spacing.lg, backgroundColor: theme.colors.background },
-   title: { color: theme.colors.textPrimary, fontSize: 22, fontWeight: '700', marginBottom: theme.spacing.md },
-   item: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: theme.spacing.md, marginBottom: theme.spacing.sm },
-   itemTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
-   meta: { color: theme.colors.textSecondary, marginTop: 4 },
-+  actions: { flexDirection: 'row', marginTop: theme.spacing.sm },
-+  actionButton: { borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.sm, paddingVertical: 6, paddingHorizontal: 10, marginRight: theme.spacing.sm },
-+  actionText: { color: theme.colors.textPrimary, fontWeight: '600' },
-   error: { color: theme.colors.error, marginBottom: theme.spacing.sm },
- });
+     assert has_event_permission_by_id(db_session, user_id=staff.id, event_id=event.id, action=EventPermissionAction.CHECKIN_TICKETS)
+     assert not has_event_permission_by_id(db_session, user_id=staff.id, event_id=event.id, action=EventPermissionAction.EDIT_EVENT)
+     assert not has_event_permission_by_id(db_session, user_id=staff.id, event_id=outsider_event.id, action=EventPermissionAction.CHECKIN_TICKETS)
+ 
+     event.end_at = datetime.now(UTC) - timedelta(minutes=1)
+     db_session.commit()
+     assert not has_event_permission_by_id(db_session, user_id=staff.id, event_id=event.id, action=EventPermissionAction.CHECKIN_TICKETS)
+ 
+ 
+ def test_dashboard_profile_and_user_search(client: TestClient, db_session: Session) -> None:
  
 EOF
 )
