@@ -86,6 +86,51 @@ export type EventDashboard = {
   }>;
 };
 
+export type OrganizerEventDashboardItem = {
+  id: number;
+  title: string;
+  cover_image_url: string | null;
+  venue_name: string | null;
+  city: string | null;
+  start_at: string;
+  end_at: string;
+  status: 'draft' | 'published' | 'unpublished' | 'cancelled' | string;
+  total_ticket_types: number;
+  total_quantity: number;
+  sold_count: number;
+  gross_revenue: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrganizerEventDetail = CreateEventResponse & {
+  short_description?: string | null;
+  long_description?: string | null;
+  category?: string | null;
+  cover_image_url?: string | null;
+  start_at: string;
+  end_at: string;
+  doors_open_at: string | null;
+  sales_start_at: string | null;
+  sales_end_at: string | null;
+  visibility: string;
+  custom_address_text: string | null;
+  ticket_tiers: Array<{
+    id: number;
+    event_id: number;
+    name: string;
+    description: string | null;
+    tier_code: string;
+    price_amount: string;
+    currency: string;
+    quantity_total: number;
+    min_per_order: number;
+    max_per_order: number;
+    is_active: boolean;
+    sort_order: number;
+  }>;
+};
+
 export type EventStaffAssignment = {
   id: number;
   event_id: number;
@@ -111,6 +156,34 @@ export async function createEvent(payload: CreateEventPayload): Promise<CreateEv
 export async function listMyEvents(activeOnly = false): Promise<MyEventItem[]> {
   const query = activeOnly ? '?active_only=true' : '';
   return apiRequest<MyEventItem[]>({ path: `/events/mine${query}`, method: 'GET' });
+}
+
+export async function listOrganizerEvents(): Promise<OrganizerEventDashboardItem[]> {
+  return apiRequest<OrganizerEventDashboardItem[]>({ path: '/events/organizer/events', method: 'GET' });
+}
+
+export async function getOrganizerEvent(eventId: number): Promise<OrganizerEventDetail> {
+  return apiRequest<OrganizerEventDetail>({ path: `/events/organizer/events/${eventId}`, method: 'GET' });
+}
+
+export async function updateOrganizerEvent(eventId: number, payload: Record<string, unknown>): Promise<OrganizerEventDetail> {
+  return apiRequest<OrganizerEventDetail>({ path: `/events/organizer/events/${eventId}`, method: 'PATCH', body: JSON.stringify(payload) });
+}
+
+export async function publishOrganizerEvent(eventId: number): Promise<OrganizerEventDetail> {
+  return apiRequest<OrganizerEventDetail>({ path: `/events/organizer/events/${eventId}/publish`, method: 'POST' });
+}
+
+export async function unpublishOrganizerEvent(eventId: number): Promise<OrganizerEventDetail> {
+  return apiRequest<OrganizerEventDetail>({ path: `/events/organizer/events/${eventId}/unpublish`, method: 'POST' });
+}
+
+export async function cancelOrganizerEvent(eventId: number, reason?: string): Promise<OrganizerEventDetail> {
+  return apiRequest<OrganizerEventDetail>({
+    path: `/events/organizer/events/${eventId}/cancel`,
+    method: 'POST',
+    body: JSON.stringify({ reason: reason ?? null }),
+  });
 }
 
 export async function listMyActiveEvents(): Promise<MyEventItem[]> {

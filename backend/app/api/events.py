@@ -35,6 +35,9 @@ from app.schemas.event import (
     EventStaffCreateRequest,
     EventStaffResponse,
     EventStaffUpdateRequest,
+    OrganizerEventDashboardItemResponse,
+    OrganizerEventDetailResponse,
+    OrganizerEventUpdateRequest,
 )
 from app.services.event_permissions import EventPermissionDeniedError, EventPermissionNotFoundError
 from app.services.event_staff import (
@@ -56,6 +59,16 @@ from app.services.events import (
     create_event_with_ticket_tiers,
     get_event_refund_batch,
     list_event_refund_batches,
+)
+from app.services.organizer_events import (
+    OrganizerEventAuthorizationError,
+    OrganizerEventNotFoundError,
+    OrganizerEventValidationError,
+    calculate_event_metrics,
+    get_owned_event,
+    publish_event,
+    unpublish_event,
+    update_event_and_tiers,
 )
 from app.services.reporting import get_event_reporting_summary, get_event_tier_summary
 
@@ -399,12 +412,50 @@ def _to_my_event_item(event: Event) -> MyEventItemResponse:
     )
 
 
+def _to_organizer_event_detail(event: Event) -> OrganizerEventDetailResponse:
+    return OrganizerEventDetailResponse(
+        id=event.id,
+        title=event.title,
+        short_description=event.short_description,
+        long_description=event.long_description,
+        category=event.category,
+        cover_image_url=event.cover_image_url,
+        start_at=event.start_at,
+        end_at=event.end_at,
+        doors_open_at=event.doors_open_at,
+        sales_start_at=event.sales_start_at,
+        sales_end_at=event.sales_end_at,
+        timezone=event.timezone,
+        visibility=event.visibility.value,
+        status=event.status.value,
+        custom_venue_name=event.custom_venue_name,
+        custom_address_text=event.custom_address_text,
+        ticket_tiers=[
+            EventCreateTicketTierResponse(
+                id=tier.id,
+                event_id=tier.event_id,
+                name=tier.name,
+                description=tier.description,
+                tier_code=tier.tier_code,
+                price_amount=str(Decimal(tier.price_amount)),
+                currency=tier.currency,
+                quantity_total=tier.quantity_total,
+                min_per_order=tier.min_per_order,
+                max_per_order=tier.max_per_order,
+                is_active=bool(tier.is_active),
+                sort_order=tier.sort_order,
+            )
+            for tier in sorted(event.ticket_tiers, key=lambda t: (t.sort_order, t.id))
+        ],
+    )
+
+
 def _list_events_for_organizer(db: Session, *, user_id: int, active_only: bool) -> list[Event]:
     now = datetime.now(UTC)
     query = (
         select(Event)
         .join(OrganizerProfile, OrganizerProfile.id == Event.organizer_id)
-        .options(joinedload(Event.venue))
+        .options(joinedload(Event.venue), joinedload(Event.ticket_tiers))
         .where(OrganizerProfile.user_id == user_id)
     )
     if active_only:
@@ -423,6 +474,119 @@ def get_my_events(
 ) -> list[MyEventItemResponse]:
     events = _list_events_for_organizer(db, user_id=user_id, active_only=active_only)
     return [_to_my_event_item(event) for event in events]
+
+
+@router.get("/organizer/events", response_model=list[OrganizerEventDashboardItemResponse])
+def get_organizer_events(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[OrganizerEventDashboardItemResponse]:
+    events = _list_events_for_organizer(db, user_id=user_id, active_only=False)
+    rows: list[OrganizerEventDashboardItemResponse] = []
+    for event in sorted(events, key=lambda ev: ev.created_at, reverse=True):
+        metrics = calculate_event_metrics(db, event_id=event.id)
+        tiers = list(event.ticket_tiers)
+        rows.append(
+            OrganizerEventDashboardItemResponse(
+                id=event.id,
+                title=event.title,
+                cover_image_url=event.cover_image_url,
+                venue_name=event.venue.name if event.venue else event.custom_venue_name,
+                city=event.venue.city if event.venue else None,
+                start_at=event.start_at,
+                end_at=event.end_at,
+                status=event.status.value,
+                total_ticket_types=len(tiers),
+                total_quantity=sum(int(t.quantity_total) for t in tiers),
+                sold_count=metrics.sold_count,
+                gross_revenue=float(metrics.gross_revenue),
+                created_at=event.created_at,
+                updated_at=event.updated_at,
+            )
+        )
+    return rows
+
+
+@router.get("/organizer/events/{event_id}", response_model=OrganizerEventDetailResponse)
+def get_organizer_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> OrganizerEventDetailResponse:
+    try:
+        event = get_owned_event(db, actor_user_id=user_id, event_id=event_id)
+    except OrganizerEventNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except OrganizerEventAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return _to_organizer_event_detail(event)
+
+
+@router.patch("/organizer/events/{event_id}", response_model=OrganizerEventDetailResponse)
+def patch_organizer_event(
+    event_id: int,
+    payload: OrganizerEventUpdateRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> OrganizerEventDetailResponse:
+    try:
+        event = update_event_and_tiers(db, actor_user_id=user_id, event_id=event_id, payload=payload)
+        db.commit()
+    except OrganizerEventNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except OrganizerEventAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except OrganizerEventValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": exc.code, "errors": exc.errors}) from exc
+    return _to_organizer_event_detail(event)
+
+
+@router.post("/organizer/events/{event_id}/publish", response_model=OrganizerEventDetailResponse)
+def publish_organizer_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> OrganizerEventDetailResponse:
+    try:
+        event = publish_event(db, actor_user_id=user_id, event_id=event_id)
+        db.commit()
+    except OrganizerEventNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except OrganizerEventAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except OrganizerEventValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": exc.code, "errors": exc.errors}) from exc
+    return _to_organizer_event_detail(event)
+
+
+@router.post("/organizer/events/{event_id}/unpublish", response_model=OrganizerEventDetailResponse)
+def unpublish_organizer_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> OrganizerEventDetailResponse:
+    try:
+        event = unpublish_event(db, actor_user_id=user_id, event_id=event_id)
+        db.commit()
+    except OrganizerEventNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except OrganizerEventAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except OrganizerEventValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": exc.code, "errors": exc.errors}) from exc
+    return _to_organizer_event_detail(event)
+
+
+@router.post("/organizer/events/{event_id}/cancel", response_model=OrganizerEventDetailResponse)
+def cancel_organizer_event(
+    event_id: int,
+    payload: EventCancelRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> OrganizerEventDetailResponse:
+    cancel_existing_event(event_id=event_id, payload=payload, db=db, user_id=user_id)
+    event = get_owned_event(db, actor_user_id=user_id, event_id=event_id)
+    return _to_organizer_event_detail(event)
 
 
 @router.get("/mine/active", response_model=list[MyEventItemResponse])

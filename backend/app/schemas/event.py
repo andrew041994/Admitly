@@ -242,6 +242,74 @@ class MyEventItemResponse(BaseModel):
     is_ended: bool
 
 
+class OrganizerTicketTierUpsertRequest(BaseModel):
+    id: int | None = None
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = None
+    price_amount: Decimal
+    currency: str = Field(default="GYD", min_length=3, max_length=3)
+    quantity_total: int
+    min_per_order: int = 1
+    max_per_order: int = 10
+    is_active: bool | None = None
+    sort_order: int | None = None
+    delete: bool = False
+
+
+class OrganizerEventUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    short_description: str | None = None
+    long_description: str | None = None
+    category: str | None = Field(default=None, max_length=100)
+    cover_image_url: str | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    doors_open_at: datetime | None = None
+    sales_start_at: datetime | None = None
+    sales_end_at: datetime | None = None
+    visibility: str | None = None
+    custom_venue_name: str | None = None
+    custom_address_text: str | None = None
+    ticket_tiers: list[OrganizerTicketTierUpsertRequest] | None = None
+
+
+class OrganizerEventDashboardItemResponse(BaseModel):
+    id: int
+    title: str
+    cover_image_url: str | None
+    venue_name: str | None
+    city: str | None
+    start_at: datetime
+    end_at: datetime
+    status: str
+    total_ticket_types: int
+    total_quantity: int
+    sold_count: int
+    gross_revenue: float
+    created_at: datetime
+    updated_at: datetime
+
+
+class OrganizerEventDetailResponse(BaseModel):
+    id: int
+    title: str
+    short_description: str | None
+    long_description: str | None
+    category: str | None
+    cover_image_url: str | None
+    start_at: datetime
+    end_at: datetime
+    doors_open_at: datetime | None
+    sales_start_at: datetime | None
+    sales_end_at: datetime | None
+    timezone: str
+    visibility: str
+    status: str
+    custom_venue_name: str | None
+    custom_address_text: str | None
+    ticket_tiers: list[EventCreateTicketTierResponse]
+
+
 class EventDashboardTierResponse(BaseModel):
     ticket_tier_id: int
     name: str

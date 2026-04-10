@@ -1,241 +1,84 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/screens/CreateEventScreen.tsx b/mobile/src/navigation/screens/CreateEventScreen.tsx
-index ea40d2b6399d57c3dd736ba152b47db206752b5a..a9755f68becf2e7a2ac5d9b5016eab51cfbc9658 100644
---- a/mobile/src/navigation/screens/CreateEventScreen.tsx
-+++ b/mobile/src/navigation/screens/CreateEventScreen.tsx
-@@ -41,50 +41,63 @@ type PickerField =
-   | 'end_date'
-   | 'end_time'
-   | 'doors_open_time'
-   | 'sales_start_date'
-   | 'sales_start_time'
-   | 'sales_end_date'
-   | 'sales_end_time';
+diff --git a/mobile/src/navigation/screens/MyEventsScreen.tsx b/mobile/src/navigation/screens/MyEventsScreen.tsx
+index d2e8f94cf04a91155cfb62505628f0f17e02124a..fc27e78b29542c2c9ad08017ace65d4e7f117658 100644
+--- a/mobile/src/navigation/screens/MyEventsScreen.tsx
++++ b/mobile/src/navigation/screens/MyEventsScreen.tsx
+@@ -1,41 +1,72 @@
+ import { useEffect, useState } from 'react';
+ import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
  
- type PickerSession = {
-   field: PickerField;
-   mode: 'date' | 'time';
-   value: Date;
-   selectedDate?: Date;
- } | null;
+ import { ApiError } from '../../api/client';
+-import { listMyEvents, MyEventItem } from '../../api/organizer';
++import {
++  cancelOrganizerEvent,
++  listOrganizerEvents,
++  OrganizerEventDashboardItem,
++  publishOrganizerEvent,
++  unpublishOrganizerEvent,
++} from '../../api/organizer';
+ import { theme } from '../../theme';
  
- const formatDate = (value: Date) =>
-   new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(value);
+ export function MyEventsScreen({ onOpenEvent }: { onOpenEvent: (eventId: number) => void }) {
+-  const [events, setEvents] = useState<MyEventItem[]>([]);
++  const [events, setEvents] = useState<OrganizerEventDashboardItem[]>([]);
+   const [error, setError] = useState<string | null>(null);
  
- const formatTime = (value: Date) => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(value);
- 
- const formatDateTimeValue = (field: DateTimeField) => {
-   if (!field.date || !field.time) return 'Select date and time';
-   return `${formatDate(field.date)} • ${formatTime(field.time)}`;
- };
- 
-+const getPickerTitle = (field: PickerField) => {
-+  if (field.startsWith('start_')) return 'Event start';
-+  if (field.startsWith('end_')) return 'Event end';
-+  if (field === 'doors_open_time') return 'Doors open';
-+  if (field.startsWith('sales_start_')) return 'Sales start';
-+  return 'Sales end';
-+};
++  const load = () =>
++    listOrganizerEvents().then(setEvents).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load events.'));
 +
-+const getPickerStepLabel = (session: Exclude<PickerSession, null>) => {
-+  if (session.field === 'doors_open_time') return 'Select time';
-+  return session.mode === 'date' ? 'Step 1 of 2 • Select date' : 'Step 2 of 2 • Select time';
-+};
-+
- const buildGuyanaIso = (date: Date, time: Date) => {
-   const year = date.getFullYear();
-   const month = date.getMonth();
-   const day = date.getDate();
-   const hour = time.getHours();
-   const minute = time.getMinutes();
-   const utcMillis = Date.UTC(year, month, day, hour + 4, minute, 0, 0);
-   return new Date(utcMillis).toISOString();
- };
+   useEffect(() => {
+-    listMyEvents().then(setEvents).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load events.'));
++    load();
+   }, []);
  
- export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) => void }) {
-   const [title, setTitle] = useState('');
-   const [shortDescription, setShortDescription] = useState('');
-   const [longDescription, setLongDescription] = useState('');
-   const [category, setCategory] = useState('');
-   const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
-   const [endAt, setEndAt] = useState<DateTimeField>({ date: null, time: null });
-   const [doorsOpenAt, setDoorsOpenAt] = useState<Date | null>(null);
-   const [salesStartAt, setSalesStartAt] = useState<DateTimeField>({ date: null, time: null });
-   const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
-   const [pickerSession, setPickerSession] = useState<PickerSession>(null);
-   const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
-   const [venueName, setVenueName] = useState('');
-   const [addressText, setAddressText] = useState('');
-   const [refundPolicyText, setRefundPolicyText] = useState('');
-@@ -359,69 +372,75 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
-           style={[styles.input, styles.multiline]}
-           multiline
-           numberOfLines={3}
-           value={refundPolicyText}
-           onChangeText={setRefundPolicyText}
-           placeholder="Refund policy"
-           placeholderTextColor={theme.colors.textSecondary}
-         />
-         <TextInput
-           style={[styles.input, styles.multiline]}
-           multiline
-           numberOfLines={3}
-           value={termsText}
-           onChangeText={setTermsText}
-           placeholder="Terms"
-           placeholderTextColor={theme.colors.textSecondary}
-         />
- 
-         {error ? <Text style={styles.error}>{error}</Text> : null}
-         <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
-           <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
-         </Pressable>
-       </ScrollView>
- 
-       {pickerSession ? (
--        <Modal transparent animationType="slide" visible onRequestClose={cancelPickerSelection}>
-+        <Modal transparent animationType="fade" visible onRequestClose={cancelPickerSelection}>
-           <View style={styles.modalBackdrop}>
-             <Pressable style={StyleSheet.absoluteFill} onPress={cancelPickerSelection} />
--            <View style={styles.modalSheet}>
-+            <View style={styles.modalCard}>
-+              <View style={styles.modalHeading}>
-+                <Text style={styles.modalTitle}>{getPickerTitle(pickerSession.field)}</Text>
-+                <Text style={styles.modalSubtitle}>{getPickerStepLabel(pickerSession)}</Text>
-+              </View>
-               <View style={styles.modalActions}>
-                 <Pressable onPress={cancelPickerSelection}>
-                   <Text style={styles.modalActionText}>Cancel</Text>
-                 </Pressable>
-                 <Pressable onPress={completePickerSelection}>
-                   <Text style={styles.modalActionText}>Done</Text>
-                 </Pressable>
-               </View>
--              <DateTimePicker
--                value={pickerDraftValue}
--                mode={pickerSession.mode}
--                onChange={(_, date) => {
--                  if (date) setPickerDraftValue(date);
--                }}
--              />
-+              <View style={styles.pickerFrame}>
-+                <DateTimePicker
-+                  value={pickerDraftValue}
-+                  mode={pickerSession.mode}
-+                  onChange={(_, date) => {
-+                    if (date) setPickerDraftValue(date);
-+                  }}
-+                />
-+              </View>
-             </View>
-           </View>
-         </Modal>
-       ) : null}
-     </>
+   return (
+     <View style={styles.container}>
+       <Text style={styles.title}>My Events</Text>
+       {error ? <Text style={styles.error}>{error}</Text> : null}
+       <FlatList
+         data={events}
+         keyExtractor={(item) => String(item.id)}
+         renderItem={({ item }) => (
+           <Pressable style={styles.item} onPress={() => onOpenEvent(item.id)}>
+             <Text style={styles.itemTitle}>{item.title}</Text>
+-            <Text style={styles.meta}>{new Date(item.start_at).toLocaleString()} • {item.is_active ? 'Active' : 'Ended'}</Text>
++            <Text style={styles.meta}>{new Date(item.start_at).toLocaleString()} • {item.venue_name ?? 'Venue TBA'}</Text>
++            <Text style={styles.meta}>Status: {item.status}</Text>
++            <Text style={styles.meta}>Sold: {item.sold_count} • Revenue: {item.gross_revenue.toFixed(2)}</Text>
++            <View style={styles.actions}>
++              {(item.status === 'draft' || item.status === 'unpublished') ? (
++                <Pressable style={styles.actionButton} onPress={() => publishOrganizerEvent(item.id).then(load)}>
++                  <Text style={styles.actionText}>Publish</Text>
++                </Pressable>
++              ) : null}
++              {item.status === 'published' ? (
++                <Pressable style={styles.actionButton} onPress={() => unpublishOrganizerEvent(item.id).then(load)}>
++                  <Text style={styles.actionText}>Unpublish</Text>
++                </Pressable>
++              ) : null}
++              {item.status !== 'cancelled' ? (
++                <Pressable style={styles.actionButton} onPress={() => cancelOrganizerEvent(item.id).then(load)}>
++                  <Text style={styles.actionText}>Cancel</Text>
++                </Pressable>
++              ) : null}
++            </View>
+           </Pressable>
+         )}
+       />
+     </View>
    );
  }
  
  const styles = StyleSheet.create({
-   container: { padding: theme.spacing.lg, backgroundColor: theme.colors.background, gap: theme.spacing.sm },
-   title: { color: theme.colors.textPrimary, fontSize: 24, fontWeight: '700' },
-   sectionTitle: { color: theme.colors.primary, fontSize: 16, fontWeight: '700', marginTop: theme.spacing.md },
-   input: {
-     borderWidth: 1,
-     borderColor: theme.colors.border,
-     borderRadius: theme.radius.md,
-     color: theme.colors.textPrimary,
-     padding: theme.spacing.md,
-     backgroundColor: theme.colors.surface,
-   },
-   multiline: { minHeight: 90, textAlignVertical: 'top' },
-   row: { flexDirection: 'row', gap: theme.spacing.sm },
-   half: { flex: 1 },
-   tierCard: {
-     borderWidth: 1,
-@@ -442,52 +461,76 @@ const styles = StyleSheet.create({
-   },
-   timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
-   pickerValue: { color: theme.colors.textPrimary },
-   secondaryButton: {
-     borderWidth: 1,
-     borderColor: theme.colors.primary,
-     borderRadius: theme.radius.md,
-     padding: theme.spacing.md,
-     alignItems: 'center',
-   },
-   secondaryButtonText: { color: theme.colors.primary, fontWeight: '700' },
-   removeButton: {
-     borderWidth: 1,
-     borderColor: theme.colors.error,
-     borderRadius: theme.radius.sm,
-     padding: theme.spacing.sm,
-     alignItems: 'center',
-   },
-   removeButtonText: { color: theme.colors.error, fontWeight: '600' },
-   button: { backgroundColor: theme.colors.primary, borderRadius: theme.radius.md, padding: theme.spacing.md, marginTop: theme.spacing.sm },
-   buttonDisabled: { opacity: 0.7 },
-   buttonText: { color: '#111', fontWeight: '700', textAlign: 'center' },
-   error: { color: theme.colors.error },
-   modalBackdrop: {
-     flex: 1,
--    justifyContent: 'flex-end',
-+    justifyContent: 'center',
-+    alignItems: 'center',
-     backgroundColor: 'rgba(0,0,0,0.65)',
-+    padding: theme.spacing.lg,
-   },
--  modalSheet: {
-+  modalCard: {
-     backgroundColor: theme.colors.surfaceElevated,
--    borderTopLeftRadius: theme.radius.lg,
--    borderTopRightRadius: theme.radius.lg,
--    borderTopWidth: 1,
--    borderLeftWidth: 1,
--    borderRightWidth: 1,
-+    borderRadius: theme.radius.lg,
-+    borderWidth: 1,
-     borderColor: theme.colors.border,
--    paddingBottom: theme.spacing.lg,
-+    width: '100%',
-+    maxWidth: 420,
-+    shadowColor: '#000',
-+    shadowOffset: { width: 0, height: 14 },
-+    shadowOpacity: 0.35,
-+    shadowRadius: 24,
-+    elevation: 10,
-+  },
-+  modalHeading: {
-+    paddingHorizontal: theme.spacing.lg,
-+    paddingTop: theme.spacing.lg,
-+    gap: 4,
-+  },
-+  modalTitle: {
-+    color: theme.colors.textPrimary,
-+    fontSize: 20,
-+    fontWeight: '700',
-+  },
-+  modalSubtitle: {
-+    color: theme.colors.textSecondary,
-+    fontSize: 13,
-   },
-   modalActions: {
-     flexDirection: 'row',
-     justifyContent: 'space-between',
-     paddingHorizontal: theme.spacing.lg,
-     paddingVertical: theme.spacing.md,
-     borderBottomWidth: 1,
-     borderBottomColor: theme.colors.border,
-+    marginTop: theme.spacing.sm,
-   },
-   modalActionText: {
-     color: theme.colors.primary,
-     fontWeight: '700',
-     fontSize: 16,
-   },
-+  pickerFrame: {
-+    alignItems: 'center',
-+    paddingVertical: theme.spacing.md,
-+  },
+   container: { flex: 1, padding: theme.spacing.lg, backgroundColor: theme.colors.background },
+   title: { color: theme.colors.textPrimary, fontSize: 22, fontWeight: '700', marginBottom: theme.spacing.md },
+   item: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: theme.spacing.md, marginBottom: theme.spacing.sm },
+   itemTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
+   meta: { color: theme.colors.textSecondary, marginTop: 4 },
++  actions: { flexDirection: 'row', marginTop: theme.spacing.sm },
++  actionButton: { borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.sm, paddingVertical: 6, paddingHorizontal: 10, marginRight: theme.spacing.sm },
++  actionText: { color: theme.colors.textPrimary, fontWeight: '600' },
+   error: { color: theme.colors.error, marginBottom: theme.spacing.sm },
  });
  
 EOF

@@ -4,6 +4,7 @@ from enum import Enum
 class EventStatus(str, Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
+    UNPUBLISHED = "unpublished"
     CANCELLED = "cancelled"
     COMPLETED = "completed"
 

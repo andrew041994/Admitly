@@ -2,15 +2,24 @@ import { useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../../api/client';
-import { listMyEvents, MyEventItem } from '../../api/organizer';
+import {
+  cancelOrganizerEvent,
+  listOrganizerEvents,
+  OrganizerEventDashboardItem,
+  publishOrganizerEvent,
+  unpublishOrganizerEvent,
+} from '../../api/organizer';
 import { theme } from '../../theme';
 
 export function MyEventsScreen({ onOpenEvent }: { onOpenEvent: (eventId: number) => void }) {
-  const [events, setEvents] = useState<MyEventItem[]>([]);
+  const [events, setEvents] = useState<OrganizerEventDashboardItem[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const load = () =>
+    listOrganizerEvents().then(setEvents).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load events.'));
+
   useEffect(() => {
-    listMyEvents().then(setEvents).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load events.'));
+    load();
   }, []);
 
   return (
@@ -23,7 +32,26 @@ export function MyEventsScreen({ onOpenEvent }: { onOpenEvent: (eventId: number)
         renderItem={({ item }) => (
           <Pressable style={styles.item} onPress={() => onOpenEvent(item.id)}>
             <Text style={styles.itemTitle}>{item.title}</Text>
-            <Text style={styles.meta}>{new Date(item.start_at).toLocaleString()} • {item.is_active ? 'Active' : 'Ended'}</Text>
+            <Text style={styles.meta}>{new Date(item.start_at).toLocaleString()} • {item.venue_name ?? 'Venue TBA'}</Text>
+            <Text style={styles.meta}>Status: {item.status}</Text>
+            <Text style={styles.meta}>Sold: {item.sold_count} • Revenue: {item.gross_revenue.toFixed(2)}</Text>
+            <View style={styles.actions}>
+              {(item.status === 'draft' || item.status === 'unpublished') ? (
+                <Pressable style={styles.actionButton} onPress={() => publishOrganizerEvent(item.id).then(load)}>
+                  <Text style={styles.actionText}>Publish</Text>
+                </Pressable>
+              ) : null}
+              {item.status === 'published' ? (
+                <Pressable style={styles.actionButton} onPress={() => unpublishOrganizerEvent(item.id).then(load)}>
+                  <Text style={styles.actionText}>Unpublish</Text>
+                </Pressable>
+              ) : null}
+              {item.status !== 'cancelled' ? (
+                <Pressable style={styles.actionButton} onPress={() => cancelOrganizerEvent(item.id).then(load)}>
+                  <Text style={styles.actionText}>Cancel</Text>
+                </Pressable>
+              ) : null}
+            </View>
           </Pressable>
         )}
       />
@@ -37,5 +65,8 @@ const styles = StyleSheet.create({
   item: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: theme.spacing.md, marginBottom: theme.spacing.sm },
   itemTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
   meta: { color: theme.colors.textSecondary, marginTop: 4 },
+  actions: { flexDirection: 'row', marginTop: theme.spacing.sm },
+  actionButton: { borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.sm, paddingVertical: 6, paddingHorizontal: 10, marginRight: theme.spacing.sm },
+  actionText: { color: theme.colors.textPrimary, fontWeight: '600' },
   error: { color: theme.colors.error, marginBottom: theme.spacing.sm },
 });
