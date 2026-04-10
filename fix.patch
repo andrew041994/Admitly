@@ -1,9 +1,10 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
-index f5a2d848dc6da9c0d99c43b05afad8d1bdbb9e80..02307db3d65c86c8ae40a9f14de81ceb26c644e7 100644
+index 02307db3d65c86c8ae40a9f14de81ceb26c644e7..f4c3bf4f0c56ffed783340a74ccca569a27ccad7 100644
 --- a/backend/app/services/tickets.py
 +++ b/backend/app/services/tickets.py
-@@ -521,52 +521,53 @@ def create_ticket_transfer_invite(
+@@ -520,61 +520,61 @@ def create_ticket_transfer_invite(
+     expires_at=None,
  ) -> TicketTransferInvite:
      normalized_email = normalize_email(recipient_email) if _normalize_optional(recipient_email) else None
      normalized_phone = _normalize_phone(recipient_phone)
@@ -28,18 +29,28 @@ index f5a2d848dc6da9c0d99c43b05afad8d1bdbb9e80..02307db3d65c86c8ae40a9f14de81ceb
              raise TicketTransferError("Recipient user not found.")
          if recipient_user_id == sender_user_id:
              raise TicketTransferError("Cannot transfer a ticket to yourself.")
-     elif normalized_email is not None:
-+        normalized = normalize_email(recipient_email)
-         matched_user = db.execute(
--            select(User).where(func.lower(func.trim(User.email)) == normalized_email)
-+            select(User).where(func.lower(User.email) == normalized)
-         ).scalar_one_or_none()
-         if matched_user is not None:
-             recipient_user_id = matched_user.id
-     elif normalized_phone is not None:
-         matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalar_one_or_none()
-         if matched_user is not None:
-             recipient_user_id = matched_user.id
+-    elif normalized_email is not None:
+-        normalized = normalize_email(recipient_email)
+-        matched_user = db.execute(
+-            select(User).where(func.lower(User.email) == normalized)
+-        ).scalar_one_or_none()
+-        if matched_user is not None:
+-            recipient_user_id = matched_user.id
+-    elif normalized_phone is not None:
+-        matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalar_one_or_none()
+-        if matched_user is not None:
+-            recipient_user_id = matched_user.id
++    else:
++        if normalized_email is not None:
++            matched_user = db.execute(
++                select(User).where(func.lower(User.email) == normalized_email)
++            ).scalar_one_or_none()
++            if matched_user is not None:
++                recipient_user_id = matched_user.id
++        if recipient_user_id is None and normalized_phone is not None:
++            matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalar_one_or_none()
++            if matched_user is not None:
++                recipient_user_id = matched_user.id
  
      if normalized_email and normalized_email == normalize_email(ticket.owner.email or ""):
          raise TicketTransferError("Cannot transfer a ticket to yourself.")
@@ -58,83 +69,14 @@ index f5a2d848dc6da9c0d99c43b05afad8d1bdbb9e80..02307db3d65c86c8ae40a9f14de81ceb
          status=TransferInviteStatus.PENDING,
          expires_at=expires_at or (now + DEFAULT_TRANSFER_INVITE_TTL),
      )
-@@ -640,62 +641,65 @@ def accept_ticket_transfer_invite(
-     ):
-         return invite.ticket
-     _expire_pending_invite_if_needed(db, invite)
-     if invite.status != TransferInviteStatus.PENDING:
-         raise TicketTransferError("Transfer invite is no longer pending.")
-     accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
-     if accepting_user is None:
-         raise TicketTransferError("Accepting user not found.")
- 
-     now = get_guyana_now()
- 
-     ticket = (
-         db.execute(select(Ticket).where(Ticket.id == invite.ticket_id).with_for_update())
-         .scalars()
-         .first()
-     )
-     if ticket is None:
-         raise TicketNotFoundError("Ticket not found.")
-     if ticket.owner_user_id != invite.sender_user_id:
-         raise TicketTransferError("Ticket ownership no longer matches invite sender.")
-     validate_ticket_transferable(ticket, current_user_id=invite.sender_user_id)
- 
-     if invite.recipient_user_id is not None and invite.recipient_user_id != accepting_user_id:
-         raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
-     email_match = (
--        bool(invite.recipient_email)
--        and bool(accepting_user.email)
--        and normalize_email(accepting_user.email) == normalize_email(invite.recipient_email)
-+        invite.recipient_email is None
-+        or normalize_email(accepting_user.email or "") == normalize_email(invite.recipient_email)
-     )
--    phone_match = bool(invite.recipient_phone) and _normalize_phone(accepting_user.phone) == invite.recipient_phone
--    if invite.recipient_email and invite.recipient_phone:
--        if not (email_match or phone_match):
-+    phone_match = (
-+        invite.recipient_phone is None
-+        or _normalize_phone(accepting_user.phone) == invite.recipient_phone
-+    )
-+    if not (email_match and phone_match):
-+        if invite.recipient_email and invite.recipient_phone:
-             raise TicketAuthorizationError("This transfer invite is assigned to a different recipient.")
--    elif invite.recipient_email and not email_match:
--        raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
--    elif invite.recipient_phone and not phone_match:
--        raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
-+        if invite.recipient_email:
-+            raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
-+        if invite.recipient_phone:
-+            raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
-+        raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
- 
-     ticket.owner_user_id = accepting_user_id
-     ticket.user_id = accepting_user_id
-     ticket.transferred_at = now
-     ticket.transfer_count += 1
-     ticket.updated_at = now
- 
-     invite.status = TransferInviteStatus.ACCEPTED
-     invite.accepted_at = now
-     invite.accepted_by_user_id = accepting_user_id
-     if invite.recipient_user_id is None:
-         invite.recipient_user_id = accepting_user_id
-     if invite.recipient_name is None:
-         invite.recipient_name = _normalize_optional(accepting_user.full_name)
-     invite.updated_at = now
- 
+     db.add(invite)
      db.flush()
-     notify_ticket_transfer_invite_accepted(invite, ticket)
-     publish_webhook_event(db, event_type="transfer.accepted", payload=build_transfer_payload(invite, ticket))
-     return ticket
+     notify_ticket_transfer_invite_created(invite)
+     return invite
  
  
- def revoke_ticket_transfer_invite(
-     db: Session,
-     *,
-@@ -1315,53 +1319,52 @@ def list_recent_check_in_attempts(
+ def get_ticket_transfer_invite_by_token(db: Session, *, invite_token: str) -> TicketTransferInvite:
+@@ -1319,63 +1319,104 @@ def list_recent_check_in_attempts(
          for row in rows
      ]
  
@@ -160,11 +102,14 @@ index f5a2d848dc6da9c0d99c43b05afad8d1bdbb9e80..02307db3d65c86c8ae40a9f14de81ceb
      if result.status == CHECK_IN_STATUS_INVALID:
          raise TicketNotFoundError(result.message)
      if result.status == CHECK_IN_STATUS_NOT_FOUND:
--        lookup_value = qr_payload or ticket_code
--        fallback_ticket = get_ticket_by_qr_payload(db, qr_payload=lookup_value or "")
--        if fallback_ticket is not None and fallback_ticket.event_id == event_id:
-+        existing = get_ticket_by_qr_payload(db, qr_payload=qr_payload or "")
-+        if existing is not None:
+-        existing = get_ticket_by_qr_payload(db, qr_payload=qr_payload or "")
++        existing = _find_ticket_for_checkin_conflict(
++            db,
++            event_id=event_id,
++            qr_payload=qr_payload,
++            ticket_code=ticket_code,
++        )
+         if existing is not None:
              raise TicketCheckInConflictError("Already processed")
          raise TicketNotFoundError(result.message)
      if result.status == CHECK_IN_STATUS_WRONG_EVENT:
@@ -176,6 +121,42 @@ index f5a2d848dc6da9c0d99c43b05afad8d1bdbb9e80..02307db3d65c86c8ae40a9f14de81ceb
      return result.ticket
  
  
++def _find_ticket_for_checkin_conflict(
++    db: Session,
++    *,
++    event_id: int,
++    qr_payload: str | None,
++    ticket_code: str | None,
++) -> Ticket | None:
++    lookup_values = {
++        value
++        for value in (
++            extract_ticket_lookup_value(qr_payload),
++            extract_ticket_lookup_value(ticket_code),
++        )
++        if value
++    }
++    for lookup in lookup_values:
++        ticket = (
++            db.execute(
++                select(Ticket).where(
++                    Ticket.event_id == event_id,
++                    or_(
++                        Ticket.ticket_code == lookup,
++                        Ticket.qr_payload == lookup,
++                        Ticket.qr_token == lookup,
++                        Ticket.display_code == lookup,
++                    ),
++                )
++            )
++            .scalars()
++            .first()
++        )
++        if ticket is not None:
++            return ticket
++    return None
++
++
  def scan_ticket(
      db: Session,
      *,
@@ -190,6 +171,17 @@ index f5a2d848dc6da9c0d99c43b05afad8d1bdbb9e80..02307db3d65c86c8ae40a9f14de81ceb
              status=TicketScanStatus.INVALID,
              note="Invalid ticket payload signature.",
          )
+         db.flush()
+         return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid QR payload.")
+ 
+     ticket_id = payload.get("ticket_id")
+     payload_event_id = payload.get("event_id")
+     if not isinstance(ticket_id, int) or not isinstance(payload_event_id, int):
+         _record_ticket_scan_log(
+             db,
+             ticket=None,
+             scanned_by=user_id,
+             status=TicketScanStatus.INVALID,
  
 EOF
 )

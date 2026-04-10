@@ -542,17 +542,17 @@ def create_ticket_transfer_invite(
             raise TicketTransferError("Recipient user not found.")
         if recipient_user_id == sender_user_id:
             raise TicketTransferError("Cannot transfer a ticket to yourself.")
-    elif normalized_email is not None:
-        normalized = normalize_email(recipient_email)
-        matched_user = db.execute(
-            select(User).where(func.lower(User.email) == normalized)
-        ).scalar_one_or_none()
-        if matched_user is not None:
-            recipient_user_id = matched_user.id
-    elif normalized_phone is not None:
-        matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalar_one_or_none()
-        if matched_user is not None:
-            recipient_user_id = matched_user.id
+    else:
+        if normalized_email is not None:
+            matched_user = db.execute(
+                select(User).where(func.lower(User.email) == normalized_email)
+            ).scalar_one_or_none()
+            if matched_user is not None:
+                recipient_user_id = matched_user.id
+        if recipient_user_id is None and normalized_phone is not None:
+            matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalar_one_or_none()
+            if matched_user is not None:
+                recipient_user_id = matched_user.id
 
     if normalized_email and normalized_email == normalize_email(ticket.owner.email or ""):
         raise TicketTransferError("Cannot transfer a ticket to yourself.")
@@ -1341,7 +1341,12 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_INVALID:
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
-        existing = get_ticket_by_qr_payload(db, qr_payload=qr_payload or "")
+        existing = _find_ticket_for_checkin_conflict(
+            db,
+            event_id=event_id,
+            qr_payload=qr_payload,
+            ticket_code=ticket_code,
+        )
         if existing is not None:
             raise TicketCheckInConflictError("Already processed")
         raise TicketNotFoundError(result.message)
@@ -1352,6 +1357,42 @@ def check_in_ticket_for_event(
     if result.ticket is None:
         raise TicketNotFoundError("Ticket not found.")
     return result.ticket
+
+
+def _find_ticket_for_checkin_conflict(
+    db: Session,
+    *,
+    event_id: int,
+    qr_payload: str | None,
+    ticket_code: str | None,
+) -> Ticket | None:
+    lookup_values = {
+        value
+        for value in (
+            extract_ticket_lookup_value(qr_payload),
+            extract_ticket_lookup_value(ticket_code),
+        )
+        if value
+    }
+    for lookup in lookup_values:
+        ticket = (
+            db.execute(
+                select(Ticket).where(
+                    Ticket.event_id == event_id,
+                    or_(
+                        Ticket.ticket_code == lookup,
+                        Ticket.qr_payload == lookup,
+                        Ticket.qr_token == lookup,
+                        Ticket.display_code == lookup,
+                    ),
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if ticket is not None:
+            return ticket
+    return None
 
 
 def scan_ticket(
