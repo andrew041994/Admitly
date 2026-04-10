@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import secrets
-from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -239,71 +238,69 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
     if order.payment_verification_status != "verified":
         raise TicketIssuanceError("Order payment is not verified.")
 
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        locked_order = (
-            db.execute(select(Order).where(Order.id == order.id).with_for_update())
-            .scalar_one()
-        )
-        order_items = (
-            db.execute(select(OrderItem).where(OrderItem.order_id == locked_order.id).order_by(OrderItem.id.asc()))
-            .scalars()
-            .all()
+    locked_order = (
+        db.execute(select(Order).where(Order.id == order.id).with_for_update())
+        .scalar_one()
+    )
+    order_items = (
+        db.execute(select(OrderItem).where(OrderItem.order_id == locked_order.id).order_by(OrderItem.id.asc()))
+        .scalars()
+        .all()
+    )
+
+    expected_total = sum(item.quantity for item in order_items)
+    existing_tickets = (
+        db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
+        .scalars()
+        .all()
+    )
+    existing_count = len(existing_tickets)
+    if existing_count == expected_total:
+        for ticket in existing_tickets:
+            if not ticket.qr_token:
+                ensure_ticket_qr(db, ticket)
+        db.flush()
+        return existing_tickets
+    if existing_count != 0:
+        raise TicketIssuanceError(
+            f"Partial ticket issuance detected for order {locked_order.id}: {existing_count}/{expected_total}."
         )
 
-        expected_total = sum(item.quantity for item in order_items)
-        existing_tickets = (
-            db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
-            .scalars()
-            .all()
-        )
-        existing_count = len(existing_tickets)
-        if existing_count == expected_total:
-            for ticket in existing_tickets:
-                if not ticket.qr_token:
-                    ensure_ticket_qr(db, ticket)
-            db.flush()
-            return existing_tickets
-        if existing_count != 0:
-            raise TicketIssuanceError(
-                f"Partial ticket issuance detected for order {locked_order.id}: {existing_count}/{expected_total}."
+    now = get_guyana_now()
+    tickets_to_create: list[Ticket] = []
+    for item in order_items:
+        for _ in range(item.quantity):
+            ticket_code = _generate_ticket_code()
+            qr_token, display_code, qr_generated_at = _issue_ticket_qr_fields(db)
+            tickets_to_create.append(
+                Ticket(
+                    order_id=locked_order.id,
+                    order_item_id=item.id,
+                    event_id=locked_order.event_id,
+                    user_id=locked_order.user_id,
+                    purchaser_user_id=locked_order.user_id,
+                    owner_user_id=locked_order.user_id,
+                    ticket_tier_id=item.ticket_tier_id,
+                    status=TicketStatus.ISSUED,
+                    ticket_code=ticket_code,
+                    display_code=display_code,
+                    qr_token=qr_token,
+                    qr_generated_at=qr_generated_at,
+                    qr_payload=qr_token,
+                    issued_at=now,
+                )
             )
 
-        now = get_guyana_now()
-        tickets_to_create: list[Ticket] = []
-        for item in order_items:
-            for _ in range(item.quantity):
-                ticket_code = _generate_ticket_code()
-                qr_token, display_code, qr_generated_at = _issue_ticket_qr_fields(db)
-                tickets_to_create.append(
-                    Ticket(
-                        order_id=locked_order.id,
-                        order_item_id=item.id,
-                        event_id=locked_order.event_id,
-                        user_id=locked_order.user_id,
-                        purchaser_user_id=locked_order.user_id,
-                        owner_user_id=locked_order.user_id,
-                        ticket_tier_id=item.ticket_tier_id,
-                        status=TicketStatus.ISSUED,
-                        ticket_code=ticket_code,
-                        display_code=display_code,
-                        qr_token=qr_token,
-                        qr_generated_at=qr_generated_at,
-                        qr_payload=qr_token,
-                        issued_at=now,
-                    )
-                )
-
-        db.add_all(tickets_to_create)
-        db.flush()
-        issued_tickets = (
-            db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
-            .scalars()
-            .all()
-        )
-        for ticket in issued_tickets:
-            notify_ticket_issued(ticket)
-        return issued_tickets
+    db.add_all(tickets_to_create)
+    db.flush()
+    issued_tickets = (
+        db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
+        .scalars()
+        .all()
+    )
+    for ticket in issued_tickets:
+        notify_ticket_issued(ticket)
+    return issued_tickets
 
 
 def can_void_event_ticket(db: Session, *, user_id: int, event_id: int) -> bool:
@@ -331,29 +328,27 @@ def invalidate_order_tickets(
     actor_user_id: int,
     reason: str | None = None,
 ) -> list[Ticket]:
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        tickets = (
-            db.execute(select(Ticket).where(Ticket.order_id == order_id).with_for_update())
-            .scalars()
-            .all()
-        )
+    tickets = (
+        db.execute(select(Ticket).where(Ticket.order_id == order_id).with_for_update())
+        .scalars()
+        .all()
+    )
 
-        now = get_guyana_now()
-        for ticket in tickets:
-            if ticket.status == TicketStatus.ISSUED:
-                ticket.status = TicketStatus.VOIDED
-                ticket.voided_at = now
-                ticket.voided_by_user_id = actor_user_id
-                ticket.void_reason = reason.strip() if reason else None
-                ticket.updated_at = now
-                try:
-                    notify_ticket_voided(ticket, actor_user_id=actor_user_id)
-                except TypeError:
-                    notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
+    now = get_guyana_now()
+    for ticket in tickets:
+        if ticket.status == TicketStatus.ISSUED:
+            ticket.status = TicketStatus.VOIDED
+            ticket.voided_at = now
+            ticket.voided_by_user_id = actor_user_id
+            ticket.void_reason = reason.strip() if reason else None
+            ticket.updated_at = now
+            try:
+                notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+            except TypeError:
+                notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
 
-        db.flush()
-        return tickets
+    db.flush()
+    return tickets
 
 
 def invalidate_event_tickets(
@@ -363,28 +358,26 @@ def invalidate_event_tickets(
     actor_user_id: int,
     reason: str | None = None,
 ) -> list[Ticket]:
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        tickets = (
-            db.execute(select(Ticket).where(Ticket.event_id == event_id).with_for_update())
-            .scalars()
-            .all()
-        )
-        now = get_guyana_now()
-        for ticket in tickets:
-            if ticket.status == TicketStatus.ISSUED:
-                ticket.status = TicketStatus.VOIDED
-                ticket.voided_at = now
-                ticket.voided_by_user_id = actor_user_id
-                ticket.void_reason = reason.strip() if reason else None
-                ticket.updated_at = now
-                try:
-                    notify_ticket_voided(ticket, actor_user_id=actor_user_id)
-                except TypeError:
-                    notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
+    tickets = (
+        db.execute(select(Ticket).where(Ticket.event_id == event_id).with_for_update())
+        .scalars()
+        .all()
+    )
+    now = get_guyana_now()
+    for ticket in tickets:
+        if ticket.status == TicketStatus.ISSUED:
+            ticket.status = TicketStatus.VOIDED
+            ticket.voided_at = now
+            ticket.voided_by_user_id = actor_user_id
+            ticket.void_reason = reason.strip() if reason else None
+            ticket.updated_at = now
+            try:
+                notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+            except TypeError:
+                notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
 
-        db.flush()
-        return tickets
+    db.flush()
+    return tickets
 
 
 def list_tickets_for_user(db: Session, *, user_id: int, event_id: int | None = None) -> list[Ticket]:
@@ -485,36 +478,34 @@ def transfer_ticket_to_user(
     if from_user_id == to_user_id:
         raise TicketTransferError("Cannot transfer a ticket to yourself.")
 
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        ticket = (
-            db.execute(select(Ticket).where(Ticket.id == ticket_id).with_for_update())
-            .scalars()
-            .first()
-        )
-        if ticket is None:
-            raise TicketNotFoundError("Ticket not found.")
+    ticket = (
+        db.execute(select(Ticket).where(Ticket.id == ticket_id).with_for_update())
+        .scalars()
+        .first()
+    )
+    if ticket is None:
+        raise TicketNotFoundError("Ticket not found.")
 
-        validate_ticket_transferable(ticket, current_user_id=from_user_id)
-        if get_active_pending_transfer_for_ticket(db, ticket_id=ticket.id) is not None:
-            raise TicketTransferError("Ticket has a pending transfer invite.")
+    validate_ticket_transferable(ticket, current_user_id=from_user_id)
+    if get_active_pending_transfer_for_ticket(db, ticket_id=ticket.id) is not None:
+        raise TicketTransferError("Ticket has a pending transfer invite.")
 
-        user = db.execute(select(User.id).where(User.id == to_user_id)).scalar_one_or_none()
-        if user is None:
-            raise TicketTransferError("Recipient user not found.")
+    user = db.execute(select(User.id).where(User.id == to_user_id)).scalar_one_or_none()
+    if user is None:
+        raise TicketTransferError("Recipient user not found.")
 
-        now = get_guyana_now()
-        ticket.owner_user_id = to_user_id
-        ticket.user_id = to_user_id
-        ticket.transferred_at = now
-        ticket.transfer_count += 1
-        ticket.updated_at = now
-        db.flush()
-        try:
-            notify_ticket_transferred(ticket, from_user_id=from_user_id, to_user_id=to_user_id)
-        except TypeError:
-            notify_ticket_transferred(db, ticket, from_user_id=from_user_id, to_user_id=to_user_id)
-        return ticket
+    now = get_guyana_now()
+    ticket.owner_user_id = to_user_id
+    ticket.user_id = to_user_id
+    ticket.transferred_at = now
+    ticket.transfer_count += 1
+    ticket.updated_at = now
+    db.flush()
+    try:
+        notify_ticket_transferred(ticket, from_user_id=from_user_id, to_user_id=to_user_id)
+    except TypeError:
+        notify_ticket_transferred(db, ticket, from_user_id=from_user_id, to_user_id=to_user_id)
+    return ticket
 
 
 def create_ticket_transfer_invite(
@@ -534,55 +525,53 @@ def create_ticket_transfer_invite(
     if recipient_user_id is None and normalized_email is None and normalized_phone is None:
         raise TicketTransferError("Provide recipient_user_id, recipient_email, or recipient_phone.")
 
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        ticket = (
-            db.execute(
-                select(Ticket).where(Ticket.id == ticket_id).with_for_update()
-            )
-            .scalar_one_or_none()
+    ticket = (
+        db.execute(
+            select(Ticket).where(Ticket.id == ticket_id).with_for_update()
         )
-        if ticket is None:
-            raise TicketNotFoundError("Ticket not found.")
-        db.refresh(ticket, attribute_names=["transfer_invites", "owner"])
+        .scalar_one_or_none()
+    )
+    if ticket is None:
+        raise TicketNotFoundError("Ticket not found.")
+    db.refresh(ticket, attribute_names=["transfer_invites", "owner"])
 
-        validate_ticket_transfer_invitable(ticket, current_user_id=sender_user_id)
-        if recipient_user_id is not None:
-            recipient = db.execute(select(User).where(User.id == recipient_user_id)).scalar_one_or_none()
-            if recipient is None:
-                raise TicketTransferError("Recipient user not found.")
-            if recipient_user_id == sender_user_id:
-                raise TicketTransferError("Cannot transfer a ticket to yourself.")
-        elif normalized_email is not None:
-            matched_user = db.execute(select(User).where(User.email == normalized_email)).scalar_one_or_none()
-            if matched_user is not None:
-                recipient_user_id = matched_user.id
-        elif normalized_phone is not None:
-            matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalar_one_or_none()
-            if matched_user is not None:
-                recipient_user_id = matched_user.id
-
-        if normalized_email and normalized_email == normalize_email(ticket.owner.email or ""):
+    validate_ticket_transfer_invitable(ticket, current_user_id=sender_user_id)
+    if recipient_user_id is not None:
+        recipient = db.execute(select(User).where(User.id == recipient_user_id)).scalar_one_or_none()
+        if recipient is None:
+            raise TicketTransferError("Recipient user not found.")
+        if recipient_user_id == sender_user_id:
             raise TicketTransferError("Cannot transfer a ticket to yourself.")
-        if normalized_phone and _normalize_phone(ticket.owner.phone) and normalized_phone == _normalize_phone(ticket.owner.phone):
-            raise TicketTransferError("Cannot transfer a ticket to yourself.")
+    elif normalized_email is not None:
+        matched_user = db.execute(select(User).where(User.email == normalized_email)).scalar_one_or_none()
+        if matched_user is not None:
+            recipient_user_id = matched_user.id
+    elif normalized_phone is not None:
+        matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalar_one_or_none()
+        if matched_user is not None:
+            recipient_user_id = matched_user.id
 
-        now = get_guyana_now()
-        invite = TicketTransferInvite(
-            ticket_id=ticket.id,
-            sender_user_id=sender_user_id,
-            recipient_user_id=recipient_user_id,
-            recipient_email=normalized_email,
-            recipient_phone=normalized_phone,
-            recipient_name=normalized_name,
-            invite_token=_create_unique_transfer_invite_token(db),
-            status=TransferInviteStatus.PENDING,
-            expires_at=expires_at or (now + DEFAULT_TRANSFER_INVITE_TTL),
-        )
-        db.add(invite)
-        db.flush()
-        notify_ticket_transfer_invite_created(invite)
-        return invite
+    if normalized_email and normalized_email == normalize_email(ticket.owner.email or ""):
+        raise TicketTransferError("Cannot transfer a ticket to yourself.")
+    if normalized_phone and _normalize_phone(ticket.owner.phone) and normalized_phone == _normalize_phone(ticket.owner.phone):
+        raise TicketTransferError("Cannot transfer a ticket to yourself.")
+
+    now = get_guyana_now()
+    invite = TicketTransferInvite(
+        ticket_id=ticket.id,
+        sender_user_id=sender_user_id,
+        recipient_user_id=recipient_user_id,
+        recipient_email=normalized_email,
+        recipient_phone=normalized_phone,
+        recipient_name=normalized_name,
+        invite_token=_create_unique_transfer_invite_token(db),
+        status=TransferInviteStatus.PENDING,
+        expires_at=expires_at or (now + DEFAULT_TRANSFER_INVITE_TTL),
+    )
+    db.add(invite)
+    db.flush()
+    notify_ticket_transfer_invite_created(invite)
+    return invite
 
 
 def get_ticket_transfer_invite_by_token(db: Session, *, invite_token: str) -> TicketTransferInvite:
@@ -633,69 +622,67 @@ def accept_ticket_transfer_invite(
     invite_token: str,
     accepting_user_id: int,
 ) -> Ticket:
-    tx_ctx = db.begin() if not db.in_transaction() else nullcontext()
-    with tx_ctx:
-        invite = (
-            db.execute(
-                select(TicketTransferInvite).where(TicketTransferInvite.invite_token == invite_token).with_for_update()
-            )
-            .scalar_one_or_none()
+    invite = (
+        db.execute(
+            select(TicketTransferInvite).where(TicketTransferInvite.invite_token == invite_token).with_for_update()
         )
-        if invite is None:
-            raise TicketNotFoundError("Transfer invite not found.")
-        db.refresh(invite, attribute_names=["ticket", "sender"])
-        if (
-            invite.status == TransferInviteStatus.ACCEPTED
-            and invite.recipient_user_id == accepting_user_id
-            and invite.ticket.owner_user_id == accepting_user_id
-        ):
-            return invite.ticket
-        _expire_pending_invite_if_needed(db, invite)
-        if invite.status != TransferInviteStatus.PENDING:
-            raise TicketTransferError("Transfer invite is no longer pending.")
-        accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
-        if accepting_user is None:
-            raise TicketTransferError("Accepting user not found.")
+        .scalar_one_or_none()
+    )
+    if invite is None:
+        raise TicketNotFoundError("Transfer invite not found.")
+    db.refresh(invite, attribute_names=["ticket", "sender"])
+    if (
+        invite.status == TransferInviteStatus.ACCEPTED
+        and invite.recipient_user_id == accepting_user_id
+        and invite.ticket.owner_user_id == accepting_user_id
+    ):
+        return invite.ticket
+    _expire_pending_invite_if_needed(db, invite)
+    if invite.status != TransferInviteStatus.PENDING:
+        raise TicketTransferError("Transfer invite is no longer pending.")
+    accepting_user = db.execute(select(User).where(User.id == accepting_user_id)).scalar_one_or_none()
+    if accepting_user is None:
+        raise TicketTransferError("Accepting user not found.")
 
-        now = get_guyana_now()
+    now = get_guyana_now()
 
-        ticket = (
-            db.execute(select(Ticket).where(Ticket.id == invite.ticket_id).with_for_update())
-            .scalars()
-            .first()
-        )
-        if ticket is None:
-            raise TicketNotFoundError("Ticket not found.")
-        if ticket.owner_user_id != invite.sender_user_id:
-            raise TicketTransferError("Ticket ownership no longer matches invite sender.")
-        validate_ticket_transferable(ticket, current_user_id=invite.sender_user_id)
+    ticket = (
+        db.execute(select(Ticket).where(Ticket.id == invite.ticket_id).with_for_update())
+        .scalars()
+        .first()
+    )
+    if ticket is None:
+        raise TicketNotFoundError("Ticket not found.")
+    if ticket.owner_user_id != invite.sender_user_id:
+        raise TicketTransferError("Ticket ownership no longer matches invite sender.")
+    validate_ticket_transferable(ticket, current_user_id=invite.sender_user_id)
 
-        if invite.recipient_user_id is not None and invite.recipient_user_id != accepting_user_id:
-            raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
-        if invite.recipient_email is not None and normalize_email(accepting_user.email) != invite.recipient_email:
-            raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
-        if invite.recipient_phone is not None and _normalize_phone(accepting_user.phone) != invite.recipient_phone:
-            raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
+    if invite.recipient_user_id is not None and invite.recipient_user_id != accepting_user_id:
+        raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
+    if invite.recipient_email is not None and normalize_email(accepting_user.email) != invite.recipient_email:
+        raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
+    if invite.recipient_phone is not None and _normalize_phone(accepting_user.phone) != invite.recipient_phone:
+        raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
 
-        ticket.owner_user_id = accepting_user_id
-        ticket.user_id = accepting_user_id
-        ticket.transferred_at = now
-        ticket.transfer_count += 1
-        ticket.updated_at = now
+    ticket.owner_user_id = accepting_user_id
+    ticket.user_id = accepting_user_id
+    ticket.transferred_at = now
+    ticket.transfer_count += 1
+    ticket.updated_at = now
 
-        invite.status = TransferInviteStatus.ACCEPTED
-        invite.accepted_at = now
-        invite.accepted_by_user_id = accepting_user_id
-        if invite.recipient_user_id is None:
-            invite.recipient_user_id = accepting_user_id
-        if invite.recipient_name is None:
-            invite.recipient_name = _normalize_optional(accepting_user.full_name)
-        invite.updated_at = now
+    invite.status = TransferInviteStatus.ACCEPTED
+    invite.accepted_at = now
+    invite.accepted_by_user_id = accepting_user_id
+    if invite.recipient_user_id is None:
+        invite.recipient_user_id = accepting_user_id
+    if invite.recipient_name is None:
+        invite.recipient_name = _normalize_optional(accepting_user.full_name)
+    invite.updated_at = now
 
-        db.flush()
-        notify_ticket_transfer_invite_accepted(invite, ticket)
-        publish_webhook_event(db, event_type="transfer.accepted", payload=build_transfer_payload(invite, ticket))
-        return ticket
+    db.flush()
+    notify_ticket_transfer_invite_accepted(invite, ticket)
+    publish_webhook_event(db, event_type="transfer.accepted", payload=build_transfer_payload(invite, ticket))
+    return ticket
 
 
 def revoke_ticket_transfer_invite(
@@ -704,30 +691,28 @@ def revoke_ticket_transfer_invite(
     invite_token: str,
     actor_user_id: int,
 ) -> TicketTransferInvite:
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        invite = (
-            db.execute(
-                select(TicketTransferInvite).where(TicketTransferInvite.invite_token == invite_token).with_for_update()
-            )
-            .scalar_one_or_none()
+    invite = (
+        db.execute(
+            select(TicketTransferInvite).where(TicketTransferInvite.invite_token == invite_token).with_for_update()
         )
-        if invite is None:
-            raise TicketNotFoundError("Transfer invite not found.")
-        db.refresh(invite, attribute_names=["ticket"])
-        if invite.status != TransferInviteStatus.PENDING:
-            raise TicketTransferError("Only pending invites can be revoked.")
-        if actor_user_id not in {invite.sender_user_id, invite.ticket.owner_user_id}:
-            raise TicketAuthorizationError("Only the sender/current owner can revoke this invite.")
+        .scalar_one_or_none()
+    )
+    if invite is None:
+        raise TicketNotFoundError("Transfer invite not found.")
+    db.refresh(invite, attribute_names=["ticket"])
+    if invite.status != TransferInviteStatus.PENDING:
+        raise TicketTransferError("Only pending invites can be revoked.")
+    if actor_user_id not in {invite.sender_user_id, invite.ticket.owner_user_id}:
+        raise TicketAuthorizationError("Only the sender/current owner can revoke this invite.")
 
-        now = get_guyana_now()
-        invite.status = TransferInviteStatus.REVOKED
-        invite.revoked_at = now
-        invite.revoked_by_user_id = actor_user_id
-        invite.updated_at = now
-        db.flush()
-        notify_ticket_transfer_invite_revoked(invite)
-        return invite
+    now = get_guyana_now()
+    invite.status = TransferInviteStatus.REVOKED
+    invite.revoked_at = now
+    invite.revoked_by_user_id = actor_user_id
+    invite.updated_at = now
+    db.flush()
+    notify_ticket_transfer_invite_revoked(invite)
+    return invite
 
 
 def void_ticket(
@@ -737,32 +722,30 @@ def void_ticket(
     actor_user_id: int,
     reason: str | None = None,
 ) -> Ticket:
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        ticket = (
-            db.execute(select(Ticket).where(Ticket.id == ticket_id).with_for_update())
-            .scalars()
-            .first()
-        )
-        if ticket is None:
-            raise TicketNotFoundError("Ticket not found.")
-        if not can_void_event_ticket(db, user_id=actor_user_id, event_id=ticket.event_id):
-            raise TicketAuthorizationError("Not authorized to void tickets for this event.")
+    ticket = (
+        db.execute(select(Ticket).where(Ticket.id == ticket_id).with_for_update())
+        .scalars()
+        .first()
+    )
+    if ticket is None:
+        raise TicketNotFoundError("Ticket not found.")
+    if not can_void_event_ticket(db, user_id=actor_user_id, event_id=ticket.event_id):
+        raise TicketAuthorizationError("Not authorized to void tickets for this event.")
 
-        validate_ticket_voidable(ticket)
+    validate_ticket_voidable(ticket)
 
-        now = get_guyana_now()
-        ticket.status = TicketStatus.VOIDED
-        ticket.voided_at = now
-        ticket.voided_by_user_id = actor_user_id
-        ticket.void_reason = reason.strip() if reason else None
-        ticket.updated_at = now
-        db.flush()
-        try:
-            notify_ticket_voided(ticket, actor_user_id=actor_user_id)
-        except TypeError:
-            notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
-        return ticket
+    now = get_guyana_now()
+    ticket.status = TicketStatus.VOIDED
+    ticket.voided_at = now
+    ticket.voided_by_user_id = actor_user_id
+    ticket.void_reason = reason.strip() if reason else None
+    ticket.updated_at = now
+    db.flush()
+    try:
+        notify_ticket_voided(ticket, actor_user_id=actor_user_id)
+    except TypeError:
+        notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
+    return ticket
 
 
 def can_actor_check_in_event(db: Session, *, user_id: int, event_id: int) -> bool:
@@ -1081,81 +1064,79 @@ def check_in_ticket(
         db.flush()
         return result
 
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        ticket = (
-            db.execute(
-                select(Ticket)
-                .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
-                .with_for_update()
-            )
-            .scalars()
-            .first()
+    ticket = (
+        db.execute(
+            select(Ticket)
+            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
+            .with_for_update()
         )
-        if ticket is None:
-            result = TicketCheckInValidationResult(
-                valid=False,
-                status=CHECK_IN_STATUS_NOT_FOUND,
-                message="Ticket not found.",
-                event_id=event_id,
-                reason_code=CHECK_IN_STATUS_NOT_FOUND,
-            )
-            _record_check_in_attempt(
-                db,
-                event_id=event_id,
-                actor_user_id=scanner_user_id,
-                ticket=None,
-                result_code=result.status,
-                reason_code=result.reason_code,
-                reason_message=result.message,
-                method=method,
-            )
-            db.flush()
-            return result
-        db.refresh(ticket, attribute_names=["event", "order"])
-        result = _evaluate_ticket_for_entry(ticket=ticket, event_id=event_id)
-        if not result.valid:
-            _record_check_in_attempt(
-                db,
-                event_id=event_id,
-                actor_user_id=scanner_user_id,
-                ticket=ticket,
-                result_code=result.status,
-                reason_code=result.reason_code,
-                reason_message=result.message,
-                method=method,
-            )
-            db.flush()
-            return result
-
-        now = get_guyana_now()
-        ticket.status = TicketStatus.CHECKED_IN
-        ticket.checked_in_at = now
-        ticket.checked_in_by_user_id = scanner_user_id
-        ticket.check_in_status = CheckInStatus.CHECKED_IN
-        ticket.check_in_method = method
-        ticket.updated_at = now
+        .scalars()
+        .first()
+    )
+    if ticket is None:
+        result = TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_NOT_FOUND,
+            message="Ticket not found.",
+            event_id=event_id,
+            reason_code=CHECK_IN_STATUS_NOT_FOUND,
+        )
+        _record_check_in_attempt(
+            db,
+            event_id=event_id,
+            actor_user_id=scanner_user_id,
+            ticket=None,
+            result_code=result.status,
+            reason_code=result.reason_code,
+            reason_message=result.message,
+            method=method,
+        )
+        db.flush()
+        return result
+    db.refresh(ticket, attribute_names=["event", "order"])
+    result = _evaluate_ticket_for_entry(ticket=ticket, event_id=event_id)
+    if not result.valid:
         _record_check_in_attempt(
             db,
             event_id=event_id,
             actor_user_id=scanner_user_id,
             ticket=ticket,
-            result_code=CHECK_IN_STATUS_VALID,
-            reason_code=CHECK_IN_STATUS_VALID,
-            reason_message="Ticket checked in successfully.",
+            result_code=result.status,
+            reason_code=result.reason_code,
+            reason_message=result.message,
             method=method,
         )
         db.flush()
-        publish_webhook_event(db, event_type="checkin.completed", payload=build_checkin_payload(ticket))
-        return TicketCheckInValidationResult(
-            valid=True,
-            status=CHECK_IN_STATUS_VALID,
-            message="Ticket checked in successfully.",
-            event_id=event_id,
-            ticket=ticket,
-            checked_in_at=ticket.checked_in_at,
-            reason_code=CHECK_IN_STATUS_VALID,
-        )
+        return result
+
+    now = get_guyana_now()
+    ticket.status = TicketStatus.CHECKED_IN
+    ticket.checked_in_at = now
+    ticket.checked_in_by_user_id = scanner_user_id
+    ticket.check_in_status = CheckInStatus.CHECKED_IN
+    ticket.check_in_method = method
+    ticket.updated_at = now
+    _record_check_in_attempt(
+        db,
+        event_id=event_id,
+        actor_user_id=scanner_user_id,
+        ticket=ticket,
+        result_code=CHECK_IN_STATUS_VALID,
+        reason_code=CHECK_IN_STATUS_VALID,
+        reason_message="Ticket checked in successfully.",
+        method=method,
+    )
+    db.flush()
+    publish_webhook_event(db, event_type="checkin.completed", payload=build_checkin_payload(ticket))
+    return TicketCheckInValidationResult(
+        valid=True,
+        status=CHECK_IN_STATUS_VALID,
+        message="Ticket checked in successfully.",
+        event_id=event_id,
+        ticket=ticket,
+        checked_in_at=ticket.checked_in_at,
+        reason_code=CHECK_IN_STATUS_VALID,
+    )
 
 
 def get_event_check_in_summary(
@@ -1206,86 +1187,84 @@ def override_ticket_check_in(
     if not lookup:
         raise TicketNotFoundError("A ticket code or QR payload is required.")
 
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        ticket = (
-            db.execute(
-                select(Ticket)
-                .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
-                .with_for_update()
-            )
-            .scalars()
-            .first()
+    ticket = (
+        db.execute(
+            select(Ticket)
+            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
+            .with_for_update()
         )
-        if ticket is None:
-            _record_check_in_attempt(
-                db,
-                event_id=event_id,
-                actor_user_id=actor_user_id,
-                ticket=None,
-                result_code=CHECK_IN_STATUS_NOT_FOUND,
-                reason_code=CHECK_IN_STATUS_NOT_FOUND,
-                reason_message="Ticket not found for override.",
-                method=CHECK_IN_METHOD_OVERRIDE,
-                notes=notes,
-            )
-            db.flush()
-            raise TicketNotFoundError("Ticket not found.")
-        db.refresh(ticket, attribute_names=["event", "order"])
-        if ticket.event_id != event_id:
-            raise TicketCrossEventError("Ticket does not belong to this event.")
-
-        now = get_guyana_now()
-        if admit:
-            if ticket.status == TicketStatus.CHECKED_IN:
-                result = TicketCheckInValidationResult(
-                    valid=False,
-                    status=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
-                    message="Ticket has already been checked in.",
-                    event_id=event_id,
-                    ticket=ticket,
-                    checked_in_at=ticket.checked_in_at,
-                    reason_code=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
-                )
-            else:
-                ticket.status = TicketStatus.CHECKED_IN
-                ticket.checked_in_at = now
-                ticket.checked_in_by_user_id = actor_user_id
-                ticket.check_in_status = CheckInStatus.CHECKED_IN
-                ticket.check_in_method = CHECK_IN_METHOD_OVERRIDE
-                ticket.updated_at = now
-                result = TicketCheckInValidationResult(
-                    valid=True,
-                    status=CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
-                    message="Ticket admitted by manual override.",
-                    event_id=event_id,
-                    ticket=ticket,
-                    checked_in_at=ticket.checked_in_at,
-                    reason_code=CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
-                )
-        else:
-            result = TicketCheckInValidationResult(
-                valid=False,
-                status=CHECK_IN_STATUS_MANUAL_OVERRIDE_DENIED,
-                message="Ticket denied by manual override.",
-                event_id=event_id,
-                ticket=ticket,
-                reason_code=CHECK_IN_STATUS_MANUAL_OVERRIDE_DENIED,
-            )
-
+        .scalars()
+        .first()
+    )
+    if ticket is None:
         _record_check_in_attempt(
             db,
             event_id=event_id,
             actor_user_id=actor_user_id,
-            ticket=ticket,
-            result_code=result.status,
-            reason_code=result.reason_code,
-            reason_message=result.message,
+            ticket=None,
+            result_code=CHECK_IN_STATUS_NOT_FOUND,
+            reason_code=CHECK_IN_STATUS_NOT_FOUND,
+            reason_message="Ticket not found for override.",
             method=CHECK_IN_METHOD_OVERRIDE,
             notes=notes,
         )
         db.flush()
-        return result
+        raise TicketNotFoundError("Ticket not found.")
+    db.refresh(ticket, attribute_names=["event", "order"])
+    if ticket.event_id != event_id:
+        raise TicketCrossEventError("Ticket does not belong to this event.")
+
+    now = get_guyana_now()
+    if admit:
+        if ticket.status == TicketStatus.CHECKED_IN:
+            result = TicketCheckInValidationResult(
+                valid=False,
+                status=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+                message="Ticket has already been checked in.",
+                event_id=event_id,
+                ticket=ticket,
+                checked_in_at=ticket.checked_in_at,
+                reason_code=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+            )
+        else:
+            ticket.status = TicketStatus.CHECKED_IN
+            ticket.checked_in_at = now
+            ticket.checked_in_by_user_id = actor_user_id
+            ticket.check_in_status = CheckInStatus.CHECKED_IN
+            ticket.check_in_method = CHECK_IN_METHOD_OVERRIDE
+            ticket.updated_at = now
+            result = TicketCheckInValidationResult(
+                valid=True,
+                status=CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
+                message="Ticket admitted by manual override.",
+                event_id=event_id,
+                ticket=ticket,
+                checked_in_at=ticket.checked_in_at,
+                reason_code=CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
+            )
+    else:
+        result = TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_MANUAL_OVERRIDE_DENIED,
+            message="Ticket denied by manual override.",
+            event_id=event_id,
+            ticket=ticket,
+            reason_code=CHECK_IN_STATUS_MANUAL_OVERRIDE_DENIED,
+        )
+
+    _record_check_in_attempt(
+        db,
+        event_id=event_id,
+        actor_user_id=actor_user_id,
+        ticket=ticket,
+        result_code=result.status,
+        reason_code=result.reason_code,
+        reason_message=result.message,
+        method=CHECK_IN_METHOD_OVERRIDE,
+        notes=notes,
+    )
+    db.flush()
+    return result
 
 
 def list_recent_check_in_attempts(
@@ -1385,114 +1364,112 @@ def scan_ticket(
         db.flush()
         return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid QR payload.")
 
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        ticket = (
-            db.execute(
-                select(Ticket).where(Ticket.id == ticket_id).with_for_update()
-            )
-            .scalars()
-            .first()
+    ticket = (
+        db.execute(
+            select(Ticket).where(Ticket.id == ticket_id).with_for_update()
         )
-        if ticket is None:
-            _record_ticket_scan_log(
-                db,
-                ticket=None,
-                scanned_by=user_id,
-                status=TicketScanStatus.INVALID,
-                note="Ticket not found.",
-            )
-            db.flush()
-            return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid ticket.")
-        db.refresh(ticket, attribute_names=["event", "order"])
+        .scalars()
+        .first()
+    )
+    if ticket is None:
+        _record_ticket_scan_log(
+            db,
+            ticket=None,
+            scanned_by=user_id,
+            status=TicketScanStatus.INVALID,
+            note="Ticket not found.",
+        )
+        db.flush()
+        return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid ticket.")
+    db.refresh(ticket, attribute_names=["event", "order"])
 
-        user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-        if user is None or not can_scan_event(db, user=user, event=ticket.event):
-            _record_ticket_scan_log(
-                db,
-                ticket=ticket,
-                scanned_by=user_id,
-                status=TicketScanStatus.INVALID,
-                note="Unauthorized scan attempt.",
-            )
-            db.flush()
-            return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Not authorized to scan this event.")
-
-        if ticket.event_id != payload_event_id:
-            _record_ticket_scan_log(
-                db,
-                ticket=ticket,
-                scanned_by=user_id,
-                status=TicketScanStatus.WRONG_EVENT,
-                note="Payload event does not match ticket event.",
-            )
-            db.flush()
-            return TicketScanResult(status=TicketScanStatus.WRONG_EVENT.value, message="Ticket is for a different event.")
-
-        now = get_guyana_now()
-        event_end_at = ticket.event.end_at if ticket.event else None
-        compare_now = now
-        if event_end_at is not None and event_end_at.tzinfo is None:
-            compare_now = now.replace(tzinfo=None)
-        if event_end_at is not None and event_end_at < compare_now:
-            _record_ticket_scan_log(
-                db,
-                ticket=ticket,
-                scanned_by=user_id,
-                status=TicketScanStatus.INVALID,
-                note="Event has already ended.",
-            )
-            db.flush()
-            return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Ticket is expired.")
-
-        if ticket.check_in_status == CheckInStatus.CHECKED_IN or ticket.status == TicketStatus.CHECKED_IN:
-            _record_ticket_scan_log(
-                db,
-                ticket=ticket,
-                scanned_by=user_id,
-                status=TicketScanStatus.ALREADY_USED,
-                note="Ticket already checked in.",
-            )
-            db.flush()
-            return TicketScanResult(
-                status=TicketScanStatus.ALREADY_USED.value,
-                ticket_id=ticket.id,
-                checked_in_at=ticket.checked_in_at,
-                message="Ticket already used.",
-            )
-
-        if ticket.status != TicketStatus.ISSUED or not _is_order_admittable(ticket.order):
-            _record_ticket_scan_log(
-                db,
-                ticket=ticket,
-                scanned_by=user_id,
-                status=TicketScanStatus.INVALID,
-                note="Ticket is cancelled, refunded, or otherwise not admittable.",
-            )
-            db.flush()
-            return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Ticket is not valid for entry.")
-
-        ticket.checked_in_at = now
-        ticket.checked_in_by_user_id = user_id
-        ticket.check_in_status = CheckInStatus.CHECKED_IN
-        ticket.check_in_method = CHECK_IN_METHOD_QR
-        ticket.status = TicketStatus.CHECKED_IN
-        ticket.updated_at = now
-
+    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if user is None or not can_scan_event(db, user=user, event=ticket.event):
         _record_ticket_scan_log(
             db,
             ticket=ticket,
             scanned_by=user_id,
-            status=TicketScanStatus.SUCCESS,
-            note="Ticket checked in successfully.",
+            status=TicketScanStatus.INVALID,
+            note="Unauthorized scan attempt.",
+        )
+        db.flush()
+        return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Not authorized to scan this event.")
+
+    if ticket.event_id != payload_event_id:
+        _record_ticket_scan_log(
+            db,
+            ticket=ticket,
+            scanned_by=user_id,
+            status=TicketScanStatus.WRONG_EVENT,
+            note="Payload event does not match ticket event.",
+        )
+        db.flush()
+        return TicketScanResult(status=TicketScanStatus.WRONG_EVENT.value, message="Ticket is for a different event.")
+
+    now = get_guyana_now()
+    event_end_at = ticket.event.end_at if ticket.event else None
+    compare_now = now
+    if event_end_at is not None and event_end_at.tzinfo is None:
+        compare_now = now.replace(tzinfo=None)
+    if event_end_at is not None and event_end_at < compare_now:
+        _record_ticket_scan_log(
+            db,
+            ticket=ticket,
+            scanned_by=user_id,
+            status=TicketScanStatus.INVALID,
+            note="Event has already ended.",
+        )
+        db.flush()
+        return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Ticket is expired.")
+
+    if ticket.check_in_status == CheckInStatus.CHECKED_IN or ticket.status == TicketStatus.CHECKED_IN:
+        _record_ticket_scan_log(
+            db,
+            ticket=ticket,
+            scanned_by=user_id,
+            status=TicketScanStatus.ALREADY_USED,
+            note="Ticket already checked in.",
         )
         db.flush()
         return TicketScanResult(
-            status=TicketScanStatus.SUCCESS.value,
+            status=TicketScanStatus.ALREADY_USED.value,
             ticket_id=ticket.id,
             checked_in_at=ticket.checked_in_at,
-            message="Ticket checked in successfully.",
+            message="Ticket already used.",
         )
+
+    if ticket.status != TicketStatus.ISSUED or not _is_order_admittable(ticket.order):
+        _record_ticket_scan_log(
+            db,
+            ticket=ticket,
+            scanned_by=user_id,
+            status=TicketScanStatus.INVALID,
+            note="Ticket is cancelled, refunded, or otherwise not admittable.",
+        )
+        db.flush()
+        return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Ticket is not valid for entry.")
+
+    ticket.checked_in_at = now
+    ticket.checked_in_by_user_id = user_id
+    ticket.check_in_status = CheckInStatus.CHECKED_IN
+    ticket.check_in_method = CHECK_IN_METHOD_QR
+    ticket.status = TicketStatus.CHECKED_IN
+    ticket.updated_at = now
+
+    _record_ticket_scan_log(
+        db,
+        ticket=ticket,
+        scanned_by=user_id,
+        status=TicketScanStatus.SUCCESS,
+        note="Ticket checked in successfully.",
+    )
+    db.flush()
+    return TicketScanResult(
+        status=TicketScanStatus.SUCCESS.value,
+        ticket_id=ticket.id,
+        checked_in_at=ticket.checked_in_at,
+        message="Ticket checked in successfully.",
+    )
 
 
 def check_in_ticket_manually(

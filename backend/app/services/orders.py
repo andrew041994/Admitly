@@ -108,103 +108,101 @@ def create_pending_order_from_holds(
     unique_hold_ids = list(dict.fromkeys(hold_ids))
     reference_now = _to_aware(now) if now is not None else get_guyana_now()
 
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        holds = db.execute(
-            select(TicketHold)
-            .where(TicketHold.id.in_(unique_hold_ids))
-            .with_for_update()
-        ).scalars().all()
+    holds = db.execute(
+        select(TicketHold)
+        .where(TicketHold.id.in_(unique_hold_ids))
+        .with_for_update()
+    ).scalars().all()
 
-        if len(holds) != len(unique_hold_ids):
-            raise HoldNotFoundError("One or more holds were not found.")
+    if len(holds) != len(unique_hold_ids):
+        raise HoldNotFoundError("One or more holds were not found.")
 
-        tiers_by_id = {
-            tier.id: tier
-            for tier in db.execute(
-                select(TicketTier).where(TicketTier.id.in_({hold.ticket_tier_id for hold in holds}))
-            ).scalars()
-        }
+    tiers_by_id = {
+        tier.id: tier
+        for tier in db.execute(
+            select(TicketTier).where(TicketTier.id.in_({hold.ticket_tier_id for hold in holds}))
+        ).scalars()
+    }
 
-        event_ids: set[int] = set()
-        currencies: set[str] = set()
-        subtotal_amount = Decimal("0.00")
-        tier_ids: list[int] = []
+    event_ids: set[int] = set()
+    currencies: set[str] = set()
+    subtotal_amount = Decimal("0.00")
+    tier_ids: list[int] = []
 
-        for hold in holds:
-            if hold.user_id != user_id:
-                raise HoldOwnershipError(f"Hold {hold.id} does not belong to the authenticated user.")
-            if _to_aware(hold.expires_at) <= reference_now:
-                raise HoldExpiredError(f"Hold {hold.id} is expired.")
-            if hold.order_id is not None:
-                raise HoldAlreadyAttachedError(f"Hold {hold.id} has already been used in an order.")
+    for hold in holds:
+        if hold.user_id != user_id:
+            raise HoldOwnershipError(f"Hold {hold.id} does not belong to the authenticated user.")
+        if _to_aware(hold.expires_at) <= reference_now:
+            raise HoldExpiredError(f"Hold {hold.id} is expired.")
+        if hold.order_id is not None:
+            raise HoldAlreadyAttachedError(f"Hold {hold.id} has already been used in an order.")
 
-            tier = tiers_by_id.get(hold.ticket_tier_id)
-            if tier is None:
-                raise HoldNotFoundError(f"Ticket tier for hold {hold.id} was not found.")
+        tier = tiers_by_id.get(hold.ticket_tier_id)
+        if tier is None:
+            raise HoldNotFoundError(f"Ticket tier for hold {hold.id} was not found.")
 
-            event_ids.add(hold.event_id)
-            tier_currency = tier.currency
-            currencies.add(tier_currency)
-            tier_ids.append(hold.ticket_tier_id)
-            subtotal_amount += Decimal(hold.quantity) * Decimal(tier.price_amount)
+        event_ids.add(hold.event_id)
+        tier_currency = tier.currency
+        currencies.add(tier_currency)
+        tier_ids.append(hold.ticket_tier_id)
+        subtotal_amount += Decimal(hold.quantity) * Decimal(tier.price_amount)
 
-        if len(event_ids) != 1:
-            raise HoldEventMismatchError("All holds must belong to the same event.")
-        if len(currencies) != 1:
-            raise HoldCurrencyMismatchError("All holds must share the same currency.")
+    if len(event_ids) != 1:
+        raise HoldEventMismatchError("All holds must belong to the same event.")
+    if len(currencies) != 1:
+        raise HoldCurrencyMismatchError("All holds must share the same currency.")
 
-        event = db.execute(select(Event).where(Event.id == next(iter(event_ids)))).scalar_one_or_none()
-        if event is None or event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
-            raise OrderNotPayableError("Event is not currently sellable.")
+    event = db.execute(select(Event).where(Event.id == next(iter(event_ids)))).scalar_one_or_none()
+    if event is None or event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
+        raise OrderNotPayableError("Event is not currently sellable.")
 
-        pricing = standard_pricing(subtotal_amount)
-        if promo_code_text:
-            pricing = apply_promo_code_to_order_pricing_context(
-                db,
-                event_id=next(iter(event_ids)),
-                user_id=user_id,
-                tier_ids=tier_ids,
-                subtotal_amount=subtotal_amount,
-                promo_code_text=promo_code_text,
-                now=reference_now,
-            )
-
-        order = Order(
-            user_id=user_id,
+    pricing = standard_pricing(subtotal_amount)
+    if promo_code_text:
+        pricing = apply_promo_code_to_order_pricing_context(
+            db,
             event_id=next(iter(event_ids)),
-            status=OrderStatus.AWAITING_PAYMENT,
-            subtotal_amount=pricing.subtotal_amount,
-            discount_amount=pricing.discount_amount,
-            total_amount=pricing.total_amount,
-            currency=next(iter(currencies)),
-            promo_code_id=pricing.promo_code_id,
-            promo_code_text=pricing.promo_code_text,
-            discount_type=pricing.discount_type,
-            discount_value_snapshot=pricing.discount_value_snapshot,
-            pricing_source=pricing.pricing_source,
-            is_comp=False,
+            user_id=user_id,
+            tier_ids=tier_ids,
+            subtotal_amount=subtotal_amount,
+            promo_code_text=promo_code_text,
+            now=reference_now,
         )
-        db.add(order)
-        db.flush()
-        if not order.reference_code:
-            order.reference_code = format_order_reference(order.id)
-            db.flush()
 
-        for hold in holds:
-            tier = tiers_by_id[hold.ticket_tier_id]
-            db.add(
-                OrderItem(
-                    order_id=order.id,
-                    ticket_tier_id=hold.ticket_tier_id,
-                    quantity=hold.quantity,
-                    unit_price=tier.price_amount,
-                    currency=tier.currency,
-                )
+    order = Order(
+        user_id=user_id,
+        event_id=next(iter(event_ids)),
+        status=OrderStatus.AWAITING_PAYMENT,
+        subtotal_amount=pricing.subtotal_amount,
+        discount_amount=pricing.discount_amount,
+        total_amount=pricing.total_amount,
+        currency=next(iter(currencies)),
+        promo_code_id=pricing.promo_code_id,
+        promo_code_text=pricing.promo_code_text,
+        discount_type=pricing.discount_type,
+        discount_value_snapshot=pricing.discount_value_snapshot,
+        pricing_source=pricing.pricing_source,
+        is_comp=False,
+    )
+    db.add(order)
+    db.flush()
+    if not order.reference_code:
+        order.reference_code = format_order_reference(order.id)
+        db.flush()
+
+    for hold in holds:
+        tier = tiers_by_id[hold.ticket_tier_id]
+        db.add(
+            OrderItem(
+                order_id=order.id,
+                ticket_tier_id=hold.ticket_tier_id,
+                quantity=hold.quantity,
+                unit_price=tier.price_amount,
+                currency=tier.currency,
             )
-            hold.order_id = order.id
+        )
+        hold.order_id = order.id
 
-        db.flush()
+    db.flush()
 
     return (
         db.execute(
@@ -390,33 +388,31 @@ def cancel_pending_order(
     actor_user_id: int,
     reason: str | None = None,
 ) -> Order:
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        order = (
-            db.execute(
-                select(Order).where(Order.id == order_id).with_for_update()
-            )
-            .scalar_one_or_none()
+    order = (
+        db.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
         )
-        if order is None:
-            raise OrderNotFoundError("Order not found.")
-        if order.user_id != actor_user_id:
-            raise OrderAuthorizationError("Only the order owner can cancel a pending order.")
-        if order.status == OrderStatus.CANCELLED:
-            raise OrderCancellationError("Order is already cancelled.")
-        if order.status not in {OrderStatus.PENDING, OrderStatus.AWAITING_PAYMENT, OrderStatus.PAYMENT_SUBMITTED, OrderStatus.FAILED}:
-            raise OrderCancellationError("Only pending orders can be cancelled.")
-        db.refresh(order, attribute_names=["ticket_holds"])
+        .scalar_one_or_none()
+    )
+    if order is None:
+        raise OrderNotFoundError("Order not found.")
+    if order.user_id != actor_user_id:
+        raise OrderAuthorizationError("Only the order owner can cancel a pending order.")
+    if order.status == OrderStatus.CANCELLED:
+        raise OrderCancellationError("Order is already cancelled.")
+    if order.status not in {OrderStatus.PENDING, OrderStatus.AWAITING_PAYMENT, OrderStatus.PAYMENT_SUBMITTED, OrderStatus.FAILED}:
+        raise OrderCancellationError("Only pending orders can be cancelled.")
+    db.refresh(order, attribute_names=["ticket_holds"])
 
-        now = get_guyana_now()
-        order.status = OrderStatus.CANCELLED
-        order.cancelled_at = now
-        order.cancelled_by_user_id = actor_user_id
-        order.cancel_reason = reason.strip() if reason else None
-        order.updated_at = now
-        db.flush()
-        notify_order_cancelled(order, actor_user_id=actor_user_id)
-        return order
+    now = get_guyana_now()
+    order.status = OrderStatus.CANCELLED
+    order.cancelled_at = now
+    order.cancelled_by_user_id = actor_user_id
+    order.cancel_reason = reason.strip() if reason else None
+    order.updated_at = now
+    db.flush()
+    notify_order_cancelled(order, actor_user_id=actor_user_id)
+    return order
 
 
 def refund_completed_order(
@@ -426,52 +422,50 @@ def refund_completed_order(
     actor_user_id: int,
     reason: str | None = None,
 ) -> Order:
-    tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-    with tx_ctx:
-        order = (
-            db.execute(
-                select(Order).where(Order.id == order_id).with_for_update()
-            )
-            .scalar_one_or_none()
+    order = (
+        db.execute(
+            select(Order).where(Order.id == order_id).with_for_update()
         )
-        if order is None:
-            raise OrderNotFoundError("Order not found.")
-        if not has_event_permission_by_id(
-            db,
-            user_id=actor_user_id,
-            event_id=order.event_id,
-            action=EventPermissionAction.MANAGE_REFUNDS,
-        ):
-            raise OrderAuthorizationError("Not authorized to refund this order.")
-        if order.status != OrderStatus.COMPLETED:
-            raise OrderRefundError("Only completed orders can be refunded.")
-        if order.payment_verification_status != "verified":
-            raise OrderRefundError("Only verified-paid orders can be refunded.")
-        if order.refund_status == "refunded" or order.refunded_at is not None:
-            raise OrderRefundError("Order has already been refunded.")
-        db.refresh(order, attribute_names=["tickets", "event", "order_items"])
-        if any(ticket.status == TicketStatus.CHECKED_IN for ticket in order.tickets):
-            raise OrderRefundError("Orders with checked-in tickets cannot be fully refunded.")
+        .scalar_one_or_none()
+    )
+    if order is None:
+        raise OrderNotFoundError("Order not found.")
+    if not has_event_permission_by_id(
+        db,
+        user_id=actor_user_id,
+        event_id=order.event_id,
+        action=EventPermissionAction.MANAGE_REFUNDS,
+    ):
+        raise OrderAuthorizationError("Not authorized to refund this order.")
+    if order.status != OrderStatus.COMPLETED:
+        raise OrderRefundError("Only completed orders can be refunded.")
+    if order.payment_verification_status != "verified":
+        raise OrderRefundError("Only verified-paid orders can be refunded.")
+    if order.refund_status == "refunded" or order.refunded_at is not None:
+        raise OrderRefundError("Order has already been refunded.")
+    db.refresh(order, attribute_names=["tickets", "event", "order_items"])
+    if any(ticket.status == TicketStatus.CHECKED_IN for ticket in order.tickets):
+        raise OrderRefundError("Orders with checked-in tickets cannot be fully refunded.")
 
-        now = get_guyana_now()
-        order.refund_status = "refunded"
-        order.refunded_at = now
-        order.refunded_by_user_id = actor_user_id
-        order.refund_reason = reason.strip() if reason else None
-        order.updated_at = now
-        db.flush()
+    now = get_guyana_now()
+    order.refund_status = "refunded"
+    order.refunded_at = now
+    order.refunded_by_user_id = actor_user_id
+    order.refund_reason = reason.strip() if reason else None
+    order.updated_at = now
+    db.flush()
 
-        invalidate_order_tickets(
-            db,
-            order_id=order.id,
-            actor_user_id=actor_user_id,
-            reason=reason or "Order refunded",
-        )
-        try:
-            notify_order_refunded(order, actor_user_id=actor_user_id)
-        except TypeError:
-            notify_order_refunded(db, order, actor_user_id=actor_user_id)
-        return order
+    invalidate_order_tickets(
+        db,
+        order_id=order.id,
+        actor_user_id=actor_user_id,
+        reason=reason or "Order refunded",
+    )
+    try:
+        notify_order_refunded(order, actor_user_id=actor_user_id)
+    except TypeError:
+        notify_order_refunded(db, order, actor_user_id=actor_user_id)
+    return order
 
 
 class OrderResendError(OrderFlowError):
