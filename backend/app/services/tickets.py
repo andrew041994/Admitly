@@ -543,8 +543,9 @@ def create_ticket_transfer_invite(
         if recipient_user_id == sender_user_id:
             raise TicketTransferError("Cannot transfer a ticket to yourself.")
     elif normalized_email is not None:
+        normalized = normalize_email(recipient_email)
         matched_user = db.execute(
-            select(User).where(func.lower(func.trim(User.email)) == normalized_email)
+            select(User).where(func.lower(User.email) == normalized)
         ).scalar_one_or_none()
         if matched_user is not None:
             recipient_user_id = matched_user.id
@@ -662,18 +663,21 @@ def accept_ticket_transfer_invite(
     if invite.recipient_user_id is not None and invite.recipient_user_id != accepting_user_id:
         raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
     email_match = (
-        bool(invite.recipient_email)
-        and bool(accepting_user.email)
-        and normalize_email(accepting_user.email) == normalize_email(invite.recipient_email)
+        invite.recipient_email is None
+        or normalize_email(accepting_user.email or "") == normalize_email(invite.recipient_email)
     )
-    phone_match = bool(invite.recipient_phone) and _normalize_phone(accepting_user.phone) == invite.recipient_phone
-    if invite.recipient_email and invite.recipient_phone:
-        if not (email_match or phone_match):
+    phone_match = (
+        invite.recipient_phone is None
+        or _normalize_phone(accepting_user.phone) == invite.recipient_phone
+    )
+    if not (email_match and phone_match):
+        if invite.recipient_email and invite.recipient_phone:
             raise TicketAuthorizationError("This transfer invite is assigned to a different recipient.")
-    elif invite.recipient_email and not email_match:
-        raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
-    elif invite.recipient_phone and not phone_match:
-        raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
+        if invite.recipient_email:
+            raise TicketAuthorizationError("This transfer invite is assigned to a different email.")
+        if invite.recipient_phone:
+            raise TicketAuthorizationError("This transfer invite is assigned to a different phone number.")
+        raise TicketAuthorizationError("This transfer invite is assigned to a different user.")
 
     ticket.owner_user_id = accepting_user_id
     ticket.user_id = accepting_user_id
@@ -1337,9 +1341,8 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_INVALID:
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
-        lookup_value = qr_payload or ticket_code
-        fallback_ticket = get_ticket_by_qr_payload(db, qr_payload=lookup_value or "")
-        if fallback_ticket is not None and fallback_ticket.event_id == event_id:
+        existing = get_ticket_by_qr_payload(db, qr_payload=qr_payload or "")
+        if existing is not None:
             raise TicketCheckInConflictError("Already processed")
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_WRONG_EVENT:

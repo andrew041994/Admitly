@@ -126,7 +126,30 @@ def has_event_permission_by_id(
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
         return False
-    return has_event_permission(db, user_id=user_id, event=event, action=action)
+    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if user is None:
+        return False
+    if user.is_admin:
+        return True
+    if _is_event_owner(db, event=event, user_id=user_id):
+        return True
+
+    role = _get_staff_role(db, event_id=event_id, user_id=user_id)
+    if role is None:
+        return False
+
+    if action == EventPermissionAction.MANAGE_REFUNDS:
+        return role in {EventStaffRole.OWNER, EventStaffRole.MANAGER}
+    if action == EventPermissionAction.CHECK_IN:
+        return role in {EventStaffRole.OWNER, EventStaffRole.CHECKIN}
+    if action == EventPermissionAction.CANCEL_EVENT:
+        return role == EventStaffRole.OWNER
+    if action in {
+        EventPermissionAction.VIEW_ORDERS,
+        EventPermissionAction.VIEW_CHECKIN_SUMMARY,
+    }:
+        return role in {EventStaffRole.OWNER, EventStaffRole.MANAGER}
+    return role == EventStaffRole.OWNER
 
 
 def require_event_permission(
