@@ -119,15 +119,8 @@ def has_event_permission_by_id(
         return True
     if _is_event_owner(db, event=event, user_id=user_id):
         return True
-
+    
     if action == EventPermissionAction.CHECKIN_TICKETS:
-        now = get_guyana_now()
-
-        if user_id == event.organizer.user_id:
-            return True
-
-        if event.end_at and event.end_at < now:
-            return False
 
         staff = db.execute(
             select(EventStaff).where(
@@ -136,7 +129,26 @@ def has_event_permission_by_id(
                 EventStaff.is_active == True,
             )
         ).scalars().first()
+    
         return bool(staff and staff.role == EventStaffRole.CHECKIN)
+
+    # if action == EventPermissionAction.CHECKIN_TICKETS:
+    #     now = get_guyana_now()
+
+    #     if user_id == event.organizer.user_id:
+    #         return True
+
+    #     if event.end_at and event.end_at < now:
+    #         return False
+
+    #     staff = db.execute(
+    #         select(EventStaff).where(
+    #             EventStaff.event_id == event_id,
+    #             EventStaff.user_id == user_id,
+    #             EventStaff.is_active == True,
+    #         )
+    #     ).scalars().first()
+    #     return bool(staff and staff.role == EventStaffRole.CHECKIN)
     role = _get_staff_role(db, event_id=event_id, user_id=user_id)
     if role is None:
         return False
