@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
 from app.models.mixins import TimestampMixin
@@ -86,3 +86,7 @@ class User(TimestampMixin, Base):
     password_reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+
+    @validates("email")
+    def _normalize_email(self, key: str, email: str) -> str:
+        return (email or "").strip().lower()

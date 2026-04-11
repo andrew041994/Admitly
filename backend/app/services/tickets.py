@@ -545,11 +545,16 @@ def create_ticket_transfer_invite(
             raise TicketTransferError("Cannot transfer a ticket to yourself.")
     else:
         if normalized_email is not None:
-            matched_user = db.execute(
-                select(User).where(func.lower(User.email) == normalized_email)
+            user = db.execute(
+                select(User).where(
+                    or_(
+                        func.lower(User.email) == normalized_email,
+                        User.email == recipient_email,
+                    )
+                )
             ).scalars().first()
-            if matched_user is not None:
-                recipient_user_id = matched_user.id
+            if user is not None:
+                recipient_user_id = user.id
         if recipient_user_id is None and normalized_phone is not None:
             matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalars().first()
             if matched_user is not None:
@@ -1339,33 +1344,13 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_INVALID:
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
-        existing = None
+        existing = db.execute(
+            select(Ticket).where(
+                Ticket.event_id == event_id
+            )
+        ).scalars().first()
 
-        if qr_payload:
-            existing = db.execute(
-                select(Ticket).where(
-                    Ticket.event_id == event_id,
-                    or_(
-                        Ticket.qr_payload == qr_payload,
-                        Ticket.qr_token == qr_payload,
-                        Ticket.display_code == qr_payload,
-                    ),
-                )
-            ).scalars().first()
-        elif ticket_code:
-            existing = db.execute(
-                select(Ticket).where(
-                    Ticket.event_id == event_id,
-                    or_(
-                        Ticket.ticket_code == ticket_code,
-                        Ticket.qr_payload == ticket_code,
-                        Ticket.qr_token == ticket_code,
-                        Ticket.display_code == ticket_code,
-                    ),
-                )
-            ).scalars().first()
-
-        if existing is not None:
+        if existing:
             raise TicketCheckInConflictError("Already processed")
 
         raise TicketNotFoundError("Ticket not found.")
