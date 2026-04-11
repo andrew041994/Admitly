@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from datetime import timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -125,14 +124,21 @@ def has_event_permission_by_id(
     if role is None:
         return False
 
-    # base permission check
-    if action not in _role_permissions(role):
+    permissions = _role_permissions(role)
+    if action not in permissions:
         return False
 
-    # ONLY apply expiration rule for check-in
     if action == EventPermissionAction.CHECKIN_TICKETS:
-
+        if event.end_at is not None:
+            now = get_guyana_now()
+            end_at = event.end_at
+            if end_at.tzinfo is None:
+                end_at = end_at.replace(tzinfo=now.tzinfo)
+            if end_at < now:
+                return False
         return True
+
+    return True
 
 
 def require_event_permission(

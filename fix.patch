@@ -1,9 +1,14 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
-index df729d83c1a2b8ee250a54ab9cae067ad055dcd4..c6767d4ee2c82ed16cc54c69be020f3c34060e25 100644
+index 4ad9293fe95e1d5b6ecafb2a37791290dc5d9548..b84e048d6851226e65964b46c1c793629885359d 100644
 --- a/backend/app/services/tickets.py
 +++ b/backend/app/services/tickets.py
-@@ -1326,66 +1326,63 @@ def list_recent_check_in_attempts(
+@@ -1336,86 +1336,84 @@ def list_recent_check_in_attempts(
+             reason_message=row.reason_message,
+             method=row.method,
+             source=row.source,
+             notes=row.notes,
+         )
          for row in rows
      ]
  
@@ -15,7 +20,7 @@ index df729d83c1a2b8ee250a54ab9cae067ad055dcd4..c6767d4ee2c82ed16cc54c69be020f3c
      event_id: int,
      qr_payload: str | None,
      ticket_code: str | None,
- ) -> Ticket:
+     ) -> Ticket:
      result = check_in_ticket(
          db,
          scanner_user_id=scanner_user_id,
@@ -24,49 +29,61 @@ index df729d83c1a2b8ee250a54ab9cae067ad055dcd4..c6767d4ee2c82ed16cc54c69be020f3c
          ticket_code=ticket_code,
          method=CHECK_IN_METHOD_QR,
      )
-     if result.status == CHECK_IN_STATUS_UNAUTHORIZED:
-         raise TicketAuthorizationError(result.message)
-     if result.status == CHECK_IN_STATUS_INVALID:
-         raise TicketNotFoundError(result.message)
-     if result.status == CHECK_IN_STATUS_NOT_FOUND:
--
--        existing = db.execute(
--            select(Ticket).where(
--                Ticket.event_id == event_id
--            )
--        ).scalars().all()
--
--        if existing:
--            for t in existing:
--                if (
--                    t.qr_payload == qr_payload
--                    or t.ticket_code == ticket_code
--                    or t.qr_token == qr_payload
--                    or t.display_code == qr_payload
--                ):
--                    raise TicketCheckInConflictError("Already processed")
-+        if qr_payload:
-+            existing = get_ticket_by_qr_payload(db, qr_payload=qr_payload or "")
-+            if existing is not None and existing.event_id == event_id:
-+                raise TicketCheckInConflictError("Already processed")
-+        elif ticket_code:
-+            existing = db.execute(
-+                select(Ticket).where(
-+                    Ticket.event_id == event_id,
-+                    Ticket.ticket_code == ticket_code,
-+                )
-+            ).scalars().first()
-+            if existing is not None:
-+                raise TicketCheckInConflictError("Already processed")
++    if result.valid:
++        return result.ticket
++
+     if result.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN:
+-             raise TicketCheckInConflictError(result.message)
++        raise TicketCheckInConflictError(result.message)
  
-         raise TicketNotFoundError("Ticket not found.")
+     if result.status == CHECK_IN_STATUS_REFUNDED_OR_INVALIDATED:
+-             raise TicketCheckInConflictError(result.message)
++        raise TicketCheckInConflictError(result.message)
      if result.status == CHECK_IN_STATUS_WRONG_EVENT:
-         raise TicketCrossEventError(result.message)
-     if not result.valid:
-         raise TicketCheckInConflictError(result.message)
-     if result.ticket is None:
-         raise TicketNotFoundError("Ticket not found.")
-     return result.ticket
+-             raise TicketCrossEventError(result.message)
++        raise TicketCrossEventError(result.message)
+ 
+     if result.status == CHECK_IN_STATUS_UNAUTHORIZED:
+-             raise TicketAuthorizationError(result.message)
++        raise TicketAuthorizationError(result.message)
+ 
+     if result.status == CHECK_IN_STATUS_INVALID:
+-             raise TicketNotFoundError(result.message)
+-    
+-         
++        raise TicketNotFoundError(result.message)
++
+     if result.status == CHECK_IN_STATUS_NOT_FOUND:
+         fallback_ticket = get_ticket_by_qr_payload(
+             db,
+             qr_payload=qr_payload or "",
+         )
+-    
+-        if fallback_ticket is not None:
+-            if fallback_ticket.event_id != event_id:
+-                raise TicketCrossEventError("Ticket does not belong to this event.")
+-    
+-            if fallback_ticket.status == TicketStatus.CHECKED_IN:
+-                raise TicketCheckInConflictError("Already processed")
+-    
+-            if fallback_ticket.status != TicketStatus.ISSUED:
+-                raise TicketCheckInConflictError("Ticket is not valid for check-in.")
+-    
++
++        if fallback_ticket is None:
++            raise TicketNotFoundError("Ticket not found.")
++        if fallback_ticket.event_id != event_id:
++            raise TicketCrossEventError("Ticket does not belong to this event.")
++        if fallback_ticket.status == TicketStatus.CHECKED_IN:
+             raise TicketCheckInConflictError("Already processed")
+-    
++        if fallback_ticket.status != TicketStatus.ISSUED:
++            raise TicketCheckInConflictError("Ticket is not valid for check-in.")
+         raise TicketCheckInConflictError("Already processed")
+-    
+-    return result.ticket
++
++    raise TicketCheckInConflictError(result.message or "Unable to process ticket check-in.")
  
  
  def scan_ticket(
@@ -83,6 +100,15 @@ index df729d83c1a2b8ee250a54ab9cae067ad055dcd4..c6767d4ee2c82ed16cc54c69be020f3c
              status=TicketScanStatus.INVALID,
              note="Invalid ticket payload signature.",
          )
+         db.flush()
+         return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Invalid QR payload.")
+ 
+     ticket_id = payload.get("ticket_id")
+     payload_event_id = payload.get("event_id")
+     if not isinstance(ticket_id, int) or not isinstance(payload_event_id, int):
+         _record_ticket_scan_log(
+             db,
+             ticket=None,
  
 EOF
 )

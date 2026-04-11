@@ -1358,42 +1358,40 @@ def check_in_ticket_for_event(
         ticket_code=ticket_code,
         method=CHECK_IN_METHOD_QR,
     )
+    if result.valid:
+        return result.ticket
+
     if result.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN:
-             raise TicketCheckInConflictError(result.message)
+        raise TicketCheckInConflictError(result.message)
 
     if result.status == CHECK_IN_STATUS_REFUNDED_OR_INVALIDATED:
-             raise TicketCheckInConflictError(result.message)
+        raise TicketCheckInConflictError(result.message)
     if result.status == CHECK_IN_STATUS_WRONG_EVENT:
-             raise TicketCrossEventError(result.message)
+        raise TicketCrossEventError(result.message)
 
     if result.status == CHECK_IN_STATUS_UNAUTHORIZED:
-             raise TicketAuthorizationError(result.message)
+        raise TicketAuthorizationError(result.message)
 
     if result.status == CHECK_IN_STATUS_INVALID:
-             raise TicketNotFoundError(result.message)
-    
-         
+        raise TicketNotFoundError(result.message)
+
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
         fallback_ticket = get_ticket_by_qr_payload(
             db,
             qr_payload=qr_payload or "",
         )
-    
-        if fallback_ticket is not None:
-            if fallback_ticket.event_id != event_id:
-                raise TicketCrossEventError("Ticket does not belong to this event.")
-    
-            if fallback_ticket.status == TicketStatus.CHECKED_IN:
-                raise TicketCheckInConflictError("Already processed")
-    
-            if fallback_ticket.status != TicketStatus.ISSUED:
-                raise TicketCheckInConflictError("Ticket is not valid for check-in.")
-    
+
+        if fallback_ticket is None:
+            raise TicketNotFoundError("Ticket not found.")
+        if fallback_ticket.event_id != event_id:
+            raise TicketCrossEventError("Ticket does not belong to this event.")
+        if fallback_ticket.status == TicketStatus.CHECKED_IN:
             raise TicketCheckInConflictError("Already processed")
-    
+        if fallback_ticket.status != TicketStatus.ISSUED:
+            raise TicketCheckInConflictError("Ticket is not valid for check-in.")
         raise TicketCheckInConflictError("Already processed")
-    
-    return result.ticket
+
+    raise TicketCheckInConflictError(result.message or "Unable to process ticket check-in.")
 
 
 def scan_ticket(
