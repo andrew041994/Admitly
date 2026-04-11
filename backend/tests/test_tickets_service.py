@@ -695,6 +695,7 @@ def test_concurrent_duplicate_scan_only_one_succeeds() -> None:
     with SessionLocal() as session:
         order, _, _, _, event = _seed_order(session, quantity=1)
         ticket = issue_tickets_for_completed_order(session, order)[0]
+        session.commit()
         scanner_user_id = event.organizer.user_id
         event_id = event.id
         qr_payload = ticket.qr_payload

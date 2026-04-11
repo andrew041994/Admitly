@@ -131,18 +131,17 @@ def has_event_permission_by_id(
     if action not in permissions:
         return False
 
-    if action == EventPermissionAction.CHECKIN_TICKETS:
-        if event.end_at is not None:
-            now = get_guyana_now()
-            end_at = event.end_at
-            if end_at.tzinfo is None:
-                end_at = end_at.replace(tzinfo=now.tzinfo)
-            if end_at < now:
-                return False
-        return True
+    if action == EventPermissionAction.CHECKIN_TICKETS and event.end_at is not None:
+        now = get_guyana_now()
+        end_at = event.end_at
+
+        if end_at.tzinfo is None:
+            end_at = end_at.replace(tzinfo=now.tzinfo)
+
+        if end_at.date() == now.date() and end_at < now:
+            return False
 
     return True
-
 
 def require_event_permission(
     db: Session,
