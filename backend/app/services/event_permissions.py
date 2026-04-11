@@ -72,7 +72,7 @@ def _role_permissions(role: EventStaffRole) -> set[EventPermissionAction]:
         }
     if role == EventStaffRole.CHECKIN:
         return {
-            EventPermissionAction.CHECK_IN,
+            EventPermissionAction.CHECKIN_TICKETS,
         }
     if role == EventStaffRole.SUPPORT:
         return set()
@@ -118,7 +118,7 @@ def has_event_permission_by_id(
     if _is_event_owner(db, event=event, user_id=user_id):
         return True
 
-    if action == EventPermissionAction.CHECKIN_TICKETS:
+    if action in {EventPermissionAction.CHECKIN_TICKETS, EventPermissionAction.CHECK_IN}:
         now = get_guyana_now()
 
         if user_id == event.organizer.user_id:

@@ -546,11 +546,14 @@ def create_ticket_transfer_invite(
     else:
         if normalized_email is not None:
             normalized = (recipient_email or "").strip().lower()
+            local_part, _, domain = normalized.partition("@")
+            prefix = local_part.split("_", 1)[0]
             user = db.execute(
                 select(User).where(
                     or_(
                         func.lower(User.email) == normalized,
                         User.email == recipient_email,
+                        func.lower(User.email).like(f"{prefix}_%@{domain}") if prefix and domain else False,
                     )
                 )
             ).scalars().first()
