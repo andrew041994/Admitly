@@ -545,10 +545,11 @@ def create_ticket_transfer_invite(
             raise TicketTransferError("Cannot transfer a ticket to yourself.")
     else:
         if normalized_email is not None:
+            normalized = (recipient_email or "").strip().lower()
             user = db.execute(
                 select(User).where(
                     or_(
-                        func.lower(User.email) == normalized_email,
+                        func.lower(User.email) == normalized,
                         User.email == recipient_email,
                     )
                 )
@@ -1344,11 +1345,32 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_INVALID:
         raise TicketNotFoundError(result.message)
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
-        existing = db.execute(
-            select(Ticket).where(
-                Ticket.event_id == event_id
-            )
-        ).scalars().first()
+        existing = None
+
+        if qr_payload:
+            existing = db.execute(
+                select(Ticket).where(
+                    Ticket.event_id == event_id,
+                    or_(
+                        Ticket.qr_payload == qr_payload,
+                        Ticket.qr_token == qr_payload,
+                        Ticket.display_code == qr_payload,
+                    ),
+                )
+            ).scalars().first()
+
+        elif ticket_code:
+            existing = db.execute(
+                select(Ticket).where(
+                    Ticket.event_id == event_id,
+                    or_(
+                        Ticket.ticket_code == ticket_code,
+                        Ticket.qr_payload == ticket_code,
+                        Ticket.qr_token == ticket_code,
+                        Ticket.display_code == ticket_code,
+                    ),
+                )
+            ).scalars().first()
 
         if existing:
             raise TicketCheckInConflictError("Already processed")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,8 +11,6 @@ from app.models.event_staff import EventStaff
 from app.models.organizer_profile import OrganizerProfile
 from app.models.user import User
 from app.services.ticket_holds import get_guyana_now
-
-GYT = ZoneInfo("America/Guyana")
 
 class EventPermissionAction(str, Enum):
     VIEW_EVENT_STAFF = "view_event_staff"
@@ -123,19 +120,12 @@ def has_event_permission_by_id(
 
     if action == EventPermissionAction.CHECKIN_TICKETS:
         now = get_guyana_now()
-        if event.end_at:
-            end_at = event.end_at
-
-            if end_at.tzinfo is None:
-                end_at = end_at.replace(tzinfo=GYT)
-            else:
-                end_at = end_at.astimezone(GYT)
-
-            if end_at < now:
-                return False
 
         if user_id == event.organizer.user_id:
             return True
+
+        if event.end_at and event.end_at < now:
+            return False
 
         staff = db.execute(
             select(EventStaff).where(
