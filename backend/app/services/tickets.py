@@ -1378,11 +1378,11 @@ def check_in_ticket_for_event(
     if result.status == CHECK_IN_STATUS_NOT_FOUND:
         fallback_ticket = get_ticket_by_qr_payload(
             db,
-            qr_payload=qr_payload or "",
+            qr_payload=ticket_code or qr_payload or "",
         )
 
         if fallback_ticket is None:
-            raise TicketNotFoundError("Ticket not found.")
+            raise TicketCheckInConflictError("Already processed")
         if fallback_ticket.event_id != event_id:
             raise TicketCrossEventError("Ticket does not belong to this event.")
         if fallback_ticket.status == TicketStatus.CHECKED_IN:

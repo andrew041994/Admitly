@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.enums import EventStaffRole
@@ -49,7 +49,10 @@ def _get_staff_role(db: Session, *, event_id: int, user_id: int) -> EventStaffRo
         .where(
             EventStaff.event_id == event_id,
             EventStaff.user_id == user_id,
-            EventStaff.is_active.is_(True),
+            or_(
+                EventStaff.is_active.is_(True),
+                EventStaff.is_active.is_(None),
+            ),
         )
     ).scalar_one_or_none()
 
