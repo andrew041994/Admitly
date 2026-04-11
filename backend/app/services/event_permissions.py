@@ -19,7 +19,7 @@ class EventPermissionAction(str, Enum):
     CANCEL_EVENT = "cancel_event"
     VIEW_ORDERS = "view_orders"
     MANAGE_REFUNDS = "manage_refunds"
-    CHECK_IN = "checkin_tickets"
+    # CHECK_IN = "checkin_tickets"
     CHECKIN_TICKETS = "checkin_tickets"
     VIEW_CHECKIN_SUMMARY = "view_checkin_summary"
     CHECKIN_OVERRIDE = "checkin_override"
@@ -107,7 +107,7 @@ def has_event_permission_by_id(
     event_id: int,
     action: EventPermissionAction,
 ) -> bool:
-    action = EventPermissionAction(action.value)
+    # action = EventPermissionAction(action.value)
 
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
