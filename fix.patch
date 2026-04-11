@@ -1,9 +1,36 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
-index 7a0b4a0a0ff726fb82a193e6fb44d209eb37e451..63fb20c110b4d437195c63073613ab467bbba624 100644
+index 63fb20c110b4d437195c63073613ab467bbba624..715d5465576504814ce1ffd0cf82a7f709e16e28 100644
 --- a/backend/app/services/tickets.py
 +++ b/backend/app/services/tickets.py
-@@ -523,55 +523,55 @@ def create_ticket_transfer_invite(
+@@ -497,81 +497,81 @@ def transfer_ticket_to_user(
+     now = get_guyana_now()
+     ticket.owner_user_id = to_user_id
+     ticket.user_id = to_user_id
+     ticket.transferred_at = now
+     ticket.transfer_count += 1
+     ticket.updated_at = now
+     db.flush()
+     try:
+         notify_ticket_transferred(ticket, from_user_id=from_user_id, to_user_id=to_user_id)
+     except TypeError:
+         notify_ticket_transferred(db, ticket, from_user_id=from_user_id, to_user_id=to_user_id)
+     return ticket
+ 
+ 
+ def create_ticket_transfer_invite(
+     db: Session,
+     *,
+     ticket_id: int,
+     sender_user_id: int,
+     recipient_user_id: int | None = None,
+     recipient_email: str | None = None,
+     recipient_phone: str | None = None,
+     recipient_name: str | None = None,
+     expires_at=None,
+ ) -> TicketTransferInvite:
+-    normalized_email = normalize_email(recipient_email) if _normalize_optional(recipient_email) else None
++    normalized_email = (recipient_email or "").strip().lower() or None
      normalized_phone = _normalize_phone(recipient_phone)
      normalized_name = _normalize_optional(recipient_name)
      if recipient_user_id is None and normalized_email is None and normalized_phone is None:
@@ -29,14 +56,14 @@ index 7a0b4a0a0ff726fb82a193e6fb44d209eb37e451..63fb20c110b4d437195c63073613ab46
              raise TicketTransferError("Cannot transfer a ticket to yourself.")
      else:
          if normalized_email is not None:
--            matched_user = db.execute(
-+            user = db.execute(
+-            user = db.execute(
++            matched_user = db.execute(
                  select(User).where(func.lower(User.email) == normalized_email)
              ).scalars().first()
--            if matched_user is not None:
--                recipient_user_id = matched_user.id
-+            if user:
-+                recipient_user_id = user.id
+-            if user:
+-                recipient_user_id = user.id
++            if matched_user is not None:
++                recipient_user_id = matched_user.id
          if recipient_user_id is None and normalized_phone is not None:
              matched_user = db.execute(select(User).where(User.phone == normalized_phone)).scalars().first()
              if matched_user is not None:
@@ -62,84 +89,7 @@ index 7a0b4a0a0ff726fb82a193e6fb44d209eb37e451..63fb20c110b4d437195c63073613ab46
      db.add(invite)
      db.flush()
      notify_ticket_transfer_invite_created(invite)
-@@ -747,73 +747,73 @@ def void_ticket(
-         raise TicketNotFoundError("Ticket not found.")
-     if not can_void_event_ticket(db, user_id=actor_user_id, event_id=ticket.event_id):
-         raise TicketAuthorizationError("Not authorized to void tickets for this event.")
- 
-     validate_ticket_voidable(ticket)
- 
-     now = get_guyana_now()
-     ticket.status = TicketStatus.VOIDED
-     ticket.voided_at = now
-     ticket.voided_by_user_id = actor_user_id
-     ticket.void_reason = reason.strip() if reason else None
-     ticket.updated_at = now
-     db.flush()
-     try:
-         notify_ticket_voided(ticket, actor_user_id=actor_user_id)
-     except TypeError:
-         notify_ticket_voided(db, ticket, actor_user_id=actor_user_id)
-     return ticket
- 
- 
- def can_actor_check_in_event(db: Session, *, user_id: int, event_id: int) -> bool:
-     return has_event_permission_by_id(
-         db,
-         user_id=user_id,
-         event_id=event_id,
--        action=EventPermissionAction.CHECK_IN,
-+        action=EventPermissionAction.CHECKIN_TICKETS,
-     )
- 
- 
- def can_actor_override_check_in(db: Session, *, user_id: int, event_id: int) -> bool:
-     return has_event_permission_by_id(
-         db,
-         user_id=user_id,
-         event_id=event_id,
-         action=EventPermissionAction.CHECKIN_OVERRIDE,
-     )
- 
- 
- def can_check_in_event_tickets(db: Session, *, user_id: int, event_id: int) -> bool:
-     return can_actor_check_in_event(db, user_id=user_id, event_id=event_id)
- 
- 
- def can_scan_event(db: Session, *, user: User, event: Event) -> bool:
-     return has_event_permission_by_id(
-         db,
-         user_id=user.id,
-         event_id=event.id,
--        action=EventPermissionAction.CHECK_IN,
-+        action=EventPermissionAction.CHECKIN_TICKETS,
-     )
- 
- 
- def get_ticket_by_qr_payload(db: Session, *, qr_payload: str) -> Ticket | None:
-     lookup = extract_ticket_lookup_value(qr_payload)
-     if not lookup:
-         return None
-     ticket = (
-         db.execute(select(Ticket).where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup)))
-         .scalars()
-         .first()
-     )
-     if ticket is not None and not ticket.qr_token:
-         ensure_ticket_qr(db, ticket)
-         db.flush()
-     return ticket
- 
- 
- def _is_event_admittable(event: Event | None) -> bool:
-     if event is None:
-         return False
-     return event.status != EventStatus.CANCELLED and event.cancelled_at is None
- 
- 
- def _is_order_admittable(order: Order | None) -> bool:
-@@ -1317,67 +1317,66 @@ def list_recent_check_in_attempts(
-         for row in rows
+@@ -1318,66 +1318,78 @@ def list_recent_check_in_attempts(
      ]
  
  
@@ -164,26 +114,38 @@ index 7a0b4a0a0ff726fb82a193e6fb44d209eb37e451..63fb20c110b4d437195c63073613ab46
      if result.status == CHECK_IN_STATUS_INVALID:
          raise TicketNotFoundError(result.message)
      if result.status == CHECK_IN_STATUS_NOT_FOUND:
-+        existing = None
+         existing = None
++
          if qr_payload:
              existing = db.execute(
                  select(Ticket).where(
                      Ticket.event_id == event_id,
-                     Ticket.qr_payload == qr_payload,
+-                    Ticket.qr_payload == qr_payload,
++                    or_(
++                        Ticket.qr_payload == qr_payload,
++                        Ticket.qr_token == qr_payload,
++                        Ticket.display_code == qr_payload,
++                    ),
                  )
              ).scalars().first()
          elif ticket_code:
              existing = db.execute(
                  select(Ticket).where(
                      Ticket.event_id == event_id,
-                     Ticket.ticket_code == ticket_code,
+-                    Ticket.ticket_code == ticket_code,
++                    or_(
++                        Ticket.ticket_code == ticket_code,
++                        Ticket.qr_payload == ticket_code,
++                        Ticket.qr_token == ticket_code,
++                        Ticket.display_code == ticket_code,
++                    ),
                  )
              ).scalars().first()
--        else:
--            existing = None
--        if existing is not None:
-+        if existing:
+-        if existing:
++
++        if existing is not None:
              raise TicketCheckInConflictError("Already processed")
++
          raise TicketNotFoundError("Ticket not found.")
      if result.status == CHECK_IN_STATUS_WRONG_EVENT:
          raise TicketCrossEventError(result.message)
@@ -208,6 +170,7 @@ index 7a0b4a0a0ff726fb82a193e6fb44d209eb37e451..63fb20c110b4d437195c63073613ab46
              status=TicketScanStatus.INVALID,
              note="Invalid ticket payload signature.",
          )
+         db.flush()
  
 EOF
 )
