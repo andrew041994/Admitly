@@ -1,9 +1,9 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
-index c8ac4e62f6866267b8b5e97b56783b67d1b2716e..df729d83c1a2b8ee250a54ab9cae067ad055dcd4 100644
+index df729d83c1a2b8ee250a54ab9cae067ad055dcd4..c6767d4ee2c82ed16cc54c69be020f3c34060e25 100644
 --- a/backend/app/services/tickets.py
 +++ b/backend/app/services/tickets.py
-@@ -1326,79 +1326,66 @@ def list_recent_check_in_attempts(
+@@ -1326,66 +1326,63 @@ def list_recent_check_in_attempts(
          for row in rows
      ]
  
@@ -29,48 +29,35 @@ index c8ac4e62f6866267b8b5e97b56783b67d1b2716e..df729d83c1a2b8ee250a54ab9cae067a
      if result.status == CHECK_IN_STATUS_INVALID:
          raise TicketNotFoundError(result.message)
      if result.status == CHECK_IN_STATUS_NOT_FOUND:
--        existing = None
- 
--        if qr_payload:
--            existing = db.execute(
--                select(Ticket).where(
--                    Ticket.event_id == event_id,
--                    or_(
--                        Ticket.qr_payload == qr_payload,
--                        Ticket.qr_token == qr_payload,
--                        Ticket.display_code == qr_payload,
--                    ),
--                )
--            ).scalars().first()
 -
--        elif ticket_code:
--            existing = db.execute(
--                select(Ticket).where(
--                    Ticket.event_id == event_id,
--                    or_(
--                        Ticket.ticket_code == ticket_code,
--                        Ticket.qr_payload == ticket_code,
--                        Ticket.qr_token == ticket_code,
--                        Ticket.display_code == ticket_code,
--                    ),
--                )
--            ).scalars().first()
-+        existing = db.execute(
-+            select(Ticket).where(
-+                Ticket.event_id == event_id
-+            )
-+        ).scalars().all()
- 
-         if existing:
--            raise TicketCheckInConflictError("Already processed")
-+            for t in existing:
-+                if (
-+                    t.qr_payload == qr_payload
-+                    or t.ticket_code == ticket_code
-+                    or t.qr_token == qr_payload
-+                    or t.display_code == qr_payload
-+                ):
-+                    raise TicketCheckInConflictError("Already processed")
+-        existing = db.execute(
+-            select(Ticket).where(
+-                Ticket.event_id == event_id
+-            )
+-        ).scalars().all()
+-
+-        if existing:
+-            for t in existing:
+-                if (
+-                    t.qr_payload == qr_payload
+-                    or t.ticket_code == ticket_code
+-                    or t.qr_token == qr_payload
+-                    or t.display_code == qr_payload
+-                ):
+-                    raise TicketCheckInConflictError("Already processed")
++        if qr_payload:
++            existing = get_ticket_by_qr_payload(db, qr_payload=qr_payload or "")
++            if existing is not None and existing.event_id == event_id:
++                raise TicketCheckInConflictError("Already processed")
++        elif ticket_code:
++            existing = db.execute(
++                select(Ticket).where(
++                    Ticket.event_id == event_id,
++                    Ticket.ticket_code == ticket_code,
++                )
++            ).scalars().first()
++            if existing is not None:
++                raise TicketCheckInConflictError("Already processed")
  
          raise TicketNotFoundError("Ticket not found.")
      if result.status == CHECK_IN_STATUS_WRONG_EVENT:

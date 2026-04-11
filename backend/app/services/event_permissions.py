@@ -107,8 +107,7 @@ def has_event_permission_by_id(
     event_id: int,
     action: EventPermissionAction,
 ) -> bool:
-    if action == EventPermissionAction.CHECK_IN:
-        action = EventPermissionAction.CHECKIN_TICKETS
+    action = EventPermissionAction(action.value)
 
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
@@ -137,9 +136,7 @@ def has_event_permission_by_id(
                 EventStaff.is_active == True,
             )
         ).scalars().first()
-        if staff and staff.role == EventStaffRole.CHECKIN:
-            return True
-        return False
+        return bool(staff and staff.role == EventStaffRole.CHECKIN)
     role = _get_staff_role(db, event_id=event_id, user_id=user_id)
     if role is None:
         return False
