@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-
+from datetime import timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -107,52 +107,32 @@ def has_event_permission_by_id(
     event_id: int,
     action: EventPermissionAction,
 ) -> bool:
-    # action = EventPermissionAction(action.value)
-
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
         return False
+
     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
     if user is None:
         return False
+
     if user.is_admin:
         return True
+
     if _is_event_owner(db, event=event, user_id=user_id):
         return True
-    
-    if action == EventPermissionAction.CHECKIN_TICKETS:
 
-        staff = db.execute(
-            select(EventStaff).where(
-                EventStaff.event_id == event_id,
-                EventStaff.user_id == user_id,
-                EventStaff.is_active == True,
-            )
-        ).scalars().first()
-    
-        return bool(staff and staff.role == EventStaffRole.CHECKIN)
-
-    # if action == EventPermissionAction.CHECKIN_TICKETS:
-    #     now = get_guyana_now()
-
-    #     if user_id == event.organizer.user_id:
-    #         return True
-
-    #     if event.end_at and event.end_at < now:
-    #         return False
-
-    #     staff = db.execute(
-    #         select(EventStaff).where(
-    #             EventStaff.event_id == event_id,
-    #             EventStaff.user_id == user_id,
-    #             EventStaff.is_active == True,
-    #         )
-    #     ).scalars().first()
-    #     return bool(staff and staff.role == EventStaffRole.CHECKIN)
     role = _get_staff_role(db, event_id=event_id, user_id=user_id)
     if role is None:
         return False
-    return action in _role_permissions(role)
+
+    # base permission check
+    if action not in _role_permissions(role):
+        return False
+
+    # ONLY apply expiration rule for check-in
+    if action == EventPermissionAction.CHECKIN_TICKETS:
+
+        return True
 
 
 def require_event_permission(
