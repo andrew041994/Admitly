@@ -107,6 +107,9 @@ def has_event_permission_by_id(
     event_id: int,
     action: EventPermissionAction,
 ) -> bool:
+    if action == EventPermissionAction.CHECK_IN:
+        action = EventPermissionAction.CHECKIN_TICKETS
+
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:
         return False
@@ -118,7 +121,7 @@ def has_event_permission_by_id(
     if _is_event_owner(db, event=event, user_id=user_id):
         return True
 
-    if action in {EventPermissionAction.CHECKIN_TICKETS, EventPermissionAction.CHECK_IN}:
+    if action == EventPermissionAction.CHECKIN_TICKETS:
         now = get_guyana_now()
 
         if user_id == event.organizer.user_id:
