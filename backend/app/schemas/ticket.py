@@ -150,7 +150,7 @@ class TicketQrResponse(BaseModel):
 
 
 class TicketScanRequest(BaseModel):
-    payload: dict[str, object]
+    payload: dict[str, object] | str
 
 
 class TicketScanResponse(BaseModel):

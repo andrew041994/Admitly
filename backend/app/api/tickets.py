@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
@@ -591,7 +592,28 @@ def scan_ticket_qr(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> TicketScanResponse:
-    result = scan_ticket(db, payload=payload.payload, user_id=user_id)
+    normalized_payload: dict[str, object]
+    if isinstance(payload.payload, dict):
+        normalized_payload = payload.payload
+    else:
+        raw_payload = payload.payload.strip()
+        parsed_payload: object
+        try:
+            parsed_payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            parsed_payload = None
+
+        if isinstance(parsed_payload, dict):
+            normalized_payload = parsed_payload
+        else:
+            ticket = get_ticket_by_qr_payload(db, qr_payload=raw_payload)
+            if ticket is None:
+                return TicketScanResponse(status="invalid", message="Invalid QR payload.")
+            from app.services.ticket_qr import generate_signed_ticket_qr_payload
+
+            normalized_payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id)
+
+    result = scan_ticket(db, payload=normalized_payload, user_id=user_id)
     return TicketScanResponse(
         status=result.status,
         ticket_id=result.ticket_id,
