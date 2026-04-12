@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import os
 import uuid
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from datetime import datetime, timedelta, timezone
@@ -67,6 +68,7 @@ from app.services.tickets import (
     void_ticket,
     scan_ticket,
 )
+import app.services.tickets as tickets_service
 from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
 from tests.utils import unique_email
 
@@ -1185,10 +1187,30 @@ def _add_checkin_staff(db: Session, *, event: Event, owner_user_id: int, email: 
     return scanner
 
 
-def test_scan_valid_ticket(db_session: Session) -> None:
+def _set_scan_window(
+    db: Session,
+    *,
+    event: Event,
+    start_at: datetime,
+    end_at: datetime,
+) -> None:
+    event.start_at = start_at
+    event.end_at = end_at
+    db.flush()
+
+
+def test_scan_valid_ticket(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_valid"))
+    gyt = ZoneInfo("America/Guyana")
+    _set_scan_window(
+        db_session,
+        event=event,
+        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
+        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
+    )
+    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 9, 0, tzinfo=gyt))
 
     result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
 
@@ -1199,10 +1221,18 @@ def test_scan_valid_ticket(db_session: Session) -> None:
     assert ticket.checked_in_by_user_id == scanner.id
 
 
-def test_scan_already_used_ticket(db_session: Session) -> None:
+def test_scan_already_used_ticket(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_used"))
+    gyt = ZoneInfo("America/Guyana")
+    _set_scan_window(
+        db_session,
+        event=event,
+        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
+        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
+    )
+    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 10, 0, tzinfo=gyt))
 
     first = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
     second = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
@@ -1250,10 +1280,18 @@ def test_only_authorized_can_scan(db_session: Session) -> None:
     assert result.message == "Not authorized to scan this event."
 
 
-def test_scan_logs_created(db_session: Session) -> None:
+def test_scan_logs_created(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_logs"))
+    gyt = ZoneInfo("America/Guyana")
+    _set_scan_window(
+        db_session,
+        event=event,
+        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
+        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
+    )
+    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 10, 0, tzinfo=gyt))
 
     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
@@ -1261,6 +1299,109 @@ def test_scan_logs_created(db_session: Session) -> None:
     logs = db_session.execute(select(TicketScanLog).where(TicketScanLog.ticket_id == ticket.id)).scalars().all()
     assert len(logs) == 2
     assert {row.status.value for row in logs} == {"SUCCESS", "ALREADY_USED"}
+
+
+def test_organizer_can_scan_on_event_day_before_event_start(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    gyt = ZoneInfo("America/Guyana")
+    _set_scan_window(
+        db_session,
+        event=event,
+        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
+        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
+    )
+    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 0, 15, tzinfo=gyt))
+
+    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=event.organizer.user_id)
+    assert result.status == "SUCCESS"
+
+
+def test_staff_can_scan_on_event_day(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    staff = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_window_staff"))
+    gyt = ZoneInfo("America/Guyana")
+    _set_scan_window(
+        db_session,
+        event=event,
+        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
+        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
+    )
+    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 1, 0, tzinfo=gyt))
+
+    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=staff.id)
+    assert result.status == "SUCCESS"
+
+
+def test_organizer_cannot_scan_before_event_day(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    gyt = ZoneInfo("America/Guyana")
+    _set_scan_window(
+        db_session,
+        event=event,
+        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
+        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
+    )
+    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 19, 23, 59, tzinfo=gyt))
+
+    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=event.organizer.user_id)
+    assert result.status == "INVALID"
+    assert result.message == "Ticket scanning is not open yet for this event."
+
+
+def test_staff_cannot_scan_before_event_day(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    staff = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_before_staff"))
+    gyt = ZoneInfo("America/Guyana")
+    _set_scan_window(
+        db_session,
+        event=event,
+        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
+        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
+    )
+    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 19, 20, 0, tzinfo=gyt))
+
+    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=staff.id)
+    assert result.status == "INVALID"
+    assert result.message == "Ticket scanning is not open yet for this event."
+
+
+def test_organizer_cannot_scan_after_event_end(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    gyt = ZoneInfo("America/Guyana")
+    _set_scan_window(
+        db_session,
+        event=event,
+        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
+        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
+    )
+    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 21, 2, 1, tzinfo=gyt))
+
+    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=event.organizer.user_id)
+    assert result.status == "INVALID"
+    assert result.message == "Ticket scanning has closed for this event."
+
+
+def test_staff_cannot_scan_after_event_end(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    staff = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_after_staff"))
+    gyt = ZoneInfo("America/Guyana")
+    _set_scan_window(
+        db_session,
+        event=event,
+        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
+        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
+    )
+    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 21, 3, 0, tzinfo=gyt))
+
+    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=staff.id)
+    assert result.status == "INVALID"
+    assert result.message == "Ticket scanning has closed for this event."
 
 
 def test_ticket_issuance_populates_qr_fields_and_unique_tokens(db_session: Session) -> None:

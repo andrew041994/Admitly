@@ -1,48 +1,363 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_tickets_api.py b/backend/tests/test_tickets_api.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..ef60c320423314e6e77a02cf68c61e7580b3aeb3
---- /dev/null
-+++ b/backend/tests/test_tickets_api.py
-@@ -0,0 +1,38 @@
-+from datetime import datetime, timezone
-+from types import SimpleNamespace
+diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
+index 699f3446a4a9fc2575685768d2918024550480fa..3d19e48f34a36f73533982c6ab36cf440db6a103 100644
+--- a/backend/tests/test_tickets_service.py
++++ b/backend/tests/test_tickets_service.py
+@@ -1,30 +1,31 @@
+ from __future__ import annotations
+ 
+ from concurrent.futures import ThreadPoolExecutor
+ import os
+ import uuid
++from zoneinfo import ZoneInfo
+ 
+ from fastapi import HTTPException
+ from datetime import datetime, timedelta, timezone
+ from decimal import Decimal
+ from pathlib import Path
+ 
+ import pytest
+ from sqlalchemy import create_engine, select
+ from sqlalchemy.exc import OperationalError
+ from sqlalchemy.orm import Session, sessionmaker
+ 
+ from app.db.base import Base
+ from app.models import Event, EventStaff, OrganizerProfile, Order, OrderItem, Ticket, TicketScanLog, TicketTier, User, Venue
+ from app.models.enums import (
+     CheckInStatus,
+     EventApprovalStatus,
+     EventStaffRole,
+     EventStatus,
+     EventVisibility,
+     OrderStatus,
+     TicketStatus,
+ )
+ from app.api.tickets import check_in_event_ticket, get_ticket_detail, get_ticket_qr_by_ticket_id
+ from app.schemas.ticket import TicketCheckInRequest
+ from app.services.orders import complete_paid_order
+@@ -45,50 +46,51 @@ from app.services.tickets import (
+     CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
+     CHECK_IN_STATUS_VALID,
+     CHECK_IN_STATUS_WRONG_EVENT,
+     TicketAuthorizationError,
+     TicketCheckInConflictError,
+     TicketCrossEventError,
+     TicketIssuanceError,
+     TicketNotFoundError,
+     TicketTransferError,
+     TicketVoidError,
+     check_in_ticket,
+     can_check_in_event_tickets,
+     can_void_event_ticket,
+     check_in_ticket_for_event,
+     get_event_check_in_summary,
+     issue_tickets_for_completed_order,
+     list_recent_check_in_attempts,
+     list_tickets_for_order_owner,
+     list_tickets_for_user,
+     override_ticket_check_in,
+     transfer_ticket_to_user,
+     validate_ticket_for_check_in,
+     void_ticket,
+     scan_ticket,
+ )
++import app.services.tickets as tickets_service
+ from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
+ from tests.utils import unique_email
+ 
+ 
+ 
+ def _seed_order(
+     db: Session,
+     *,
+     user_email: str | None = None,
+     suffix: str | None = None,
+     quantity: int = 3,
+     status: OrderStatus = OrderStatus.COMPLETED,
+     payment_verification_status: str = "verified",
+ ) -> tuple[Order, OrderItem, TicketTier, User, Event]:
+     now = datetime.now(timezone.utc)
+     suffix = suffix or str(uuid.uuid4())[:8]
+     email = user_email or unique_email("buyer")
+     user = User(email=email, full_name="Buyer")
+     db.add(user)
+     db.flush()
+ 
+     organizer_profile = OrganizerProfile(user_id=user.id, business_name="Org", display_name="Org")
+     db.add(organizer_profile)
+     db.flush()
+ 
+@@ -1163,128 +1165,267 @@ def test_wallet_entry_payload_exists_and_stable(db_session: Session) -> None:
+ 
+ 
+ def test_wallet_uses_issued_tickets_not_only_orders(db_session: Session) -> None:
+     order, _, _, buyer, _ = _seed_order(db_session, quantity=2)
+     assert list_wallet_tickets(db_session, user_id=buyer.id) == []
+     issue_tickets_for_completed_order(db_session, order)
+     assert len(list_wallet_tickets(db_session, user_id=buyer.id)) == 2
+ 
+ def _add_checkin_staff(db: Session, *, event: Event, owner_user_id: int, email: str | None = None) -> User:
+     scanner = User(email=email or unique_email("scanner"), full_name="Scanner")
+     db.add(scanner)
+     db.flush()
+     db.add(
+         EventStaff(
+             event_id=event.id,
+             user_id=scanner.id,
+             role=EventStaffRole.CHECKIN,
+             invited_by_user_id=owner_user_id,
+         )
+     )
+     db.commit()
+     db.refresh(scanner)
+     return scanner
+ 
+ 
+-def test_scan_valid_ticket(db_session: Session) -> None:
++def _set_scan_window(
++    db: Session,
++    *,
++    event: Event,
++    start_at: datetime,
++    end_at: datetime,
++) -> None:
++    event.start_at = start_at
++    event.end_at = end_at
++    db.flush()
 +
-+from app.api.tickets import scan_ticket_qr
-+from app.schemas.ticket import TicketScanRequest
 +
-+
-+def test_scan_ticket_qr_commits_successful_scan(monkeypatch) -> None:
-+    class _FakeDb:
-+        def __init__(self) -> None:
-+            self.commit_calls = 0
-+
-+        def commit(self) -> None:
-+            self.commit_calls += 1
-+
-+    expected_checked_in_at = datetime.now(timezone.utc)
-+
-+    monkeypatch.setattr(
-+        "app.api.tickets.scan_ticket",
-+        lambda db, *, payload, user_id: SimpleNamespace(
-+            status="SUCCESS",
-+            ticket_id=123,
-+            checked_in_at=expected_checked_in_at,
-+            message="Ticket checked in successfully.",
-+        ),
++def test_scan_valid_ticket(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_valid"))
++    gyt = ZoneInfo("America/Guyana")
++    _set_scan_window(
++        db_session,
++        event=event,
++        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
++        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
 +    )
-+
-+    db = _FakeDb()
-+    response = scan_ticket_qr(
-+        payload=TicketScanRequest(payload={"ticket_id": 123, "event_id": 99, "hash": "signed"}),
-+        db=db,
-+        user_id=456,
++    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 9, 0, tzinfo=gyt))
+ 
+     result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
+ 
+     assert result.status == "SUCCESS"
+     assert result.ticket_id == ticket.id
+     db_session.refresh(ticket)
+     assert ticket.check_in_status == CheckInStatus.CHECKED_IN
+     assert ticket.checked_in_by_user_id == scanner.id
+ 
+ 
+-def test_scan_already_used_ticket(db_session: Session) -> None:
++def test_scan_already_used_ticket(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_used"))
++    gyt = ZoneInfo("America/Guyana")
++    _set_scan_window(
++        db_session,
++        event=event,
++        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
++        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
 +    )
++    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 10, 0, tzinfo=gyt))
+ 
+     first = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
+     second = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
+ 
+     assert first.status == "SUCCESS"
+     assert second.status == "ALREADY_USED"
+ 
+ 
+ def test_scan_invalid_signature(db_session: Session) -> None:
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_invalid"))
+ 
+     payload = generate_ticket_qr_payload(ticket)
+     payload["hash"] = "bad-signature"
+ 
+     result = scan_ticket(db_session, payload=payload, user_id=scanner.id)
+ 
+     assert result.status == "INVALID"
+ 
+ 
+ def test_scan_wrong_event(db_session: Session) -> None:
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_wrong_event"))
+ 
+     payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id + 999)
+ 
+     result = scan_ticket(db_session, payload=payload, user_id=scanner.id)
+ 
+     assert result.status == "WRONG_EVENT"
+ 
+ 
+ def test_only_authorized_can_scan(db_session: Session) -> None:
+     order, _, _, _, _ = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+     outsider = User(email=unique_email("outsider_scanner"), full_name="Outsider Scanner")
+     db_session.add(outsider)
+     db_session.commit()
+     db_session.refresh(outsider)
+ 
+     result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=outsider.id)
+ 
+     assert result.status == "INVALID"
+     assert result.message == "Not authorized to scan this event."
+ 
+ 
+-def test_scan_logs_created(db_session: Session) -> None:
++def test_scan_logs_created(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_logs"))
++    gyt = ZoneInfo("America/Guyana")
++    _set_scan_window(
++        db_session,
++        event=event,
++        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
++        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
++    )
++    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 10, 0, tzinfo=gyt))
+ 
+     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
+     scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=scanner.id)
+ 
+     logs = db_session.execute(select(TicketScanLog).where(TicketScanLog.ticket_id == ticket.id)).scalars().all()
+     assert len(logs) == 2
+     assert {row.status.value for row in logs} == {"SUCCESS", "ALREADY_USED"}
+ 
+ 
++def test_organizer_can_scan_on_event_day_before_event_start(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    gyt = ZoneInfo("America/Guyana")
++    _set_scan_window(
++        db_session,
++        event=event,
++        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
++        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
++    )
++    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 0, 15, tzinfo=gyt))
 +
-+    assert db.commit_calls == 1
-+    assert response.status == "SUCCESS"
-+    assert response.ticket_id == 123
-+    assert response.checked_in_at == expected_checked_in_at
++    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=event.organizer.user_id)
++    assert result.status == "SUCCESS"
++
++
++def test_staff_can_scan_on_event_day(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    staff = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_window_staff"))
++    gyt = ZoneInfo("America/Guyana")
++    _set_scan_window(
++        db_session,
++        event=event,
++        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
++        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
++    )
++    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 20, 1, 0, tzinfo=gyt))
++
++    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=staff.id)
++    assert result.status == "SUCCESS"
++
++
++def test_organizer_cannot_scan_before_event_day(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    gyt = ZoneInfo("America/Guyana")
++    _set_scan_window(
++        db_session,
++        event=event,
++        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
++        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
++    )
++    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 19, 23, 59, tzinfo=gyt))
++
++    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=event.organizer.user_id)
++    assert result.status == "INVALID"
++    assert result.message == "Ticket scanning is not open yet for this event."
++
++
++def test_staff_cannot_scan_before_event_day(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    staff = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_before_staff"))
++    gyt = ZoneInfo("America/Guyana")
++    _set_scan_window(
++        db_session,
++        event=event,
++        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
++        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
++    )
++    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 19, 20, 0, tzinfo=gyt))
++
++    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=staff.id)
++    assert result.status == "INVALID"
++    assert result.message == "Ticket scanning is not open yet for this event."
++
++
++def test_organizer_cannot_scan_after_event_end(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    gyt = ZoneInfo("America/Guyana")
++    _set_scan_window(
++        db_session,
++        event=event,
++        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
++        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
++    )
++    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 21, 2, 1, tzinfo=gyt))
++
++    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=event.organizer.user_id)
++    assert result.status == "INVALID"
++    assert result.message == "Ticket scanning has closed for this event."
++
++
++def test_staff_cannot_scan_after_event_end(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    staff = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_after_staff"))
++    gyt = ZoneInfo("America/Guyana")
++    _set_scan_window(
++        db_session,
++        event=event,
++        start_at=datetime(2026, 4, 20, 20, 0, tzinfo=gyt),
++        end_at=datetime(2026, 4, 21, 2, 0, tzinfo=gyt),
++    )
++    monkeypatch.setattr(tickets_service, "get_guyana_now", lambda: datetime(2026, 4, 21, 3, 0, tzinfo=gyt))
++
++    result = scan_ticket(db_session, payload=generate_ticket_qr_payload(ticket), user_id=staff.id)
++    assert result.status == "INVALID"
++    assert result.message == "Ticket scanning has closed for this event."
++
++
+ def test_ticket_issuance_populates_qr_fields_and_unique_tokens(db_session: Session) -> None:
+     order, _, _, _, _ = _seed_order(db_session, quantity=3)
+     tickets = issue_tickets_for_completed_order(db_session, order)
+ 
+     assert all(ticket.qr_token for ticket in tickets)
+     assert all(ticket.qr_generated_at for ticket in tickets)
+     assert all(ticket.display_code and ticket.display_code.startswith("TKT-") for ticket in tickets)
+     assert len({ticket.qr_token for ticket in tickets}) == len(tickets)
+ 
+ 
+ def test_qr_token_is_unique_across_orders(db_session: Session) -> None:
+     order_a, _, _, _, _ = _seed_order(db_session, user_email=unique_email("uniq_a"), quantity=2)
+     order_b, _, _, _, _ = _seed_order(db_session, user_email=unique_email("uniq_b"), quantity=2)
+     issued = issue_tickets_for_completed_order(db_session, order_a) + issue_tickets_for_completed_order(db_session, order_b)
+     assert len({ticket.qr_token for ticket in issued}) == len(issued)
+ 
+ 
+ def test_legacy_ticket_without_qr_token_can_be_polished(db_session: Session) -> None:
+     order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+     ticket.qr_token = None
+     ticket.qr_generated_at = None
+     ticket.display_code = None
+     db_session.flush()
+ 
  
 EOF
 )

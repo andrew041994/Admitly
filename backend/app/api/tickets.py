@@ -614,6 +614,11 @@ def scan_ticket_qr(
             normalized_payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id)
 
     result = scan_ticket(db, payload=normalized_payload, user_id=user_id)
+    if result.message in {
+        "Ticket scanning is not open yet for this event.",
+        "Ticket scanning has closed for this event.",
+    }:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=result.message)
     db.commit()
     return TicketScanResponse(
         status=result.status,

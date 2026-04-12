@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload, object_session
@@ -95,6 +96,7 @@ CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED = "manual_override_admitted"
 CHECK_IN_STATUS_MANUAL_OVERRIDE_DENIED = "manual_override_denied"
 
 CHECK_IN_METHOD_OVERRIDE = "override"
+DEFAULT_EVENT_TIMEZONE = "America/Guyana"
 
 
 @dataclass
@@ -137,6 +139,30 @@ class TicketScanResult:
     ticket_id: int | None = None
     checked_in_at: datetime | None = None
     message: str | None = None
+
+
+def _to_aware_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _resolve_event_timezone(event: Event | None) -> ZoneInfo:
+    timezone_name = (event.timezone if event is not None else "") or DEFAULT_EVENT_TIMEZONE
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo(DEFAULT_EVENT_TIMEZONE)
+
+
+def _is_scan_within_event_window(*, event: Event, now: datetime) -> bool:
+    event_tz = _resolve_event_timezone(event)
+    local_now = _to_aware_datetime(now).astimezone(event_tz)
+    local_start_at = _to_aware_datetime(event.start_at).astimezone(event_tz)
+    local_end_at = _to_aware_datetime(event.end_at).astimezone(event_tz)
+
+    allowed_start = datetime.combine(local_start_at.date(), time.min, tzinfo=event_tz)
+    return allowed_start <= local_now <= local_end_at
 
 
 def _generate_ticket_code() -> str:
@@ -1493,20 +1519,28 @@ def scan_ticket(
         return TicketScanResult(status=TicketScanStatus.WRONG_EVENT.value, message="Ticket is for a different event.")
 
     now = get_guyana_now()
-    event_end_at = ticket.event.end_at if ticket.event else None
-    compare_now = now
-    if event_end_at is not None and event_end_at.tzinfo is None:
-        compare_now = now.replace(tzinfo=None)
-    if event_end_at is not None and event_end_at < compare_now:
+    event = ticket.event
+    if event is not None and not _is_scan_within_event_window(event=event, now=now):
+        event_tz = _resolve_event_timezone(event)
+        local_now = _to_aware_datetime(now).astimezone(event_tz)
+        local_start_at = _to_aware_datetime(event.start_at).astimezone(event_tz)
+        local_end_at = _to_aware_datetime(event.end_at).astimezone(event_tz)
+        allowed_start = datetime.combine(local_start_at.date(), time.min, tzinfo=event_tz)
+        if local_now < allowed_start:
+            note = "Scan attempted before event-day scan window opened."
+            message = "Ticket scanning is not open yet for this event."
+        else:
+            note = "Scan attempted after event scan window closed."
+            message = "Ticket scanning has closed for this event."
         _record_ticket_scan_log(
             db,
             ticket=ticket,
             scanned_by=user_id,
             status=TicketScanStatus.INVALID,
-            note="Event has already ended.",
+            note=note,
         )
         db.flush()
-        return TicketScanResult(status=TicketScanStatus.INVALID.value, message="Ticket is expired.")
+        return TicketScanResult(status=TicketScanStatus.INVALID.value, message=message)
 
     if ticket.check_in_status == CheckInStatus.CHECKED_IN or ticket.status == TicketStatus.CHECKED_IN:
         _record_ticket_scan_log(
