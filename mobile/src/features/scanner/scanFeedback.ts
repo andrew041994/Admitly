@@ -99,7 +99,7 @@ export function mapScanErrorToResult(error: unknown): ScanResult {
       return {
         outcome: 'unauthorized',
         title: 'Not Authorized',
-        message: 'You do not have access to scanner mode for this event.',
+        message: error.message || 'You do not have access to scanner mode for this event.',
       };
     }
 
