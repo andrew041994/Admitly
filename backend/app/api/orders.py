@@ -407,6 +407,8 @@ def complete_dev_test_checkout(
     except PaymentError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
+    db.commit()
+
     return CompleteDevTestCheckoutResponse(
         order_id=snapshot.order_id,
         order_reference=snapshot.order_reference,
