@@ -1,6 +1,9 @@
 import os
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from app.api.orders import complete_dev_test_checkout
 from app.core.config import settings
 from app.main import app
@@ -57,3 +60,23 @@ def test_dev_test_checkout_handler_returns_payload_when_enabled(monkeypatch) -> 
     assert response.order_id == 77
     assert response.provider == "dev_test"
     assert response.payment_reference == "pay-ref-77"
+
+
+def test_dev_test_checkout_handler_returns_403_when_disabled(monkeypatch) -> None:
+    previous_enabled = settings.enable_dev_test_checkout
+    settings.enable_dev_test_checkout = False
+    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
+
+    try:
+        with pytest.raises(HTTPException) as exc:
+            complete_dev_test_checkout(
+                order_id=77,
+                db=object(),
+                current_user=SimpleNamespace(id=123),
+                client_ip="127.0.0.1",
+            )
+    finally:
+        settings.enable_dev_test_checkout = previous_enabled
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Dev test checkout is disabled."

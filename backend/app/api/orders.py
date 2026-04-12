@@ -71,7 +71,10 @@ def _require_mmg_enabled() -> None:
 
 def _require_dev_test_checkout_enabled() -> None:
     if not settings.enable_dev_test_checkout:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Dev test checkout is disabled.",
+        )
 
 
 def _to_order_response(order) -> OrderResponse:
