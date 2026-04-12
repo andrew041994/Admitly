@@ -12,6 +12,21 @@ export type AccountProfile = {
   staff_events_count: number;
 };
 
+export type StaffEvent = {
+  event_id: number;
+  title: string;
+  start_at: string;
+  end_at: string | null;
+  timezone: string | null;
+  venue_name: string | null;
+  role: string | null;
+  status: string | null;
+};
+
 export async function getAccountProfile(): Promise<AccountProfile> {
   return apiRequest<AccountProfile>({ path: '/account/profile', method: 'GET' });
+}
+
+export async function listMyStaffEvents(): Promise<StaffEvent[]> {
+  return apiRequest<StaffEvent[]>({ path: '/account/staff-events', method: 'GET' });
 }

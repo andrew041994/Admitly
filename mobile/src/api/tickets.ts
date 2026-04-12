@@ -71,10 +71,10 @@ export type TicketScanResponse = {
   checked_in_at?: string;
 };
 
-export async function scanTicket(payload: string): Promise<TicketScanResponse> {
+export async function scanTicket(payload: string, eventId: number): Promise<TicketScanResponse> {
   return apiRequest<TicketScanResponse>({
     path: '/tickets/scan',
     method: 'POST',
-    body: JSON.stringify({ payload }),
+    body: JSON.stringify({ payload, selected_event_id: eventId }),
   });
 }

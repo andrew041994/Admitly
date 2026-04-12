@@ -9,10 +9,11 @@ type Props = {
   onOpenCreateEvent: () => void;
   onOpenMyEvents: () => void;
   onOpenStaffManagement: () => void;
+  onOpenStaffEvents: () => void;
   onSignOut: () => void;
 };
 
-export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffManagement, onSignOut }: Props) {
+export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffManagement, onOpenStaffEvents, onSignOut }: Props) {
   const [profile, setProfile] = useState<Awaited<ReturnType<typeof getAccountProfile>> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,6 +42,7 @@ export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffMa
 
       <Pressable style={styles.button} onPress={onOpenCreateEvent}><Text style={styles.buttonText}>Create Event</Text></Pressable>
       <Pressable style={styles.button} onPress={onOpenMyEvents}><Text style={styles.buttonText}>My Events</Text></Pressable>
+      <Pressable style={styles.button} onPress={onOpenStaffEvents}><Text style={styles.buttonText}>Events I’m Working</Text></Pressable>
       <Pressable style={styles.button} onPress={onOpenStaffManagement}><Text style={styles.buttonText}>Manage Staff</Text></Pressable>
       <Pressable style={styles.signOut} onPress={onSignOut}><Text style={styles.signOutText}>Logout</Text></Pressable>
     </View>

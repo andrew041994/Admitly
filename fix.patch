@@ -1,61 +1,34 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/features/scanner/scanFeedback.ts b/mobile/src/features/scanner/scanFeedback.ts
-index bcfaa9111a7b7b98b652306e22532b22d0d1ffe9..fd9a918862f7d7bf6acdcedfcf631c8c9306fcb3 100644
---- a/mobile/src/features/scanner/scanFeedback.ts
-+++ b/mobile/src/features/scanner/scanFeedback.ts
-@@ -77,51 +77,51 @@ export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanR
-       checkedInAt: response.checked_in_at,
-     };
-   }
+diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
+index 11c187f850fddc4412f27658d130f2cfbc11a605..c34e360d8e5a9cdf6014e5044fee0454cbd390be 100644
+--- a/mobile/src/navigation/types.ts
++++ b/mobile/src/navigation/types.ts
+@@ -1,23 +1,24 @@
+ export type AuthStackParamList = {
+   SignIn: undefined;
+   SignUp: undefined;
+   ForgotPassword: undefined;
+   ResetPassword: undefined;
+ };
  
-   if (state === 'wrong_event') {
-     return {
-       outcome: 'wrong_event',
-       title: 'Wrong Event',
-       message: response.message ?? 'This ticket belongs to a different event.',
-     };
-   }
- 
-   return {
-     outcome: 'invalid',
-     title: 'Invalid Ticket',
-     message: response.message ?? 'Ticket could not be verified.',
-   };
- }
- 
- export function mapScanErrorToResult(error: unknown): ScanResult {
-   if (error instanceof ApiError) {
-     if (error.status === 401 || error.status === 403) {
-       return {
-         outcome: 'unauthorized',
-         title: 'Not Authorized',
--        message: 'You do not have access to scanner mode for this event.',
-+        message: error.message || 'You do not have access to scanner mode for this event.',
-       };
-     }
- 
-     if (error.status === 409) {
-       return {
-         outcome: 'already_used',
-         title: 'Already Used',
-         message: error.message || 'This ticket has already been used.',
-       };
-     }
- 
-     if (error.status === 404 || error.status === 422) {
-       return {
-         outcome: 'invalid',
-         title: 'Invalid Ticket',
-         message: error.message || 'Ticket could not be validated.',
-       };
-     }
- 
-     return {
-       outcome: 'server_error',
-       title: 'Scan Failed',
-       message: error.message || 'Server error while checking in this ticket.',
-     };
-   }
+ export type AppStackParamList = {
+   Home: undefined;
+   EventDetail: { eventId: number };
+   TicketSelection: { eventId: number };
+   CheckoutMethod: { eventId: number; orderId: number };
+   MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
+   PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
+   MyTickets: undefined;
+   TicketDetail: { ticketId: number };
+-  Scanner: undefined;
++  Scanner: { eventId: number; eventTitle: string };
+   Profile: undefined;
++  StaffEvents: undefined;
+   CreateEvent: undefined;
+   MyEvents: undefined;
+   StaffManagement: undefined;
+   OrganizerDashboard: { eventId: number };
+ };
  
 EOF
 )

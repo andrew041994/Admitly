@@ -151,6 +151,7 @@ class TicketQrResponse(BaseModel):
 
 class TicketScanRequest(BaseModel):
     payload: dict[str, object] | str
+    selected_event_id: int | None = None
 
 
 class TicketScanResponse(BaseModel):

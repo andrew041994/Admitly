@@ -593,6 +593,7 @@ def scan_ticket_qr(
     user_id: int = Depends(get_current_user_id),
 ) -> TicketScanResponse:
     normalized_payload: dict[str, object]
+    selected_event_id = payload.selected_event_id
     if isinstance(payload.payload, dict):
         normalized_payload = payload.payload
     else:
@@ -612,6 +613,9 @@ def scan_ticket_qr(
             from app.services.ticket_qr import generate_signed_ticket_qr_payload
 
             normalized_payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id)
+
+    if selected_event_id is not None:
+        normalized_payload["event_id"] = selected_event_id
 
     result = scan_ticket(db, payload=normalized_payload, user_id=user_id)
     if result.message in {

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -21,3 +23,14 @@ class AccountProfileResponse(BaseModel):
     my_tickets_count: int
     my_events_count: int
     staff_events_count: int
+
+
+class AccountStaffEventResponse(BaseModel):
+    event_id: int
+    title: str
+    start_at: datetime
+    end_at: datetime | None
+    timezone: str | None
+    venue_name: str | None
+    role: str | None
+    status: str | None

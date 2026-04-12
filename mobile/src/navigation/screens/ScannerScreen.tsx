@@ -17,12 +17,14 @@ import {
 
 type ScannerScreenProps = {
   canAccessScanner: boolean;
+  eventId: number;
+  eventTitle: string;
   onBack: () => void;
 };
 
 const RESULT_COOLDOWN_MS = 1400;
 
-export function ScannerScreen({ canAccessScanner, onBack }: ScannerScreenProps) {
+export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }: ScannerScreenProps) {
   const isFocused = useIsFocused();
   const [permission, requestPermission] = useCameraPermissions();
   const [isProcessingScan, setIsProcessingScan] = useState(false);
@@ -104,7 +106,7 @@ export function ScannerScreen({ canAccessScanner, onBack }: ScannerScreenProps) 
       setLastScanAt(now);
 
       try {
-        const response = await scanTicket(rawPayload);
+        const response = await scanTicket(rawPayload, eventId);
         const result = mapScanResponseToResult(response);
         setLastResult(result);
         runFeedbackHaptics(result);
@@ -121,7 +123,7 @@ export function ScannerScreen({ canAccessScanner, onBack }: ScannerScreenProps) 
         releaseScanLock();
       }
     },
-    [canAccessScanner, isFocused, isProcessingScan, lastScanAt, lastScanRawValue, releaseScanLock, runFeedbackHaptics],
+    [canAccessScanner, eventId, isFocused, isProcessingScan, lastScanAt, lastScanRawValue, releaseScanLock, runFeedbackHaptics],
   );
 
   const statusLabel =
@@ -188,7 +190,7 @@ export function ScannerScreen({ canAccessScanner, onBack }: ScannerScreenProps) 
           </Pressable>
           <View>
             <Text style={styles.title}>Scan Tickets</Text>
-            <Text style={styles.subtitle}>Align the QR code inside the frame</Text>
+            <Text style={styles.subtitle}>{eventTitle}</Text>
           </View>
           <Pressable onPress={() => setTorchEnabled((prev) => !prev)} style={styles.topActionButton}>
             <Text style={styles.topActionText}>{torchEnabled ? 'Torch On' : 'Torch Off'}</Text>

@@ -26,6 +26,7 @@ import { MyEventsScreen } from './screens/MyEventsScreen';
 import { OrganizerDashboardScreen } from './screens/OrganizerDashboardScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { StaffManagementScreen } from './screens/StaffManagementScreen';
+import { StaffEventsScreen } from './screens/StaffEventsScreen';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
@@ -111,8 +112,6 @@ function SignedInNavigator() {
             onOpenMyTickets={() => navigation.navigate('MyTickets')}
             onSignOut={signOut}
             onOpenEvent={(eventId) => navigation.navigate('EventDetail', { eventId })}
-            onOpenScanner={() => navigation.navigate('Scanner')}
-            canAccessScanner={canAccessScanner}
           />
         )}
       </AppStack.Screen>
@@ -166,7 +165,14 @@ function SignedInNavigator() {
         {({ route }) => <TicketDetailScreen ticketId={route.params.ticketId} />}
       </AppStack.Screen>
       <AppStack.Screen name="Scanner" options={{ headerShown: false }}>
-        {({ navigation }) => <ScannerScreen canAccessScanner={canAccessScanner} onBack={() => navigation.goBack()} />}
+        {({ route, navigation }) => (
+          <ScannerScreen
+            canAccessScanner={canAccessScanner}
+            eventId={route.params.eventId}
+            eventTitle={route.params.eventTitle}
+            onBack={() => navigation.goBack()}
+          />
+        )}
       </AppStack.Screen>
       <AppStack.Screen name="Profile" options={{ title: 'Profile' }}>
         {({ navigation }) => (
@@ -175,6 +181,14 @@ function SignedInNavigator() {
             onOpenCreateEvent={() => navigation.navigate('CreateEvent')}
             onOpenMyEvents={() => navigation.navigate('MyEvents')}
             onOpenStaffManagement={() => navigation.navigate('StaffManagement')}
+            onOpenStaffEvents={() => navigation.navigate('StaffEvents')}
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen name="StaffEvents" options={{ title: 'Events I’m Working' }}>
+        {({ navigation }) => (
+          <StaffEventsScreen
+            onOpenScanner={(eventId, eventTitle) => navigation.navigate('Scanner', { eventId, eventTitle })}
           />
         )}
       </AppStack.Screen>

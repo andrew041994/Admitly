@@ -10,7 +10,13 @@ from app.models.event_staff import EventStaff
 from app.models.organizer_profile import OrganizerProfile
 from app.models.ticket import Ticket
 from app.models.user import User
-from app.schemas.account import AccountProfileResponse, ChangePasswordRequest, UpdateProfileRequest
+from app.models.venue import Venue
+from app.schemas.account import (
+    AccountProfileResponse,
+    AccountStaffEventResponse,
+    ChangePasswordRequest,
+    UpdateProfileRequest,
+)
 from app.schemas.auth import UserResponse
 from app.services.auth import change_password, update_profile
 
@@ -85,3 +91,37 @@ def post_change_password(
 ) -> dict[str, bool]:
     change_password(db, user=current_user, current_password=payload.current_password, new_password=payload.new_password)
     return {"success": True}
+
+
+@router.get("/staff-events", response_model=list[AccountStaffEventResponse])
+def get_staff_events(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[AccountStaffEventResponse]:
+    rows = (
+        db.execute(
+            select(EventStaff, Event, Venue.name)
+            .join(Event, Event.id == EventStaff.event_id)
+            .outerjoin(Venue, Venue.id == Event.venue_id)
+            .where(
+                EventStaff.user_id == user_id,
+                EventStaff.is_active.is_(True),
+            )
+            .order_by(Event.start_at.asc(), Event.id.asc())
+        )
+        .all()
+    )
+
+    return [
+        AccountStaffEventResponse(
+            event_id=event.id,
+            title=event.title,
+            start_at=event.start_at,
+            end_at=event.end_at,
+            timezone=event.timezone,
+            venue_name=event.custom_venue_name or venue_name,
+            role=staff.role.value if staff.role else None,
+            status=event.status.value if event.status else None,
+        )
+        for staff, event, venue_name in rows
+    ]
