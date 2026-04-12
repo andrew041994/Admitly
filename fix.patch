@@ -1,43 +1,48 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/schemas/ticket.py b/backend/app/schemas/ticket.py
-index b017e1a09df2f6c9d30be045c4737203ef300837..ba1bacd44d06e7ad702319dd5ff1fe7b55cd28e1 100644
---- a/backend/app/schemas/ticket.py
-+++ b/backend/app/schemas/ticket.py
-@@ -128,33 +128,33 @@ class TicketCheckInAttemptResponse(BaseModel):
-     ticket_id: int | None
-     event_id: int
-     actor_user_id: int | None
-     attempted_at: datetime
-     result_code: str
-     reason_code: str | None
-     reason_message: str | None
-     method: str | None
-     source: str | None
-     notes: str | None
- 
- 
- class TicketVoidRequest(BaseModel):
-     reason: str | None = None
- 
- 
- class TicketQrResponse(BaseModel):
-     ticket_public_token: str
-     qr_payload: str
-     public_ticket_url: str
-     qr_image_url: str
-     qr_data_uri: str
- 
- 
- class TicketScanRequest(BaseModel):
--    payload: dict[str, object]
-+    payload: dict[str, object] | str
- 
- 
- class TicketScanResponse(BaseModel):
-     status: str
-     ticket_id: int | None = None
-     checked_in_at: datetime | None = None
-     message: str | None = None
+diff --git a/backend/tests/test_tickets_api.py b/backend/tests/test_tickets_api.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ef60c320423314e6e77a02cf68c61e7580b3aeb3
+--- /dev/null
++++ b/backend/tests/test_tickets_api.py
+@@ -0,0 +1,38 @@
++from datetime import datetime, timezone
++from types import SimpleNamespace
++
++from app.api.tickets import scan_ticket_qr
++from app.schemas.ticket import TicketScanRequest
++
++
++def test_scan_ticket_qr_commits_successful_scan(monkeypatch) -> None:
++    class _FakeDb:
++        def __init__(self) -> None:
++            self.commit_calls = 0
++
++        def commit(self) -> None:
++            self.commit_calls += 1
++
++    expected_checked_in_at = datetime.now(timezone.utc)
++
++    monkeypatch.setattr(
++        "app.api.tickets.scan_ticket",
++        lambda db, *, payload, user_id: SimpleNamespace(
++            status="SUCCESS",
++            ticket_id=123,
++            checked_in_at=expected_checked_in_at,
++            message="Ticket checked in successfully.",
++        ),
++    )
++
++    db = _FakeDb()
++    response = scan_ticket_qr(
++        payload=TicketScanRequest(payload={"ticket_id": 123, "event_id": 99, "hash": "signed"}),
++        db=db,
++        user_id=456,
++    )
++
++    assert db.commit_calls == 1
++    assert response.status == "SUCCESS"
++    assert response.ticket_id == 123
++    assert response.checked_in_at == expected_checked_in_at
  
 EOF
 )

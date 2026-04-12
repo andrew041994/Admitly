@@ -614,6 +614,7 @@ def scan_ticket_qr(
             normalized_payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id)
 
     result = scan_ticket(db, payload=normalized_payload, user_id=user_id)
+    db.commit()
     return TicketScanResponse(
         status=result.status,
         ticket_id=result.ticket_id,
