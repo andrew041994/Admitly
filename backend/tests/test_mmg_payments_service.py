@@ -331,12 +331,17 @@ def test_dev_test_checkout_disabled_by_default(db_session: Session) -> None:
         complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
 
 
-def test_dev_test_checkout_hard_disabled_in_production_env(db_session: Session) -> None:
+def test_dev_test_checkout_enabled_flag_allows_checkout_in_production_env(db_session: Session) -> None:
     settings.enable_dev_test_checkout = True
     settings.env = "production"
     order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dev_prod_guard"))
-    with pytest.raises(PaymentError, match="Dev test checkout is unavailable"):
-        complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+
+    snapshot = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+    db_session.refresh(order)
+
+    assert snapshot.status == "completed"
+    assert snapshot.payment_verification_status == "verified"
+    assert order.status == OrderStatus.COMPLETED
     settings.env = "development"
     settings.enable_dev_test_checkout = False
 

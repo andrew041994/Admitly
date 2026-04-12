@@ -70,8 +70,7 @@ def _require_mmg_enabled() -> None:
 
 
 def _require_dev_test_checkout_enabled() -> None:
-    env = (settings.env or "").strip().lower()
-    if not settings.enable_dev_test_checkout or env in {"prod", "production"}:
+    if not settings.enable_dev_test_checkout:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
 
 

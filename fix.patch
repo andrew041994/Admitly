@@ -1,66 +1,73 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
-index b84e048d6851226e65964b46c1c793629885359d..8f659404052d87781a3b36884d7063f41b1bb9ac 100644
---- a/backend/app/services/tickets.py
-+++ b/backend/app/services/tickets.py
-@@ -1356,55 +1356,55 @@ def check_in_ticket_for_event(
-         event_id=event_id,
-         qr_payload=qr_payload,
-         ticket_code=ticket_code,
-         method=CHECK_IN_METHOD_QR,
-     )
-     if result.valid:
-         return result.ticket
+diff --git a/backend/tests/test_mmg_payments_service.py b/backend/tests/test_mmg_payments_service.py
+index 509c0f2a45f8806d73be6128d400cf94f06b24a6..d8d3c836b4fee11e692500ec23702bc29b526248 100644
+--- a/backend/tests/test_mmg_payments_service.py
++++ b/backend/tests/test_mmg_payments_service.py
+@@ -309,56 +309,61 @@ def test_live_mode_missing_config_fails_clearly(db_session: Session) -> None:
+     settings.mmg_callback_url = None
  
-     if result.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN:
-         raise TicketCheckInConflictError(result.message)
+     order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("live"))
+     with pytest.raises(Exception) as exc:
+         create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+     assert "missing required config" in str(exc.value).lower()
  
-     if result.status == CHECK_IN_STATUS_REFUNDED_OR_INVALIDATED:
-         raise TicketCheckInConflictError(result.message)
-     if result.status == CHECK_IN_STATUS_WRONG_EVENT:
-         raise TicketCrossEventError(result.message)
+ def test_mmg_checkout_uses_discounted_total_amount(db_session: Session) -> None:
+     order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("discounted"))
+     order.subtotal_amount = Decimal("200.00")
+     order.discount_amount = Decimal("50.00")
+     order.total_amount = Decimal("150.00")
+     db_session.commit()
  
-     if result.status == CHECK_IN_STATUS_UNAUTHORIZED:
-         raise TicketAuthorizationError(result.message)
- 
-     if result.status == CHECK_IN_STATUS_INVALID:
-         raise TicketNotFoundError(result.message)
- 
-     if result.status == CHECK_IN_STATUS_NOT_FOUND:
-         fallback_ticket = get_ticket_by_qr_payload(
-             db,
--            qr_payload=qr_payload or "",
-+            qr_payload=ticket_code or qr_payload or "",
-         )
- 
-         if fallback_ticket is None:
--            raise TicketNotFoundError("Ticket not found.")
-+            raise TicketCheckInConflictError("Already processed")
-         if fallback_ticket.event_id != event_id:
-             raise TicketCrossEventError("Ticket does not belong to this event.")
-         if fallback_ticket.status == TicketStatus.CHECKED_IN:
-             raise TicketCheckInConflictError("Already processed")
-         if fallback_ticket.status != TicketStatus.ISSUED:
-             raise TicketCheckInConflictError("Ticket is not valid for check-in.")
-         raise TicketCheckInConflictError("Already processed")
- 
-     raise TicketCheckInConflictError(result.message or "Unable to process ticket check-in.")
+     snapshot = create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+     assert snapshot.amount == Decimal("150.00")
  
  
- def scan_ticket(
-     db: Session,
-     *,
-     payload: dict[str, object],
-     user_id: int,
- ) -> TicketScanResult:
-     if not validate_ticket_qr_signature(payload):
-         _record_ticket_scan_log(
-             db,
-             ticket=None,
-             scanned_by=user_id,
-             status=TicketScanStatus.INVALID,
-             note="Invalid ticket payload signature.",
-         )
+ def test_dev_test_checkout_disabled_by_default(db_session: Session) -> None:
+     settings.enable_dev_test_checkout = False
+     order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dev_disabled"))
+     with pytest.raises(PaymentError, match="Dev test checkout is unavailable"):
+         complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+ 
+ 
+-def test_dev_test_checkout_hard_disabled_in_production_env(db_session: Session) -> None:
++def test_dev_test_checkout_enabled_flag_allows_checkout_in_production_env(db_session: Session) -> None:
+     settings.enable_dev_test_checkout = True
+     settings.env = "production"
+     order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dev_prod_guard"))
+-    with pytest.raises(PaymentError, match="Dev test checkout is unavailable"):
+-        complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
++
++    snapshot = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
++    db_session.refresh(order)
++
++    assert snapshot.status == "completed"
++    assert snapshot.payment_verification_status == "verified"
++    assert order.status == OrderStatus.COMPLETED
+     settings.env = "development"
+     settings.enable_dev_test_checkout = False
+ 
+ 
+ def test_dev_test_checkout_completes_order_issues_tickets_and_wallet_payload(db_session: Session) -> None:
+     settings.enable_dev_test_checkout = True
+     order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dev_success"))
+ 
+     snapshot = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+     db_session.refresh(order)
+ 
+     assert snapshot.status == "completed"
+     assert snapshot.payment_verification_status == "verified"
+     assert snapshot.provider == "dev_test"
+     assert snapshot.payment_method == "dev_test"
+     assert snapshot.payment_reference.startswith("DEV-")
+     assert order.status == OrderStatus.COMPLETED
+     assert order.payment_provider == "dev_test"
+     assert order.payment_method == "dev_test"
+     assert order.payment_verification_status == "verified"
+     assert len(order.tickets) == 2
+     assert all(ticket.issued_at is not None for ticket in order.tickets)
+     assert all(ticket.ticket_code for ticket in order.tickets)
+     assert all(ticket.qr_payload for ticket in order.tickets)
+ 
  
 EOF
 )

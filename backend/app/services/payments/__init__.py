@@ -169,12 +169,8 @@ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -
     )
 
 
-def _is_production_env() -> bool:
-    return (settings.env or "").strip().lower() in {"prod", "production"}
-
-
 def _ensure_dev_test_checkout_enabled() -> None:
-    if not settings.enable_dev_test_checkout or _is_production_env():
+    if not settings.enable_dev_test_checkout:
         raise PaymentError("Dev test checkout is unavailable.")
 
 
