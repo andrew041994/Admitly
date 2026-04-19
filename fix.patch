@@ -1,9 +1,14 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/mobile/src/navigation/screens/CreateEventScreen.tsx b/mobile/src/navigation/screens/CreateEventScreen.tsx
-index a9755f68becf2e7a2ac5d9b5016eab51cfbc9658..afbb43829f0d8ca41f91e65fa46cee15dfaa9e0b 100644
+index ee7d1e579615588bbbde4fff12b1c06125cf3eb0..d11a8c16a1ea0f411133d0be828516e34c5c14e3 100644
 --- a/mobile/src/navigation/screens/CreateEventScreen.tsx
 +++ b/mobile/src/navigation/screens/CreateEventScreen.tsx
-@@ -5,50 +5,90 @@ import DateTimePicker from '@react-native-community/datetimepicker';
+@@ -1,27 +1,27 @@
+ import { useMemo, useState } from 'react';
+-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
++import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+ import DateTimePicker from '@react-native-community/datetimepicker';
+ 
  import { ApiError } from '../../api/client';
  import { createEvent } from '../../api/organizer';
  import { theme } from '../../theme';
@@ -27,250 +32,7 @@ index a9755f68becf2e7a2ac5d9b5016eab51cfbc9658..afbb43829f0d8ca41f91e65fa46cee15
    minPerOrder: '',
    maxPerOrder: '',
  });
- 
- const GUYANA_TIMEZONE = 'America/Guyana';
-+const CATEGORY_OPTIONS = [
-+  'Party',
-+  'Concert',
-+  'Festival',
-+  'Cricket',
-+  'Footbal',
-+  'Soccer',
-+  'Basketball',
-+  'Bar-B-Que',
-+  'Car Show',
-+  'Car & Bike Show',
-+  'Car Audio Show',
-+  'Conference',
-+  'Workshop',
-+  'Seminar',
-+  'Networking',
-+  'Sports',
-+  'Fitness',
-+  'Food & Drink',
-+  'Brunch',
-+  'Nightlife',
-+  'Comedy',
-+  'Exhibition',
-+  'Art',
-+  'Culture',
-+  'Family',
-+  'Kids',
-+  'Community',
-+  'Fundraiser',
-+  'Religious',
-+  'Business',
-+  'Fashion',
-+  'Beauty',
-+  'Wellness',
-+  'Travel',
-+  'Holiday',
-+  'Education',
-+  'Tech',
-+  'Other',
-+] as const;
- 
- type DateTimeField = {
-   date: Date | null;
-   time: Date | null;
- };
- 
- type DateTimeFieldKey = 'start_at' | 'end_at' | 'sales_start_at' | 'sales_end_at';
- 
- type PickerField =
-   | 'start_date'
-   | 'start_time'
-   | 'end_date'
-   | 'end_time'
-   | 'doors_open_time'
-   | 'sales_start_date'
-   | 'sales_start_time'
-   | 'sales_end_date'
-   | 'sales_end_time';
- 
- type PickerSession = {
-   field: PickerField;
-   mode: 'date' | 'time';
-   value: Date;
-   selectedDate?: Date;
- } | null;
-@@ -69,78 +109,117 @@ const getPickerTitle = (field: PickerField) => {
-   if (field === 'doors_open_time') return 'Doors open';
-   if (field.startsWith('sales_start_')) return 'Sales start';
-   return 'Sales end';
- };
- 
- const getPickerStepLabel = (session: Exclude<PickerSession, null>) => {
-   if (session.field === 'doors_open_time') return 'Select time';
-   return session.mode === 'date' ? 'Step 1 of 2 • Select date' : 'Step 2 of 2 • Select time';
- };
- 
- const buildGuyanaIso = (date: Date, time: Date) => {
-   const year = date.getFullYear();
-   const month = date.getMonth();
-   const day = date.getDate();
-   const hour = time.getHours();
-   const minute = time.getMinutes();
-   const utcMillis = Date.UTC(year, month, day, hour + 4, minute, 0, 0);
-   return new Date(utcMillis).toISOString();
- };
- 
- export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) => void }) {
-   const [title, setTitle] = useState('');
-   const [shortDescription, setShortDescription] = useState('');
-   const [longDescription, setLongDescription] = useState('');
-   const [category, setCategory] = useState('');
-+  const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
-+  const [categorySearch, setCategorySearch] = useState('');
-   const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
-   const [endAt, setEndAt] = useState<DateTimeField>({ date: null, time: null });
-   const [doorsOpenAt, setDoorsOpenAt] = useState<Date | null>(null);
-   const [salesStartAt, setSalesStartAt] = useState<DateTimeField>({ date: null, time: null });
-   const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
-   const [pickerSession, setPickerSession] = useState<PickerSession>(null);
-   const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
-   const [venueName, setVenueName] = useState('');
-   const [addressText, setAddressText] = useState('');
-   const [refundPolicyText, setRefundPolicyText] = useState('');
-   const [termsText, setTermsText] = useState('');
-   const [tiers, setTiers] = useState<TierFormState[]>([defaultTier()]);
- 
-   const [loading, setLoading] = useState(false);
-   const [error, setError] = useState<string | null>(null);
- 
-+  const normalizedCategoryOptions = useMemo(() => {
-+    const seen = new Set<string>();
-+    return CATEGORY_OPTIONS.filter((option) => {
-+      const normalized = option.trim().toLowerCase();
-+      if (seen.has(normalized)) return false;
-+      seen.add(normalized);
-+      return true;
-+    });
-+  }, []);
-+
-+  const trimmedCategorySearch = categorySearch.trim();
-+  const filteredCategoryOptions = useMemo(() => {
-+    if (!trimmedCategorySearch) return normalizedCategoryOptions;
-+    const normalizedSearch = trimmedCategorySearch.toLowerCase();
-+    return normalizedCategoryOptions.filter((option) => option.toLowerCase().includes(normalizedSearch));
-+  }, [normalizedCategoryOptions, trimmedCategorySearch]);
-+
-+  const exactMatchedCategoryOption = useMemo(() => {
-+    if (!trimmedCategorySearch) return null;
-+    const normalizedSearch = trimmedCategorySearch.toLowerCase();
-+    return normalizedCategoryOptions.find((option) => option.toLowerCase() === normalizedSearch) ?? null;
-+  }, [normalizedCategoryOptions, trimmedCategorySearch]);
-+
-   const canRemoveTier = tiers.length > 1;
- 
-   const addTier = () => setTiers((current) => [...current, defaultTier()]);
-   const removeTier = (index: number) => {
-     if (tiers.length === 1) return;
-     setTiers((current) => current.filter((_, idx) => idx !== index));
-   };
- 
-   const updateTier = (index: number, patch: Partial<TierFormState>) => {
-     setTiers((current) => current.map((tier, idx) => (idx === index ? { ...tier, ...patch } : tier)));
-   };
- 
-+  const openCategoryPicker = () => {
-+    setCategorySearch(category.trim());
-+    setIsCategoryPickerVisible(true);
-+  };
-+
-+  const closeCategoryPicker = () => {
-+    setIsCategoryPickerVisible(false);
-+  };
-+
-+  const selectCategory = (value: string) => {
-+    setCategory(value.trim());
-+    closeCategoryPicker();
-+  };
-+
-   const openPicker = (nextSession: Exclude<PickerSession, null>) => {
-     setPickerDraftValue(nextSession.value);
-     setPickerSession(nextSession);
-   };
- 
-   const startDateTimeFlow = (field: DateTimeFieldKey) => {
-     const now = new Date();
-     if (field === 'start_at') {
-       openPicker({ field: 'start_date', mode: 'date', value: startAt.date ?? now });
-       return;
-     }
-     if (field === 'end_at') {
-       openPicker({ field: 'end_date', mode: 'date', value: endAt.date ?? startAt.date ?? now });
-       return;
-     }
-     if (field === 'sales_start_at') {
-       openPicker({ field: 'sales_start_date', mode: 'date', value: salesStartAt.date ?? now });
-       return;
-     }
-     openPicker({ field: 'sales_end_date', mode: 'date', value: salesEndAt.date ?? now });
-   };
- 
-   const cancelPickerSelection = () => {
-     setPickerSession(null);
-   };
-@@ -269,51 +348,53 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
-       onCreated(created.id);
-     } catch (err) {
-       setError(err instanceof ApiError ? err.message : 'Unable to create event.');
-     } finally {
-       setLoading(false);
-     }
-   };
- 
-   return (
-     <>
-       <ScrollView contentContainerStyle={styles.container}>
-         <Text style={styles.title}>Create Event</Text>
- 
-         <Text style={styles.sectionTitle}>Basic Info</Text>
-         <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Event title" placeholderTextColor={theme.colors.textSecondary} />
-         <TextInput style={styles.input} value={shortDescription} onChangeText={setShortDescription} placeholder="Short description" placeholderTextColor={theme.colors.textSecondary} />
-         <TextInput
-           style={[styles.input, styles.multiline]}
-           multiline
-           numberOfLines={4}
-           value={longDescription}
-           onChangeText={setLongDescription}
-           placeholder="Long description"
-           placeholderTextColor={theme.colors.textSecondary}
-         />
--        <TextInput style={styles.input} value={category} onChangeText={setCategory} placeholder="Category" placeholderTextColor={theme.colors.textSecondary} />
-+        <Pressable style={styles.input} onPress={openCategoryPicker}>
-+          <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
-+        </Pressable>
- 
-         <Text style={styles.sectionTitle}>Timing</Text>
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Start</Text>
-           <Pressable style={styles.input} onPress={() => startDateTimeFlow('start_at')}>
-             <Text style={styles.pickerValue}>{formatDateTimeValue(startAt)}</Text>
-           </Pressable>
-         </View>
- 
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>End</Text>
-           <Pressable style={styles.input} onPress={() => startDateTimeFlow('end_at')}>
-             <Text style={styles.pickerValue}>{formatDateTimeValue(endAt)}</Text>
-           </Pressable>
-         </View>
- 
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Doors open (optional)</Text>
-           <Pressable style={styles.input} onPress={() => openPicker({ field: 'doors_open_time', mode: 'time', value: doorsOpenAt ?? startAt.time ?? new Date() })}>
-             <Text style={styles.pickerValue}>{doorsOpenAt ? formatTime(doorsOpenAt) : 'Pick time'}</Text>
-           </Pressable>
-         </View>
- 
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Sales start (optional)</Text>
-@@ -401,88 +482,138 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
-               <View style={styles.modalHeading}>
-                 <Text style={styles.modalTitle}>{getPickerTitle(pickerSession.field)}</Text>
-                 <Text style={styles.modalSubtitle}>{getPickerStepLabel(pickerSession)}</Text>
+@@ -485,94 +485,103 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
                </View>
                <View style={styles.modalActions}>
                  <Pressable onPress={cancelPickerSelection}>
@@ -293,55 +55,104 @@ index a9755f68becf2e7a2ac5d9b5016eab51cfbc9658..afbb43829f0d8ca41f91e65fa46cee15
            </View>
          </Modal>
        ) : null}
+ 
+       {isCategoryPickerVisible ? (
+         <Modal transparent animationType="fade" visible onRequestClose={closeCategoryPicker}>
+-          <View style={styles.modalBackdrop}>
+-            <Pressable style={StyleSheet.absoluteFill} onPress={closeCategoryPicker} />
+-            <View style={styles.modalCard}>
+-              <View style={styles.modalHeading}>
+-                <Text style={styles.modalTitle}>Category</Text>
+-                <Text style={styles.modalSubtitle}>Search or add a category</Text>
+-              </View>
+-              <View style={styles.modalActions}>
+-                <Pressable onPress={closeCategoryPicker}>
+-                  <Text style={styles.modalActionText}>Done</Text>
+-                </Pressable>
+-              </View>
+-              <View style={styles.categoryPickerBody}>
+-                <TextInput
+-                  style={styles.input}
+-                  value={categorySearch}
+-                  onChangeText={setCategorySearch}
+-                  placeholder="Search categories"
+-                  placeholderTextColor={theme.colors.textSecondary}
+-                  autoCapitalize="words"
+-                  autoCorrect={false}
+-                />
+-
+-                {trimmedCategorySearch ? (
+-                  <Pressable
+-                    style={styles.categoryOption}
+-                    onPress={() => selectCategory(exactMatchedCategoryOption ?? trimmedCategorySearch)}
+-                  >
+-                    <Text style={styles.categoryOptionText}>
+-                      {exactMatchedCategoryOption ? `Use “${exactMatchedCategoryOption}”` : `Add “${trimmedCategorySearch}” as category`}
+-                    </Text>
++          <KeyboardAvoidingView
++            style={styles.modalKeyboardAvoidingView}
++            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
++          >
++            <View style={[styles.modalBackdrop, styles.categoryModalBackdrop]}>
++              <Pressable style={StyleSheet.absoluteFill} onPress={closeCategoryPicker} />
++              <View style={[styles.modalCard, styles.categoryModalCard]}>
++                <View style={styles.modalHeading}>
++                  <Text style={styles.modalTitle}>Category</Text>
++                  <Text style={styles.modalSubtitle}>Search or add a category</Text>
++                </View>
++                <View style={styles.modalActions}>
++                  <Pressable onPress={closeCategoryPicker}>
++                    <Text style={styles.modalActionText}>Done</Text>
+                   </Pressable>
+-                ) : null}
+-
+-                <ScrollView style={styles.categoryOptionsList} keyboardShouldPersistTaps="handled">
+-                  {filteredCategoryOptions.map((option) => (
+-                    <Pressable key={option} style={styles.categoryOption} onPress={() => selectCategory(option)}>
+-                      <Text style={styles.categoryOptionText}>{option}</Text>
++                </View>
++                <View style={styles.categoryPickerBody}>
++                  <TextInput
++                    style={styles.input}
++                    value={categorySearch}
++                    onChangeText={setCategorySearch}
++                    placeholder="Search categories"
++                    placeholderTextColor={theme.colors.textSecondary}
++                    autoCapitalize="words"
++                    autoCorrect={false}
++                  />
 +
-+      {isCategoryPickerVisible ? (
-+        <Modal transparent animationType="fade" visible onRequestClose={closeCategoryPicker}>
-+          <View style={styles.modalBackdrop}>
-+            <Pressable style={StyleSheet.absoluteFill} onPress={closeCategoryPicker} />
-+            <View style={styles.modalCard}>
-+              <View style={styles.modalHeading}>
-+                <Text style={styles.modalTitle}>Category</Text>
-+                <Text style={styles.modalSubtitle}>Search or add a category</Text>
-+              </View>
-+              <View style={styles.modalActions}>
-+                <Pressable onPress={closeCategoryPicker}>
-+                  <Text style={styles.modalActionText}>Done</Text>
-+                </Pressable>
-+              </View>
-+              <View style={styles.categoryPickerBody}>
-+                <TextInput
-+                  style={styles.input}
-+                  value={categorySearch}
-+                  onChangeText={setCategorySearch}
-+                  placeholder="Search categories"
-+                  placeholderTextColor={theme.colors.textSecondary}
-+                  autoCapitalize="words"
-+                  autoCorrect={false}
-+                />
++                  {trimmedCategorySearch ? (
++                    <Pressable
++                      style={styles.categoryOption}
++                      onPress={() => selectCategory(exactMatchedCategoryOption ?? trimmedCategorySearch)}
++                    >
++                      <Text style={styles.categoryOptionText}>
++                        {exactMatchedCategoryOption ? `Use “${exactMatchedCategoryOption}”` : `Add “${trimmedCategorySearch}” as category`}
++                      </Text>
+                     </Pressable>
+-                  ))}
+-                </ScrollView>
++                  ) : null}
 +
-+                {trimmedCategorySearch ? (
-+                  <Pressable
-+                    style={styles.categoryOption}
-+                    onPress={() => selectCategory(exactMatchedCategoryOption ?? trimmedCategorySearch)}
++                  <ScrollView
++                    style={styles.categoryOptionsList}
++                    keyboardShouldPersistTaps="handled"
++                    keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
 +                  >
-+                    <Text style={styles.categoryOptionText}>
-+                      {exactMatchedCategoryOption ? `Use “${exactMatchedCategoryOption}”` : `Add “${trimmedCategorySearch}” as category`}
-+                    </Text>
-+                  </Pressable>
-+                ) : null}
-+
-+                <ScrollView style={styles.categoryOptionsList} keyboardShouldPersistTaps="handled">
-+                  {filteredCategoryOptions.map((option) => (
-+                    <Pressable key={option} style={styles.categoryOption} onPress={() => selectCategory(option)}>
-+                      <Text style={styles.categoryOptionText}>{option}</Text>
-+                    </Pressable>
-+                  ))}
-+                </ScrollView>
-+              </View>
-+            </View>
-+          </View>
-+        </Modal>
-+      ) : null}
++                    {filteredCategoryOptions.map((option) => (
++                      <Pressable key={option} style={styles.categoryOption} onPress={() => selectCategory(option)}>
++                        <Text style={styles.categoryOptionText}>{option}</Text>
++                      </Pressable>
++                    ))}
++                  </ScrollView>
++                </View>
+               </View>
+             </View>
+-          </View>
++          </KeyboardAvoidingView>
+         </Modal>
+       ) : null}
      </>
    );
  }
@@ -365,24 +176,7 @@ index a9755f68becf2e7a2ac5d9b5016eab51cfbc9658..afbb43829f0d8ca41f91e65fa46cee15
      borderWidth: 1,
      borderColor: theme.colors.border,
      borderRadius: theme.radius.md,
-     padding: theme.spacing.md,
-     backgroundColor: theme.colors.surfaceElevated,
-     gap: theme.spacing.sm,
-   },
-   tierTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
-   timingCard: {
-     borderWidth: 1,
-     borderColor: theme.colors.border,
-     borderRadius: theme.radius.md,
-     padding: theme.spacing.md,
-     gap: theme.spacing.sm,
-     backgroundColor: theme.colors.surfaceElevated,
-   },
-   timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
-   pickerValue: { color: theme.colors.textPrimary },
-+  placeholderValue: { color: theme.colors.textSecondary },
-   secondaryButton: {
-     borderWidth: 1,
+@@ -597,90 +606,101 @@ const styles = StyleSheet.create({
      borderColor: theme.colors.primary,
      borderRadius: theme.radius.md,
      padding: theme.spacing.md,
@@ -406,7 +200,37 @@ index a9755f68becf2e7a2ac5d9b5016eab51cfbc9658..afbb43829f0d8ca41f91e65fa46cee15
      justifyContent: 'center',
      alignItems: 'center',
      backgroundColor: 'rgba(0,0,0,0.65)',
-@@ -511,26 +642,45 @@ const styles = StyleSheet.create({
+     padding: theme.spacing.lg,
+   },
++  modalKeyboardAvoidingView: {
++    flex: 1,
++  },
++  categoryModalBackdrop: {
++    justifyContent: 'flex-end',
++  },
+   modalCard: {
+     backgroundColor: theme.colors.surfaceElevated,
+     borderRadius: theme.radius.lg,
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     width: '100%',
+     maxWidth: 420,
+     shadowColor: '#000',
+     shadowOffset: { width: 0, height: 14 },
+     shadowOpacity: 0.35,
+     shadowRadius: 24,
+     elevation: 10,
+   },
++  categoryModalCard: {
++    maxHeight: '82%',
++  },
+   modalHeading: {
+     paddingHorizontal: theme.spacing.lg,
+     paddingTop: theme.spacing.lg,
+     gap: 4,
+   },
+   modalTitle: {
+     color: theme.colors.textPrimary,
      fontSize: 20,
      fontWeight: '700',
    },
@@ -432,25 +256,27 @@ index a9755f68becf2e7a2ac5d9b5016eab51cfbc9658..afbb43829f0d8ca41f91e65fa46cee15
      alignItems: 'center',
      paddingVertical: theme.spacing.md,
    },
-+  categoryPickerBody: {
-+    padding: theme.spacing.md,
-+    gap: theme.spacing.sm,
-+  },
-+  categoryOptionsList: {
-+    maxHeight: 280,
-+  },
-+  categoryOption: {
-+    borderWidth: 1,
-+    borderColor: theme.colors.border,
-+    borderRadius: theme.radius.md,
-+    paddingHorizontal: theme.spacing.md,
-+    paddingVertical: theme.spacing.sm,
-+    marginTop: theme.spacing.xs,
-+  },
-+  categoryOptionText: {
-+    color: theme.colors.textPrimary,
-+    fontWeight: '600',
-+  },
+   categoryPickerBody: {
+     padding: theme.spacing.md,
+     gap: theme.spacing.sm,
++    flexShrink: 1,
+   },
+   categoryOptionsList: {
+     maxHeight: 280,
++    flexShrink: 1,
+   },
+   categoryOption: {
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     borderRadius: theme.radius.md,
+     paddingHorizontal: theme.spacing.md,
+     paddingVertical: theme.spacing.sm,
+     marginTop: theme.spacing.xs,
+   },
+   categoryOptionText: {
+     color: theme.colors.textPrimary,
+     fontWeight: '600',
+   },
  });
  
 EOF

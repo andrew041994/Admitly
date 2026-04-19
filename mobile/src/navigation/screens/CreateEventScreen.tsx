@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 import { ApiError } from '../../api/client';
@@ -507,50 +507,59 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
 
       {isCategoryPickerVisible ? (
         <Modal transparent animationType="fade" visible onRequestClose={closeCategoryPicker}>
-          <View style={styles.modalBackdrop}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={closeCategoryPicker} />
-            <View style={styles.modalCard}>
-              <View style={styles.modalHeading}>
-                <Text style={styles.modalTitle}>Category</Text>
-                <Text style={styles.modalSubtitle}>Search or add a category</Text>
-              </View>
-              <View style={styles.modalActions}>
-                <Pressable onPress={closeCategoryPicker}>
-                  <Text style={styles.modalActionText}>Done</Text>
-                </Pressable>
-              </View>
-              <View style={styles.categoryPickerBody}>
-                <TextInput
-                  style={styles.input}
-                  value={categorySearch}
-                  onChangeText={setCategorySearch}
-                  placeholder="Search categories"
-                  placeholderTextColor={theme.colors.textSecondary}
-                  autoCapitalize="words"
-                  autoCorrect={false}
-                />
-
-                {trimmedCategorySearch ? (
-                  <Pressable
-                    style={styles.categoryOption}
-                    onPress={() => selectCategory(exactMatchedCategoryOption ?? trimmedCategorySearch)}
-                  >
-                    <Text style={styles.categoryOptionText}>
-                      {exactMatchedCategoryOption ? `Use “${exactMatchedCategoryOption}”` : `Add “${trimmedCategorySearch}” as category`}
-                    </Text>
+          <KeyboardAvoidingView
+            style={styles.modalKeyboardAvoidingView}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={[styles.modalBackdrop, styles.categoryModalBackdrop]}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={closeCategoryPicker} />
+              <View style={[styles.modalCard, styles.categoryModalCard]}>
+                <View style={styles.modalHeading}>
+                  <Text style={styles.modalTitle}>Category</Text>
+                  <Text style={styles.modalSubtitle}>Search or add a category</Text>
+                </View>
+                <View style={styles.modalActions}>
+                  <Pressable onPress={closeCategoryPicker}>
+                    <Text style={styles.modalActionText}>Done</Text>
                   </Pressable>
-                ) : null}
+                </View>
+                <View style={styles.categoryPickerBody}>
+                  <TextInput
+                    style={styles.input}
+                    value={categorySearch}
+                    onChangeText={setCategorySearch}
+                    placeholder="Search categories"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                  />
 
-                <ScrollView style={styles.categoryOptionsList} keyboardShouldPersistTaps="handled">
-                  {filteredCategoryOptions.map((option) => (
-                    <Pressable key={option} style={styles.categoryOption} onPress={() => selectCategory(option)}>
-                      <Text style={styles.categoryOptionText}>{option}</Text>
+                  {trimmedCategorySearch ? (
+                    <Pressable
+                      style={styles.categoryOption}
+                      onPress={() => selectCategory(exactMatchedCategoryOption ?? trimmedCategorySearch)}
+                    >
+                      <Text style={styles.categoryOptionText}>
+                        {exactMatchedCategoryOption ? `Use “${exactMatchedCategoryOption}”` : `Add “${trimmedCategorySearch}” as category`}
+                      </Text>
                     </Pressable>
-                  ))}
-                </ScrollView>
+                  ) : null}
+
+                  <ScrollView
+                    style={styles.categoryOptionsList}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                  >
+                    {filteredCategoryOptions.map((option) => (
+                      <Pressable key={option} style={styles.categoryOption} onPress={() => selectCategory(option)}>
+                        <Text style={styles.categoryOptionText}>{option}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
       ) : null}
     </>
@@ -619,6 +628,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.65)',
     padding: theme.spacing.lg,
   },
+  modalKeyboardAvoidingView: {
+    flex: 1,
+  },
+  categoryModalBackdrop: {
+    justifyContent: 'flex-end',
+  },
   modalCard: {
     backgroundColor: theme.colors.surfaceElevated,
     borderRadius: theme.radius.lg,
@@ -631,6 +646,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 24,
     elevation: 10,
+  },
+  categoryModalCard: {
+    maxHeight: '82%',
   },
   modalHeading: {
     paddingHorizontal: theme.spacing.lg,
@@ -667,9 +685,11 @@ const styles = StyleSheet.create({
   categoryPickerBody: {
     padding: theme.spacing.md,
     gap: theme.spacing.sm,
+    flexShrink: 1,
   },
   categoryOptionsList: {
     maxHeight: 280,
+    flexShrink: 1,
   },
   categoryOption: {
     borderWidth: 1,
