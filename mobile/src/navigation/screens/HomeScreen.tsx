@@ -4,6 +4,7 @@ import {
   FlatList,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -30,6 +31,7 @@ const CATEGORY_FILTERS = ['All', 'Party', 'Concert', 'Festival'];
 
 export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent }: HomeScreenProps) {
   const [events, setEvents] = useState<EventDiscoveryItem[]>([]);
+  const [featuredEvents, setFeaturedEvents] = useState<EventDiscoveryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +57,17 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
     };
   }, [dateFilter, priceFilter, query, selectedCategory]);
 
+  const featuredSubset = useMemo(() => featuredEvents.slice(0, 6), [featuredEvents]);
+  const hasActiveFilters = Boolean(query || selectedCategory !== 'All' || dateFilter !== 'upcoming' || priceFilter !== 'all');
+
+  const resetFilters = useCallback(() => {
+    setSearchInput('');
+    setQuery('');
+    setSelectedCategory('All');
+    setDateFilter('upcoming');
+    setPriceFilter('all');
+  }, []);
+
   const loadEvents = useCallback(
     async (isRefresh = false) => {
       if (isRefresh) {
@@ -64,8 +77,12 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
       }
 
       try {
-        const discoveredEvents = await listDiscoverableEvents(requestFilters);
+        const [discoveredEvents, discoveryFeed] = await Promise.all([
+          listDiscoverableEvents(requestFilters),
+          listDiscoverableEvents({ dateBucket: 'upcoming' }),
+        ]);
         setEvents(discoveredEvents);
+        setFeaturedEvents(discoveryFeed);
         setError(null);
       } catch (err) {
         const message = err instanceof ApiError ? err.message : 'Unable to load events right now.';
@@ -148,6 +165,19 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
           ))}
         </View>
 
+        {featuredSubset.length > 0 ? (
+          <View style={styles.featuredSection}>
+            <Text style={styles.featuredTitle}>Featured Events</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.featuredRow}>
+              {featuredSubset.map((item) => (
+                <View key={item.id} style={styles.featuredCardWrap}>
+                  <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
         {loading ? (
           <View style={styles.stateWrap}>
             <ActivityIndicator color={theme.colors.primary} />
@@ -160,7 +190,16 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
           </View>
         ) : events.length === 0 ? (
           <View style={styles.stateWrap}>
-            <Text style={styles.stateText}>No events match your current search and filters.</Text>
+            <Text style={styles.stateText}>No events match your filters.</Text>
+            <ThemedButton label="Reset Filters" onPress={resetFilters} />
+            {hasActiveFilters && featuredSubset.length > 0 ? (
+              <View style={styles.emptyDiscovery}>
+                <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
+                {featuredSubset.slice(0, 2).map((item) => (
+                  <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
+                ))}
+              </View>
+            ) : null}
           </View>
         ) : (
           <FlatList
@@ -262,6 +301,25 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
     marginTop: theme.spacing.xl,
   },
+  featuredSection: {
+    marginTop: theme.spacing.xs,
+    marginBottom: theme.spacing.sm,
+  },
+  featuredTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.body,
+    fontWeight: '700',
+    paddingHorizontal: theme.spacing.lg,
+    marginBottom: theme.spacing.sm,
+  },
+  featuredRow: {
+    gap: theme.spacing.md,
+    paddingHorizontal: theme.spacing.lg,
+    paddingRight: theme.spacing.xl,
+  },
+  featuredCardWrap: {
+    width: 290,
+  },
   stateText: {
     color: theme.colors.textSecondary,
     textAlign: 'center',
@@ -276,5 +334,14 @@ const styles = StyleSheet.create({
   },
   signOutText: {
     color: theme.colors.textSecondary,
+  },
+  emptyDiscovery: {
+    marginTop: theme.spacing.sm,
+    gap: theme.spacing.md,
+  },
+  emptyDiscoveryTitle: {
+    color: theme.colors.textPrimary,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
