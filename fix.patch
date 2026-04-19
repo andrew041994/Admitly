@@ -1,277 +1,269 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/screens/HomeScreen.tsx b/mobile/src/navigation/screens/HomeScreen.tsx
-index 23d9bc3530c57065862ef35bad06eccd6bd4d669..b94119ac1ae9547a038b4cbf93c5e84ddd75209b 100644
---- a/mobile/src/navigation/screens/HomeScreen.tsx
-+++ b/mobile/src/navigation/screens/HomeScreen.tsx
-@@ -1,93 +1,110 @@
- import { useCallback, useEffect, useMemo, useState } from 'react';
- import {
-   ActivityIndicator,
-   FlatList,
-   Pressable,
-   RefreshControl,
-+  ScrollView,
-   StyleSheet,
-   Text,
-   TextInput,
-   View,
- } from 'react-native';
+diff --git a/mobile/src/navigation/screens/CreateEventScreen.tsx b/mobile/src/navigation/screens/CreateEventScreen.tsx
+index f93b6046800362683bf7fa268923e480008fd9ce..3def2bdb9c4c17efde17a7dfca448a8dc55995c8 100644
+--- a/mobile/src/navigation/screens/CreateEventScreen.tsx
++++ b/mobile/src/navigation/screens/CreateEventScreen.tsx
+@@ -1,28 +1,29 @@
+ import { useEffect, useMemo, useState } from 'react';
+ import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+ import DateTimePicker from '@react-native-community/datetimepicker';
++import { useSafeAreaInsets } from 'react-native-safe-area-context';
  
  import { ApiError } from '../../api/client';
- import { DiscoveryFilters, EventDiscoveryItem, listDiscoverableEvents } from '../../api/events';
- import { Screen } from '../../components/Screen';
- import { ThemedButton } from '../../components/ThemedButton';
- import { EventCard } from '../components/EventCard';
+ import { createEvent, searchVenues, VenueSearchItem } from '../../api/organizer';
  import { theme } from '../../theme';
  
- type DateFilter = 'today' | 'this_week' | 'upcoming';
- 
- type HomeScreenProps = {
-   onOpenProfile: () => void;
-   onOpenMyTickets: () => void;
-   onSignOut: () => void;
-   onOpenEvent: (eventId: number) => void;
+ type TierFormState = {
+   name: string;
+   description: string;
+   priceAmount: string;
+   currency: string;
+   quantityTotal: string;
+   minPerOrder: string;
+   maxPerOrder: string;
  };
  
- const CATEGORY_FILTERS = ['All', 'Party', 'Concert', 'Festival'];
+ const defaultTier = (): TierFormState => ({
+   name: '',
+   description: '',
+   priceAmount: '0.00',
+   currency: 'GYD',
+   quantityTotal: '',
+   minPerOrder: '',
+   maxPerOrder: '',
+ });
  
- export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent }: HomeScreenProps) {
-   const [events, setEvents] = useState<EventDiscoveryItem[]>([]);
-+  const [featuredEvents, setFeaturedEvents] = useState<EventDiscoveryItem[]>([]);
-   const [loading, setLoading] = useState(true);
-   const [refreshing, setRefreshing] = useState(false);
+@@ -105,50 +106,51 @@ const formatDateTimeValue = (field: DateTimeField) => {
+ 
+ const getPickerTitle = (field: PickerField) => {
+   if (field.startsWith('start_')) return 'Event start';
+   if (field.startsWith('end_')) return 'Event end';
+   if (field === 'doors_open_time') return 'Doors open';
+   if (field.startsWith('sales_start_')) return 'Sales start';
+   return 'Sales end';
+ };
+ 
+ const getPickerStepLabel = (session: Exclude<PickerSession, null>) => {
+   if (session.field === 'doors_open_time') return 'Select time';
+   return session.mode === 'date' ? 'Step 1 of 2 • Select date' : 'Step 2 of 2 • Select time';
+ };
+ 
+ const buildGuyanaIso = (date: Date, time: Date) => {
+   const year = date.getFullYear();
+   const month = date.getMonth();
+   const day = date.getDate();
+   const hour = time.getHours();
+   const minute = time.getMinutes();
+   const utcMillis = Date.UTC(year, month, day, hour + 4, minute, 0, 0);
+   return new Date(utcMillis).toISOString();
+ };
+ 
+ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) => void }) {
++  const insets = useSafeAreaInsets();
+   const [title, setTitle] = useState('');
+   const [shortDescription, setShortDescription] = useState('');
+   const [longDescription, setLongDescription] = useState('');
+   const [category, setCategory] = useState('');
+   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
+   const [categorySearch, setCategorySearch] = useState('');
+   const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
+   const [endAt, setEndAt] = useState<DateTimeField>({ date: null, time: null });
+   const [doorsOpenAt, setDoorsOpenAt] = useState<Date | null>(null);
+   const [salesStartAt, setSalesStartAt] = useState<DateTimeField>({ date: null, time: null });
+   const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
+   const [pickerSession, setPickerSession] = useState<PickerSession>(null);
+   const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
+   const [venueName, setVenueName] = useState('');
+   const [addressText, setAddressText] = useState('');
+   const [selectedVenueId, setSelectedVenueId] = useState<number | null>(null);
+   const [venueSuggestions, setVenueSuggestions] = useState<VenueSearchItem[]>([]);
+   const [loadingVenueSuggestions, setLoadingVenueSuggestions] = useState(false);
+   const [refundPolicyText, setRefundPolicyText] = useState('');
+   const [termsText, setTermsText] = useState('');
+   const [tiers, setTiers] = useState<TierFormState[]>([defaultTier()]);
+ 
+   const [loading, setLoading] = useState(false);
    const [error, setError] = useState<string | null>(null);
  
-   const [searchInput, setSearchInput] = useState('');
-   const [query, setQuery] = useState('');
-   const [selectedCategory, setSelectedCategory] = useState('All');
-   const [dateFilter, setDateFilter] = useState<DateFilter>('upcoming');
-   const [priceFilter, setPriceFilter] = useState<'all' | 'free' | 'paid'>('all');
- 
-   useEffect(() => {
-     const timeout = setTimeout(() => setQuery(searchInput.trim()), 300);
-     return () => clearTimeout(timeout);
-   }, [searchInput]);
- 
-   const requestFilters = useMemo<DiscoveryFilters>(() => {
-     const isFree = priceFilter === 'all' ? undefined : priceFilter === 'free';
-     return {
-       query,
-       dateBucket: dateFilter,
-       category: selectedCategory === 'All' ? undefined : selectedCategory,
-       isFree,
-     };
-   }, [dateFilter, priceFilter, query, selectedCategory]);
- 
-+  const featuredSubset = useMemo(() => featuredEvents.slice(0, 6), [featuredEvents]);
-+  const hasActiveFilters = Boolean(query || selectedCategory !== 'All' || dateFilter !== 'upcoming' || priceFilter !== 'all');
-+
-+  const resetFilters = useCallback(() => {
-+    setSearchInput('');
-+    setQuery('');
-+    setSelectedCategory('All');
-+    setDateFilter('upcoming');
-+    setPriceFilter('all');
-+  }, []);
-+
-   const loadEvents = useCallback(
-     async (isRefresh = false) => {
-       if (isRefresh) {
-         setRefreshing(true);
-       } else {
-         setLoading(true);
-       }
- 
-       try {
--        const discoveredEvents = await listDiscoverableEvents(requestFilters);
-+        const [discoveredEvents, discoveryFeed] = await Promise.all([
-+          listDiscoverableEvents(requestFilters),
-+          listDiscoverableEvents({ dateBucket: 'upcoming' }),
-+        ]);
-         setEvents(discoveredEvents);
-+        setFeaturedEvents(discoveryFeed);
-         setError(null);
-       } catch (err) {
-         const message = err instanceof ApiError ? err.message : 'Unable to load events right now.';
-         setError(message);
-       } finally {
-         setLoading(false);
-         setRefreshing(false);
-       }
-     },
-     [requestFilters],
-   );
- 
-   useEffect(() => {
-     loadEvents();
-   }, [loadEvents]);
+@@ -398,52 +400,62 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
+         custom_venue_name: venueName.trim(),
+         custom_address_text: addressText.trim() || null,
+         refund_policy_text: refundPolicyText.trim() || null,
+         terms_text: termsText.trim() || null,
+         ticket_tiers: tiers.map((tier, index) => ({
+           name: tier.name.trim(),
+           description: tier.description.trim() || null,
+           price_amount: Number(tier.priceAmount).toFixed(2),
+           currency: tier.currency.trim().toUpperCase(),
+           quantity_total: Number(tier.quantityTotal),
+           min_per_order: Number(tier.minPerOrder),
+           max_per_order: Number(tier.maxPerOrder),
+           sort_order: index,
+         })),
+       });
+       onCreated(created.id);
+     } catch (err) {
+       setError(err instanceof ApiError ? err.message : 'Unable to create event.');
+     } finally {
+       setLoading(false);
+     }
+   };
  
    return (
-     <Screen padded={false}>
-       <View style={styles.container}>
-         <View style={styles.header}>
-           <View>
-             <Text style={styles.kicker}>DISCOVER</Text>
-             <Text style={styles.title}>Admitly</Text>
-           </View>
-           <View style={styles.headerLinks}>
-@@ -126,63 +143,85 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
-             { key: 'upcoming', label: 'Upcoming' },
-           ].map((item) => (
-             <Pressable
-               key={item.key}
-               style={[styles.chip, dateFilter === item.key && styles.chipActive]}
-               onPress={() => setDateFilter(item.key as DateFilter)}
-             >
-               <Text style={[styles.chipText, dateFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
-             </Pressable>
-           ))}
-           {[
-             { key: 'all', label: 'All' },
-             { key: 'free', label: 'Free' },
-             { key: 'paid', label: 'Paid' },
-           ].map((item) => (
-             <Pressable
-               key={item.key}
-               style={[styles.chip, priceFilter === item.key && styles.chipActive]}
-               onPress={() => setPriceFilter(item.key as 'all' | 'free' | 'paid')}
-             >
-               <Text style={[styles.chipText, priceFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
-             </Pressable>
-           ))}
+     <>
+-      <ScrollView contentContainerStyle={styles.container}>
+-        <Text style={styles.title}>Create Event</Text>
++      <KeyboardAvoidingView
++        style={styles.screenKeyboardAvoidingView}
++        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
++        keyboardVerticalOffset={Platform.OS === 'ios' ? theme.spacing.md : 0}
++      >
++        <ScrollView
++          contentContainerStyle={[styles.container, { paddingBottom: theme.spacing.xl + insets.bottom + theme.spacing.lg }]}
++          keyboardShouldPersistTaps="handled"
++          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
++          showsVerticalScrollIndicator={false}
++        >
++          <Text style={styles.title}>Create Event</Text>
+ 
+         <Text style={styles.sectionTitle}>Basic Info</Text>
+         <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Event title" placeholderTextColor={theme.colors.textSecondary} />
+         <TextInput style={styles.input} value={shortDescription} onChangeText={setShortDescription} placeholder="Short description" placeholderTextColor={theme.colors.textSecondary} />
+         <TextInput
+           style={[styles.input, styles.multiline]}
+           multiline
+           numberOfLines={4}
+           value={longDescription}
+           onChangeText={setLongDescription}
+           placeholder="Long description"
+           placeholderTextColor={theme.colors.textSecondary}
+         />
+         <Pressable style={styles.input} onPress={openCategoryPicker}>
+           <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
+         </Pressable>
+ 
+         <Text style={styles.sectionTitle}>Timing</Text>
+         <View style={styles.timingCard}>
+           <Text style={styles.timingLabel}>Start</Text>
+           <Pressable style={styles.input} onPress={() => startDateTimeFlow('start_at')}>
+             <Text style={styles.pickerValue}>{formatDateTimeValue(startAt)}</Text>
+           </Pressable>
          </View>
  
-+        {featuredSubset.length > 0 ? (
-+          <View style={styles.featuredSection}>
-+            <Text style={styles.featuredTitle}>Featured Events</Text>
-+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.featuredRow}>
-+              {featuredSubset.map((item) => (
-+                <View key={item.id} style={styles.featuredCardWrap}>
-+                  <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
-+                </View>
-+              ))}
-+            </ScrollView>
-+          </View>
-+        ) : null}
-+
-         {loading ? (
-           <View style={styles.stateWrap}>
-             <ActivityIndicator color={theme.colors.primary} />
-             <Text style={styles.stateText}>Loading events...</Text>
-           </View>
-         ) : error ? (
-           <View style={styles.stateWrap}>
-             <Text style={styles.errorText}>{error}</Text>
-             <ThemedButton label="Try Again" onPress={() => loadEvents()} variant="secondary" />
-           </View>
-         ) : events.length === 0 ? (
-           <View style={styles.stateWrap}>
--            <Text style={styles.stateText}>No events match your current search and filters.</Text>
-+            <Text style={styles.stateText}>No events match your filters.</Text>
-+            <ThemedButton label="Reset Filters" onPress={resetFilters} />
-+            {hasActiveFilters && featuredSubset.length > 0 ? (
-+              <View style={styles.emptyDiscovery}>
-+                <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
-+                {featuredSubset.slice(0, 2).map((item) => (
-+                  <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
-+                ))}
-+              </View>
-+            ) : null}
-           </View>
-         ) : (
-           <FlatList
-             data={events}
-             keyExtractor={(item) => String(item.id)}
-             contentContainerStyle={styles.listContent}
-             renderItem={({ item }) => <EventCard event={item} onPress={() => onOpenEvent(item.id)} />}
-             refreshControl={
-               <RefreshControl
-                 refreshing={refreshing}
-                 onRefresh={() => loadEvents(true)}
-                 tintColor={theme.colors.primary}
-               />
-             }
-           />
-         )}
- 
-         <Pressable onPress={onSignOut} style={styles.signOutArea}>
-           <Text style={styles.signOutText}>Sign out</Text>
+@@ -522,55 +534,56 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
+         ))}
+         <Pressable onPress={addTier} style={styles.secondaryButton}>
+           <Text style={styles.secondaryButtonText}>Add Tier</Text>
          </Pressable>
-       </View>
-     </Screen>
+ 
+         <Text style={styles.sectionTitle}>Policies</Text>
+         <TextInput
+           style={[styles.input, styles.multiline]}
+           multiline
+           numberOfLines={3}
+           value={refundPolicyText}
+           onChangeText={setRefundPolicyText}
+           placeholder="Refund policy"
+           placeholderTextColor={theme.colors.textSecondary}
+         />
+         <TextInput
+           style={[styles.input, styles.multiline]}
+           multiline
+           numberOfLines={3}
+           value={termsText}
+           onChangeText={setTermsText}
+           placeholder="Terms"
+           placeholderTextColor={theme.colors.textSecondary}
+         />
+ 
+-        {error ? <Text style={styles.error}>{error}</Text> : null}
+-        <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
+-          <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
+-        </Pressable>
+-      </ScrollView>
++          {error ? <Text style={styles.error}>{error}</Text> : null}
++          <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
++            <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
++          </Pressable>
++        </ScrollView>
++      </KeyboardAvoidingView>
+ 
+       {pickerSession ? (
+         <Modal transparent animationType="fade" visible onRequestClose={cancelPickerSelection}>
+           <View style={styles.modalBackdrop}>
+             <Pressable style={StyleSheet.absoluteFill} onPress={cancelPickerSelection} />
+             <View style={styles.modalCard}>
+               <View style={styles.modalHeading}>
+                 <Text style={styles.modalTitle}>{getPickerTitle(pickerSession.field)}</Text>
+                 <Text style={styles.modalSubtitle}>{getPickerStepLabel(pickerSession)}</Text>
+               </View>
+               <View style={styles.modalActions}>
+                 <Pressable onPress={cancelPickerSelection}>
+                   <Text style={styles.modalActionText}>Cancel</Text>
+                 </Pressable>
+                 <Pressable onPress={completePickerSelection}>
+                   <Text style={styles.modalActionText}>Done</Text>
+                 </Pressable>
+               </View>
+               <View style={styles.pickerFrame}>
+                 <DateTimePicker
+                   value={pickerDraftValue}
+                   mode={pickerSession.mode}
+                   onChange={(_, date) => {
+                     if (date) setPickerDraftValue(date);
+                   }}
+@@ -621,50 +634,51 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
+                     </Pressable>
+                   ) : null}
+ 
+                   <ScrollView
+                     style={styles.categoryOptionsList}
+                     keyboardShouldPersistTaps="handled"
+                     keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                   >
+                     {filteredCategoryOptions.map((option) => (
+                       <Pressable key={option} style={styles.categoryOption} onPress={() => selectCategory(option)}>
+                         <Text style={styles.categoryOptionText}>{option}</Text>
+                       </Pressable>
+                     ))}
+                   </ScrollView>
+                 </View>
+               </View>
+             </View>
+           </KeyboardAvoidingView>
+         </Modal>
+       ) : null}
+     </>
    );
  }
  
-@@ -240,41 +279,69 @@ const styles = StyleSheet.create({
+ const styles = StyleSheet.create({
++  screenKeyboardAvoidingView: { flex: 1 },
+   container: { padding: theme.spacing.lg, backgroundColor: theme.colors.background, gap: theme.spacing.sm },
+   title: { color: theme.colors.textPrimary, fontSize: 24, fontWeight: '700' },
+   sectionTitle: { color: theme.colors.primary, fontSize: 16, fontWeight: '700', marginTop: theme.spacing.md },
+   input: {
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     borderRadius: theme.radius.md,
+     color: theme.colors.textPrimary,
+     padding: theme.spacing.md,
+     backgroundColor: theme.colors.surface,
    },
-   chipActive: {
-     borderColor: theme.colors.primary,
-     backgroundColor: '#221b08',
+   multiline: { minHeight: 90, textAlignVertical: 'top' },
+   row: { flexDirection: 'row', gap: theme.spacing.sm },
+   half: { flex: 1 },
+   tierCard: {
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     borderRadius: theme.radius.md,
+     padding: theme.spacing.md,
+     backgroundColor: theme.colors.surfaceElevated,
+     gap: theme.spacing.sm,
    },
-   chipText: {
-     color: theme.colors.textSecondary,
-     fontSize: theme.typography.caption,
-   },
-   chipTextActive: {
-     color: theme.colors.primary,
-     fontWeight: '700',
-   },
-   listContent: {
-     gap: theme.spacing.md,
-     paddingHorizontal: theme.spacing.lg,
-     paddingVertical: theme.spacing.sm,
-     paddingBottom: theme.spacing.xl,
-   },
-   stateWrap: {
-     paddingHorizontal: theme.spacing.lg,
-     alignItems: 'center',
-     gap: theme.spacing.md,
-     marginTop: theme.spacing.xl,
-   },
-+  featuredSection: {
-+    marginTop: theme.spacing.xs,
-+    marginBottom: theme.spacing.sm,
-+  },
-+  featuredTitle: {
-+    color: theme.colors.textPrimary,
-+    fontSize: theme.typography.body,
-+    fontWeight: '700',
-+    paddingHorizontal: theme.spacing.lg,
-+    marginBottom: theme.spacing.sm,
-+  },
-+  featuredRow: {
-+    gap: theme.spacing.md,
-+    paddingHorizontal: theme.spacing.lg,
-+    paddingRight: theme.spacing.xl,
-+  },
-+  featuredCardWrap: {
-+    width: 290,
-+  },
-   stateText: {
-     color: theme.colors.textSecondary,
-     textAlign: 'center',
-   },
-   errorText: {
-     color: theme.colors.error,
-     textAlign: 'center',
-   },
-   signOutArea: {
-     paddingVertical: theme.spacing.sm,
-     alignItems: 'center',
-   },
-   signOutText: {
-     color: theme.colors.textSecondary,
-   },
-+  emptyDiscovery: {
-+    marginTop: theme.spacing.sm,
-+    gap: theme.spacing.md,
-+  },
-+  emptyDiscoveryTitle: {
-+    color: theme.colors.textPrimary,
-+    fontWeight: '600',
-+    textAlign: 'center',
-+  },
- });
+   tierTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
+   timingCard: {
+     borderWidth: 1,
  
 EOF
 )

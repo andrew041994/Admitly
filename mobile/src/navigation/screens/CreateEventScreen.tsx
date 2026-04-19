@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError } from '../../api/client';
 import { createEvent, searchVenues, VenueSearchItem } from '../../api/organizer';
@@ -127,6 +128,7 @@ const buildGuyanaIso = (date: Date, time: Date) => {
 };
 
 export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) => void }) {
+  const insets = useSafeAreaInsets();
   const [title, setTitle] = useState('');
   const [shortDescription, setShortDescription] = useState('');
   const [longDescription, setLongDescription] = useState('');
@@ -420,8 +422,18 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
 
   return (
     <>
-      <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Create Event</Text>
+      <KeyboardAvoidingView
+        style={styles.screenKeyboardAvoidingView}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? theme.spacing.md : 0}
+      >
+        <ScrollView
+          contentContainerStyle={[styles.container, { paddingBottom: theme.spacing.xl + insets.bottom + theme.spacing.lg }]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.title}>Create Event</Text>
 
         <Text style={styles.sectionTitle}>Basic Info</Text>
         <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Event title" placeholderTextColor={theme.colors.textSecondary} />
@@ -544,11 +556,12 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
           placeholderTextColor={theme.colors.textSecondary}
         />
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
-          <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
-        </Pressable>
-      </ScrollView>
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+          <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
+            <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
+          </Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       {pickerSession ? (
         <Modal transparent animationType="fade" visible onRequestClose={cancelPickerSelection}>
@@ -643,6 +656,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
 }
 
 const styles = StyleSheet.create({
+  screenKeyboardAvoidingView: { flex: 1 },
   container: { padding: theme.spacing.lg, backgroundColor: theme.colors.background, gap: theme.spacing.sm },
   title: { color: theme.colors.textPrimary, fontSize: 24, fontWeight: '700' },
   sectionTitle: { color: theme.colors.primary, fontSize: 16, fontWeight: '700', marginTop: theme.spacing.md },
