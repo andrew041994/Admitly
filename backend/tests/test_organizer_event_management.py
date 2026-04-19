@@ -271,6 +271,28 @@ def test_discovery_requires_published_and_approved(client: TestClient, db_sessio
     assert pending.id not in ids
 
 
+def test_discovery_this_week_bucket_returns_success(client: TestClient, db_session: Session) -> None:
+    owner = _seed_user(db_session, unique_email("discover_week_owner"), "Discover Week Owner")
+    event = _seed_event(
+        db_session,
+        owner,
+        title="This Week Event",
+        status=EventStatus.PUBLISHED,
+        approval_status=EventApprovalStatus.APPROVED,
+    )
+    event.published_at = datetime.now(UTC)
+    db_session.flush()
+
+    response = client.get(
+        "/events/discover",
+        params={"date_bucket": "this_week"},
+        headers={"x-user-id": str(owner.id)},
+    )
+    assert response.status_code == 200
+    ids = [row["id"] for row in response.json()]
+    assert event.id in ids
+
+
 def test_organizer_event_status_variants_are_explicit(client: TestClient, db_session: Session) -> None:
     owner = _seed_user(db_session, unique_email("states_owner"), "States Owner")
     draft = _seed_event(db_session, owner, title="Draft State", status=EventStatus.DRAFT, approval_status=EventApprovalStatus.PENDING)

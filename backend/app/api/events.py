@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 UTC = timezone.utc
 from decimal import Decimal
@@ -310,10 +310,11 @@ def discover_events(
     if date_bucket == "today":
         query = query.where(func.date(Event.start_at) == func.current_date())
     elif date_bucket == "this_week":
+        week_end_expr = now_expr + timedelta(days=7)
         query = query.where(
             and_(
                 Event.start_at >= now_expr,
-                Event.start_at < now_expr + func.make_interval(days=7),
+                Event.start_at < week_end_expr,
             )
         )
     else:
