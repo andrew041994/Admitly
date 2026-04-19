@@ -41,7 +41,16 @@ def list_event_staff(db: Session, *, actor_user_id: int, event_id: int) -> list[
         actor = db.execute(select(User).where(User.id == actor_user_id)).scalar_one_or_none()
         if actor is None or actor.is_admin is not True:
             raise EventPermissionDeniedError("Not authorized for this event action.")
-    return db.execute(select(EventStaff).where(EventStaff.event_id == event_id).order_by(EventStaff.created_at.asc())).scalars().all()
+    return (
+        db.execute(
+            select(EventStaff)
+            .options(joinedload(EventStaff.user).joinedload(User.organizer_profile))
+            .where(EventStaff.event_id == event_id)
+            .order_by(EventStaff.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
 
 
 def can_manage_event_staff(db: Session, *, actor_user_id: int, event_id: int) -> bool:

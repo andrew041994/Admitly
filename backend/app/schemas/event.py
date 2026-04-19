@@ -93,6 +93,10 @@ class EventStaffResponse(BaseModel):
     id: int
     event_id: int
     user_id: int
+    username: str | None = None
+    display_name: str | None = None
+    full_name: str | None = None
+    email: str | None = None
     role: str
     created_at: datetime
     invited_by_user_id: int | None

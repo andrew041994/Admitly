@@ -149,6 +149,10 @@ export type EventStaffAssignment = {
   id: number;
   event_id: number;
   user_id: number;
+  username: string | null;
+  display_name: string | null;
+  full_name: string | null;
+  email: string | null;
   role: string;
   created_at: string;
   invited_by_user_id: number | null;

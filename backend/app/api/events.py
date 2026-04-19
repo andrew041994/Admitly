@@ -401,10 +401,15 @@ def discover_event_detail(
 
 
 def _to_event_staff_response(staff) -> EventStaffResponse:  # noqa: ANN001
+    user = staff.user
     return EventStaffResponse(
         id=staff.id,
         event_id=staff.event_id,
         user_id=staff.user_id,
+        username=getattr(user, "username", None) if user is not None else None,
+        display_name=user.organizer_profile.display_name if user is not None and user.organizer_profile else None,
+        full_name=user.full_name if user is not None else None,
+        email=user.email if user is not None else None,
         role=staff.role.value,
         created_at=staff.created_at,
         invited_by_user_id=staff.invited_by_user_id,

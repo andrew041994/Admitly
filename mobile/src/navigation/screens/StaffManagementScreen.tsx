@@ -6,9 +6,13 @@ import { assignCheckinStaff, listEventStaff, listMyActiveEvents, removeEventStaf
 import { theme } from '../../theme';
 
 export function StaffManagementScreen() {
+  const getStaffLabel = (row: { user_id: number; username: string | null; display_name: string | null; full_name: string | null; email: string | null }) => {
+    const resolved = row.username ?? row.display_name ?? row.full_name ?? row.email;
+    return resolved && resolved.trim().length > 0 ? resolved : `User #${row.user_id}`;
+  };
   const [eventId, setEventId] = useState<number | null>(null);
   const [events, setEvents] = useState<Array<{ id: number; title: string }>>([]);
-  const [staff, setStaff] = useState<Array<{ id: number; user_id: number; is_effective_active: boolean }>>([]);
+  const [staff, setStaff] = useState<Array<{ id: number; user_id: number; username: string | null; display_name: string | null; full_name: string | null; email: string | null; is_effective_active: boolean }>>([]);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Array<{ id: number; full_name: string }>>([]);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +57,7 @@ export function StaffManagementScreen() {
       <TextInput style={styles.input} value={query} onChangeText={setQuery} placeholder="Search name/email/phone" placeholderTextColor={theme.colors.textSecondary} />
       <Pressable style={styles.button} onPress={onSearch}><Text style={styles.buttonText}>Search users</Text></Pressable>
       <FlatList
+        style={styles.searchResults}
         data={results}
         keyExtractor={(item) => String(item.id)}
         renderItem={({ item }) => (
@@ -73,8 +78,8 @@ export function StaffManagementScreen() {
       <Text style={styles.section}>Assigned staff</Text>
       {staff.map((row) => (
         <View key={row.id} style={styles.staffRow}>
-          <Text style={styles.meta}>User #{row.user_id} • {row.is_effective_active ? 'Active' : 'Expired'}</Text>
-          {eventId ? <Pressable onPress={() => removeEventStaff(eventId, row.id)}><Text style={styles.remove}>Remove</Text></Pressable> : null}
+          <Text style={styles.meta}>{getStaffLabel(row)} • {row.is_effective_active ? 'Active' : 'Expired'}</Text>
+          {eventId ? <Pressable onPress={async () => { await removeEventStaff(eventId, row.id); setStaff(await listEventStaff(eventId)); }}><Text style={styles.remove}>Remove</Text></Pressable> : null}
         </View>
       ))}
     </View>
@@ -94,6 +99,7 @@ const styles = StyleSheet.create({
   button: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing.sm, borderRadius: theme.radius.md, marginTop: theme.spacing.xs, marginBottom: theme.spacing.sm },
   buttonText: { color: theme.colors.textPrimary, fontWeight: '600' },
   item: { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.md, padding: theme.spacing.sm, marginBottom: theme.spacing.xs },
+  searchResults: { flexGrow: 0, maxHeight: 220, marginBottom: theme.spacing.xs },
   itemTitle: { color: theme.colors.textPrimary, fontWeight: '600' },
   meta: { color: theme.colors.textSecondary },
   staffRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
