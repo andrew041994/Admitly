@@ -32,7 +32,9 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
   const [lastScanRawValue, setLastScanRawValue] = useState<string | null>(null);
   const [lastScanAt, setLastScanAt] = useState(0);
   const [torchEnabled, setTorchEnabled] = useState(false);
+  const [feedbackFlash, setFeedbackFlash] = useState<'success' | 'error' | null>(null);
   const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const screenState: ScanUiState = useMemo(() => {
     if (!permission) {
@@ -74,8 +76,28 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
       if (cooldownTimeoutRef.current) {
         clearTimeout(cooldownTimeoutRef.current);
       }
+      if (flashTimeoutRef.current) {
+        clearTimeout(flashTimeoutRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!lastResult) {
+      return;
+    }
+
+    const flashType = lastResult.outcome === 'success' ? 'success' : 'error';
+    setFeedbackFlash(flashType);
+
+    if (flashTimeoutRef.current) {
+      clearTimeout(flashTimeoutRef.current);
+    }
+
+    flashTimeoutRef.current = setTimeout(() => {
+      setFeedbackFlash(null);
+    }, 360);
+  }, [lastResult]);
 
   const releaseScanLock = useCallback(() => {
     if (cooldownTimeoutRef.current) {
@@ -130,9 +152,9 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
     screenState === 'processing'
       ? 'Processing…'
       : screenState === 'success'
-        ? 'Last scan: success'
-        : screenState === 'error'
-          ? 'Last scan: issue detected'
+        ? 'Last scan: successful'
+      : screenState === 'error'
+          ? 'Last scan: failed'
           : 'Ready to scan';
 
   if (!canAccessScanner) {
@@ -184,6 +206,13 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
       ) : null}
 
       <View style={styles.overlay}>
+        {feedbackFlash ? (
+          <View
+            pointerEvents="none"
+            style={[styles.feedbackFlash, feedbackFlash === 'success' ? styles.flashSuccess : styles.flashError]}
+          />
+        ) : null}
+
         <View style={styles.topBar}>
           <Pressable onPress={onBack} style={styles.topActionButton}>
             <Text style={styles.topActionText}>Back</Text>
@@ -198,11 +227,19 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
         </View>
 
         <View style={styles.scanFrameWrap}>
-          <View style={styles.scanFrame}>
-            <View style={[styles.corner, styles.topLeft]} />
-            <View style={[styles.corner, styles.topRight]} />
-            <View style={[styles.corner, styles.bottomLeft]} />
-            <View style={[styles.corner, styles.bottomRight]} />
+          <View style={styles.scanMask}>
+            <View style={styles.maskTop} />
+            <View style={styles.maskCenterRow}>
+              <View style={styles.maskSide} />
+              <View style={styles.scanFrame}>
+                <View style={[styles.corner, styles.topLeft]} />
+                <View style={[styles.corner, styles.topRight]} />
+                <View style={[styles.corner, styles.bottomLeft]} />
+                <View style={[styles.corner, styles.bottomRight]} />
+              </View>
+              <View style={styles.maskSide} />
+            </View>
+            <View style={styles.maskBottom} />
           </View>
         </View>
 
@@ -260,8 +297,17 @@ const styles = StyleSheet.create({
   },
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
     justifyContent: 'space-between',
+  },
+  feedbackFlash: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
+  },
+  flashSuccess: {
+    backgroundColor: 'rgba(47,168,106,0.16)',
+  },
+  flashError: {
+    backgroundColor: 'rgba(214,69,69,0.18)',
   },
   topBar: {
     paddingTop: theme.spacing.xl + theme.spacing.lg,
@@ -296,45 +342,65 @@ const styles = StyleSheet.create({
   },
   scanFrameWrap: {
     flex: 1,
+    justifyContent: 'center',
+  },
+  scanMask: {
+    flex: 1,
+  },
+  maskTop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+  },
+  maskCenterRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  maskSide: {
+    flex: 1,
+    height: 280,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+  },
+  maskBottom: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+  },
   scanFrame: {
-    width: 260,
-    height: 260,
-    borderColor: 'rgba(212,175,55,0.25)',
-    borderWidth: 1,
-    backgroundColor: 'rgba(5,5,5,0.1)',
+    width: 280,
+    height: 280,
+    borderColor: 'rgba(212,175,55,0.55)',
+    borderWidth: 2,
+    backgroundColor: 'transparent',
   },
   corner: {
     position: 'absolute',
-    width: 34,
-    height: 34,
+    width: 44,
+    height: 44,
     borderColor: theme.colors.primary,
   },
   topLeft: {
     top: -1,
     left: -1,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
+    borderTopWidth: 5,
+    borderLeftWidth: 5,
   },
   topRight: {
     top: -1,
     right: -1,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
+    borderTopWidth: 5,
+    borderRightWidth: 5,
   },
   bottomLeft: {
     bottom: -1,
     left: -1,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
+    borderBottomWidth: 5,
+    borderLeftWidth: 5,
   },
   bottomRight: {
     bottom: -1,
     right: -1,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
+    borderBottomWidth: 5,
+    borderRightWidth: 5,
   },
   bottomPanel: {
     backgroundColor: 'rgba(0,0,0,0.7)',

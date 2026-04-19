@@ -24,7 +24,8 @@ export function ThemedButton({
       style={({ pressed }) => [
         styles.base,
         variant === 'primary' ? styles.primary : styles.secondary,
-        (pressed || disabled || loading) && styles.pressed,
+        pressed && styles.pressed,
+        (disabled || loading) && styles.disabled,
       ]}
     >
       <View style={styles.content}>
@@ -53,6 +54,9 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.85,
+  },
+  disabled: {
+    opacity: 0.55,
   },
   label: {
     color: '#090909',

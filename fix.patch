@@ -1,269 +1,240 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/screens/CreateEventScreen.tsx b/mobile/src/navigation/screens/CreateEventScreen.tsx
-index f93b6046800362683bf7fa268923e480008fd9ce..3def2bdb9c4c17efde17a7dfca448a8dc55995c8 100644
---- a/mobile/src/navigation/screens/CreateEventScreen.tsx
-+++ b/mobile/src/navigation/screens/CreateEventScreen.tsx
-@@ -1,28 +1,29 @@
- import { useEffect, useMemo, useState } from 'react';
- import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
- import DateTimePicker from '@react-native-community/datetimepicker';
-+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+diff --git a/mobile/src/navigation/screens/StaffEventsScreen.tsx b/mobile/src/navigation/screens/StaffEventsScreen.tsx
+index cb23c75c57fde12284aff37efcb5296da66901df..10c9e80ac3542c77532ebfc5304c1b5ab52e1b11 100644
+--- a/mobile/src/navigation/screens/StaffEventsScreen.tsx
++++ b/mobile/src/navigation/screens/StaffEventsScreen.tsx
+@@ -1,77 +1,149 @@
+ import { useCallback, useEffect, useState } from 'react';
+ import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
  
  import { ApiError } from '../../api/client';
- import { createEvent, searchVenues, VenueSearchItem } from '../../api/organizer';
+ import { listMyStaffEvents, StaffEvent } from '../../api/account';
+ import { ThemedButton } from '../../components/ThemedButton';
  import { theme } from '../../theme';
  
- type TierFormState = {
-   name: string;
-   description: string;
-   priceAmount: string;
-   currency: string;
-   quantityTotal: string;
-   minPerOrder: string;
-   maxPerOrder: string;
++const DEFAULT_EVENT_TIMEZONE = 'America/Guyana';
++
+ type Props = {
+   onOpenScanner: (eventId: number, eventTitle: string) => void;
  };
  
- const defaultTier = (): TierFormState => ({
-   name: '',
-   description: '',
-   priceAmount: '0.00',
-   currency: 'GYD',
-   quantityTotal: '',
-   minPerOrder: '',
-   maxPerOrder: '',
- });
+ function formatEventDate(dateIso: string): string {
+   const date = new Date(dateIso);
+   if (Number.isNaN(date.getTime())) {
+     return 'Date TBD';
+   }
+   return new Intl.DateTimeFormat('en-US', {
+     weekday: 'short',
+     month: 'short',
+     day: 'numeric',
+     year: 'numeric',
+   }).format(date);
+ }
  
-@@ -105,50 +106,51 @@ const formatDateTimeValue = (field: DateTimeField) => {
+ function formatEventTime(startAt: string, endAt: string | null): string {
+   const start = new Date(startAt);
+   if (Number.isNaN(start.getTime())) {
+     return 'Time TBD';
+   }
  
- const getPickerTitle = (field: PickerField) => {
-   if (field.startsWith('start_')) return 'Event start';
-   if (field.startsWith('end_')) return 'Event end';
-   if (field === 'doors_open_time') return 'Doors open';
-   if (field.startsWith('sales_start_')) return 'Sales start';
-   return 'Sales end';
- };
+   const startLabel = new Intl.DateTimeFormat('en-US', {
+     hour: 'numeric',
+     minute: '2-digit',
+   }).format(start);
  
- const getPickerStepLabel = (session: Exclude<PickerSession, null>) => {
-   if (session.field === 'doors_open_time') return 'Select time';
-   return session.mode === 'date' ? 'Step 1 of 2 • Select date' : 'Step 2 of 2 • Select time';
- };
+   if (!endAt) {
+     return startLabel;
+   }
  
- const buildGuyanaIso = (date: Date, time: Date) => {
-   const year = date.getFullYear();
-   const month = date.getMonth();
-   const day = date.getDate();
-   const hour = time.getHours();
-   const minute = time.getMinutes();
-   const utcMillis = Date.UTC(year, month, day, hour + 4, minute, 0, 0);
-   return new Date(utcMillis).toISOString();
- };
+   const end = new Date(endAt);
+   if (Number.isNaN(end.getTime())) {
+     return startLabel;
+   }
  
- export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) => void }) {
-+  const insets = useSafeAreaInsets();
-   const [title, setTitle] = useState('');
-   const [shortDescription, setShortDescription] = useState('');
-   const [longDescription, setLongDescription] = useState('');
-   const [category, setCategory] = useState('');
-   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
-   const [categorySearch, setCategorySearch] = useState('');
-   const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
-   const [endAt, setEndAt] = useState<DateTimeField>({ date: null, time: null });
-   const [doorsOpenAt, setDoorsOpenAt] = useState<Date | null>(null);
-   const [salesStartAt, setSalesStartAt] = useState<DateTimeField>({ date: null, time: null });
-   const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
-   const [pickerSession, setPickerSession] = useState<PickerSession>(null);
-   const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
-   const [venueName, setVenueName] = useState('');
-   const [addressText, setAddressText] = useState('');
-   const [selectedVenueId, setSelectedVenueId] = useState<number | null>(null);
-   const [venueSuggestions, setVenueSuggestions] = useState<VenueSearchItem[]>([]);
-   const [loadingVenueSuggestions, setLoadingVenueSuggestions] = useState(false);
-   const [refundPolicyText, setRefundPolicyText] = useState('');
-   const [termsText, setTermsText] = useState('');
-   const [tiers, setTiers] = useState<TierFormState[]>([defaultTier()]);
+   const endLabel = new Intl.DateTimeFormat('en-US', {
+     hour: 'numeric',
+     minute: '2-digit',
+   }).format(end);
+   return `${startLabel} - ${endLabel}`;
+ }
  
-   const [loading, setLoading] = useState(false);
++type ScanAvailability = {
++  canScan: boolean;
++  buttonLabel: 'Scan Tickets' | 'Scanning Not Open Yet' | 'Event Ended';
++};
++
++function getTimeParts(date: Date, timeZone: string) {
++  const formatter = new Intl.DateTimeFormat('en-US', {
++    timeZone,
++    year: 'numeric',
++    month: '2-digit',
++    day: '2-digit',
++    hour: '2-digit',
++    minute: '2-digit',
++    second: '2-digit',
++    hour12: false,
++  });
++
++  const parts = formatter.formatToParts(date);
++  const getPart = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value ?? 0);
++  return {
++    year: getPart('year'),
++    month: getPart('month'),
++    day: getPart('day'),
++    hour: getPart('hour'),
++    minute: getPart('minute'),
++    second: getPart('second'),
++  };
++}
++
++function getLocalMidnightUtcMs(date: Date, timeZone: string) {
++  const local = getTimeParts(date, timeZone);
++  const targetLocalEpoch = Date.UTC(local.year, local.month - 1, local.day, 0, 0, 0);
++  const utcGuess = targetLocalEpoch;
++  const guessLocal = getTimeParts(new Date(utcGuess), timeZone);
++  const guessLocalEpoch = Date.UTC(
++    guessLocal.year,
++    guessLocal.month - 1,
++    guessLocal.day,
++    guessLocal.hour,
++    guessLocal.minute,
++    guessLocal.second,
++  );
++
++  return utcGuess - (guessLocalEpoch - targetLocalEpoch);
++}
++
++function getScanAvailability(event: StaffEvent, nowMs: number): ScanAvailability {
++  const start = new Date(event.start_at);
++  if (Number.isNaN(start.getTime())) {
++    return { canScan: false, buttonLabel: 'Scanning Not Open Yet' };
++  }
++
++  const timeZone = event.timezone || DEFAULT_EVENT_TIMEZONE;
++  const scanStartsAtMs = getLocalMidnightUtcMs(start, timeZone);
++
++  const fallbackEnd = start.getTime();
++  const end = event.end_at ? new Date(event.end_at) : null;
++  const scanEndsAtMs = end && !Number.isNaN(end.getTime()) ? end.getTime() : fallbackEnd;
++
++  if (nowMs < scanStartsAtMs) {
++    return { canScan: false, buttonLabel: 'Scanning Not Open Yet' };
++  }
++
++  if (nowMs > scanEndsAtMs) {
++    return { canScan: false, buttonLabel: 'Event Ended' };
++  }
++
++  return { canScan: true, buttonLabel: 'Scan Tickets' };
++}
++
+ export function StaffEventsScreen({ onOpenScanner }: Props) {
+   const [events, setEvents] = useState<StaffEvent[]>([]);
+   const [loading, setLoading] = useState(true);
+   const [refreshing, setRefreshing] = useState(false);
    const [error, setError] = useState<string | null>(null);
  
-@@ -398,52 +400,62 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
-         custom_venue_name: venueName.trim(),
-         custom_address_text: addressText.trim() || null,
-         refund_policy_text: refundPolicyText.trim() || null,
-         terms_text: termsText.trim() || null,
-         ticket_tiers: tiers.map((tier, index) => ({
-           name: tier.name.trim(),
-           description: tier.description.trim() || null,
-           price_amount: Number(tier.priceAmount).toFixed(2),
-           currency: tier.currency.trim().toUpperCase(),
-           quantity_total: Number(tier.quantityTotal),
-           min_per_order: Number(tier.minPerOrder),
-           max_per_order: Number(tier.maxPerOrder),
-           sort_order: index,
-         })),
-       });
-       onCreated(created.id);
+   const loadEvents = useCallback(async (isRefresh = false) => {
+     if (isRefresh) {
+       setRefreshing(true);
+     } else {
+       setLoading(true);
+     }
+ 
+     try {
+       const response = await listMyStaffEvents();
+       setEvents(response);
+       setError(null);
      } catch (err) {
-       setError(err instanceof ApiError ? err.message : 'Unable to create event.');
+       const message = err instanceof ApiError ? err.message : 'Unable to load your staff events right now.';
+       setError(message);
      } finally {
        setLoading(false);
+       setRefreshing(false);
      }
-   };
+   }, []);
+@@ -96,62 +168,70 @@ export function StaffEventsScreen({ onOpenScanner }: Props) {
+         <ThemedButton label="Try Again" variant="secondary" onPress={() => loadEvents()} />
+       </View>
+     );
+   }
+ 
+   if (events.length === 0) {
+     return (
+       <View style={styles.stateWrap}>
+         <Text style={styles.stateText}>You’re not assigned to any events right now.</Text>
+       </View>
+     );
+   }
  
    return (
-     <>
--      <ScrollView contentContainerStyle={styles.container}>
--        <Text style={styles.title}>Create Event</Text>
-+      <KeyboardAvoidingView
-+        style={styles.screenKeyboardAvoidingView}
-+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-+        keyboardVerticalOffset={Platform.OS === 'ios' ? theme.spacing.md : 0}
-+      >
-+        <ScrollView
-+          contentContainerStyle={[styles.container, { paddingBottom: theme.spacing.xl + insets.bottom + theme.spacing.lg }]}
-+          keyboardShouldPersistTaps="handled"
-+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-+          showsVerticalScrollIndicator={false}
-+        >
-+          <Text style={styles.title}>Create Event</Text>
- 
-         <Text style={styles.sectionTitle}>Basic Info</Text>
-         <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Event title" placeholderTextColor={theme.colors.textSecondary} />
-         <TextInput style={styles.input} value={shortDescription} onChangeText={setShortDescription} placeholder="Short description" placeholderTextColor={theme.colors.textSecondary} />
-         <TextInput
-           style={[styles.input, styles.multiline]}
-           multiline
-           numberOfLines={4}
-           value={longDescription}
-           onChangeText={setLongDescription}
-           placeholder="Long description"
-           placeholderTextColor={theme.colors.textSecondary}
+     <FlatList
+       data={events}
+       keyExtractor={(item) => String(item.event_id)}
+       contentContainerStyle={styles.listContent}
+       refreshControl={
+         <RefreshControl
+           refreshing={refreshing}
+           onRefresh={() => loadEvents(true)}
+           tintColor={theme.colors.primary}
          />
-         <Pressable style={styles.input} onPress={openCategoryPicker}>
-           <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
-         </Pressable>
- 
-         <Text style={styles.sectionTitle}>Timing</Text>
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Start</Text>
-           <Pressable style={styles.input} onPress={() => startDateTimeFlow('start_at')}>
-             <Text style={styles.pickerValue}>{formatDateTimeValue(startAt)}</Text>
-           </Pressable>
-         </View>
- 
-@@ -522,55 +534,56 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
-         ))}
-         <Pressable onPress={addTier} style={styles.secondaryButton}>
-           <Text style={styles.secondaryButtonText}>Add Tier</Text>
-         </Pressable>
- 
-         <Text style={styles.sectionTitle}>Policies</Text>
-         <TextInput
-           style={[styles.input, styles.multiline]}
-           multiline
-           numberOfLines={3}
-           value={refundPolicyText}
-           onChangeText={setRefundPolicyText}
-           placeholder="Refund policy"
-           placeholderTextColor={theme.colors.textSecondary}
-         />
-         <TextInput
-           style={[styles.input, styles.multiline]}
-           multiline
-           numberOfLines={3}
-           value={termsText}
-           onChangeText={setTermsText}
-           placeholder="Terms"
-           placeholderTextColor={theme.colors.textSecondary}
-         />
- 
--        {error ? <Text style={styles.error}>{error}</Text> : null}
--        <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
--          <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
--        </Pressable>
--      </ScrollView>
-+          {error ? <Text style={styles.error}>{error}</Text> : null}
-+          <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
-+            <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
-+          </Pressable>
-+        </ScrollView>
-+      </KeyboardAvoidingView>
- 
-       {pickerSession ? (
-         <Modal transparent animationType="fade" visible onRequestClose={cancelPickerSelection}>
-           <View style={styles.modalBackdrop}>
-             <Pressable style={StyleSheet.absoluteFill} onPress={cancelPickerSelection} />
-             <View style={styles.modalCard}>
-               <View style={styles.modalHeading}>
-                 <Text style={styles.modalTitle}>{getPickerTitle(pickerSession.field)}</Text>
-                 <Text style={styles.modalSubtitle}>{getPickerStepLabel(pickerSession)}</Text>
-               </View>
-               <View style={styles.modalActions}>
-                 <Pressable onPress={cancelPickerSelection}>
-                   <Text style={styles.modalActionText}>Cancel</Text>
-                 </Pressable>
-                 <Pressable onPress={completePickerSelection}>
-                   <Text style={styles.modalActionText}>Done</Text>
-                 </Pressable>
-               </View>
-               <View style={styles.pickerFrame}>
-                 <DateTimePicker
-                   value={pickerDraftValue}
-                   mode={pickerSession.mode}
-                   onChange={(_, date) => {
-                     if (date) setPickerDraftValue(date);
-                   }}
-@@ -621,50 +634,51 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
-                     </Pressable>
-                   ) : null}
- 
-                   <ScrollView
-                     style={styles.categoryOptionsList}
-                     keyboardShouldPersistTaps="handled"
-                     keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-                   >
-                     {filteredCategoryOptions.map((option) => (
-                       <Pressable key={option} style={styles.categoryOption} onPress={() => selectCategory(option)}>
-                         <Text style={styles.categoryOptionText}>{option}</Text>
-                       </Pressable>
-                     ))}
-                   </ScrollView>
-                 </View>
-               </View>
-             </View>
-           </KeyboardAvoidingView>
-         </Modal>
-       ) : null}
-     </>
+       }
+-      renderItem={({ item }) => (
+-        <View style={styles.card}>
+-          <Text style={styles.title}>{item.title}</Text>
+-          <Text style={styles.meta}>{formatEventDate(item.start_at)}</Text>
+-          <Text style={styles.meta}>{formatEventTime(item.start_at, item.end_at)}</Text>
+-          {item.venue_name ? <Text style={styles.meta}>Venue: {item.venue_name}</Text> : null}
+-          {item.role ? <Text style={styles.meta}>Role: {item.role}</Text> : null}
+-          <View style={styles.actionWrap}>
+-            <ThemedButton label="Scan Tickets" onPress={() => onOpenScanner(item.event_id, item.title)} />
++      renderItem={({ item }) => {
++        const availability = getScanAvailability(item, Date.now());
++
++        return (
++          <View style={styles.card}>
++            <Text style={styles.title}>{item.title}</Text>
++            <Text style={styles.meta}>{formatEventDate(item.start_at)}</Text>
++            <Text style={styles.meta}>{formatEventTime(item.start_at, item.end_at)}</Text>
++            {item.venue_name ? <Text style={styles.meta}>Venue: {item.venue_name}</Text> : null}
++            {item.role ? <Text style={styles.meta}>Role: {item.role}</Text> : null}
++            <View style={styles.actionWrap}>
++              <ThemedButton
++                label={availability.buttonLabel}
++                onPress={() => onOpenScanner(item.event_id, item.title)}
++                disabled={!availability.canScan}
++              />
++            </View>
+           </View>
+-        </View>
+-      )}
++        );
++      }}
+     />
    );
  }
  
  const styles = StyleSheet.create({
-+  screenKeyboardAvoidingView: { flex: 1 },
-   container: { padding: theme.spacing.lg, backgroundColor: theme.colors.background, gap: theme.spacing.sm },
-   title: { color: theme.colors.textPrimary, fontSize: 24, fontWeight: '700' },
-   sectionTitle: { color: theme.colors.primary, fontSize: 16, fontWeight: '700', marginTop: theme.spacing.md },
-   input: {
-     borderWidth: 1,
-     borderColor: theme.colors.border,
-     borderRadius: theme.radius.md,
-     color: theme.colors.textPrimary,
-     padding: theme.spacing.md,
+   listContent: {
+     padding: theme.spacing.lg,
+     gap: theme.spacing.md,
+   },
+   card: {
      backgroundColor: theme.colors.surface,
-   },
-   multiline: { minHeight: 90, textAlignVertical: 'top' },
-   row: { flexDirection: 'row', gap: theme.spacing.sm },
-   half: { flex: 1 },
-   tierCard: {
+     borderRadius: theme.radius.md,
      borderWidth: 1,
      borderColor: theme.colors.border,
-     borderRadius: theme.radius.md,
      padding: theme.spacing.md,
-     backgroundColor: theme.colors.surfaceElevated,
-     gap: theme.spacing.sm,
+     gap: 4,
    },
-   tierTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
-   timingCard: {
-     borderWidth: 1,
+   title: {
+     color: theme.colors.textPrimary,
+     fontSize: theme.typography.heading,
+     fontWeight: '700',
+   },
+   meta: {
+     color: theme.colors.textSecondary,
+   },
  
 EOF
 )

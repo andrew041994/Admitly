@@ -6,6 +6,8 @@ import { listMyStaffEvents, StaffEvent } from '../../api/account';
 import { ThemedButton } from '../../components/ThemedButton';
 import { theme } from '../../theme';
 
+const DEFAULT_EVENT_TIMEZONE = 'America/Guyana';
+
 type Props = {
   onOpenScanner: (eventId: number, eventTitle: string) => void;
 };
@@ -48,6 +50,76 @@ function formatEventTime(startAt: string, endAt: string | null): string {
     minute: '2-digit',
   }).format(end);
   return `${startLabel} - ${endLabel}`;
+}
+
+type ScanAvailability = {
+  canScan: boolean;
+  buttonLabel: 'Scan Tickets' | 'Scanning Not Open Yet' | 'Event Ended';
+};
+
+function getTimeParts(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(date);
+  const getPart = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return {
+    year: getPart('year'),
+    month: getPart('month'),
+    day: getPart('day'),
+    hour: getPart('hour'),
+    minute: getPart('minute'),
+    second: getPart('second'),
+  };
+}
+
+function getLocalMidnightUtcMs(date: Date, timeZone: string) {
+  const local = getTimeParts(date, timeZone);
+  const targetLocalEpoch = Date.UTC(local.year, local.month - 1, local.day, 0, 0, 0);
+  const utcGuess = targetLocalEpoch;
+  const guessLocal = getTimeParts(new Date(utcGuess), timeZone);
+  const guessLocalEpoch = Date.UTC(
+    guessLocal.year,
+    guessLocal.month - 1,
+    guessLocal.day,
+    guessLocal.hour,
+    guessLocal.minute,
+    guessLocal.second,
+  );
+
+  return utcGuess - (guessLocalEpoch - targetLocalEpoch);
+}
+
+function getScanAvailability(event: StaffEvent, nowMs: number): ScanAvailability {
+  const start = new Date(event.start_at);
+  if (Number.isNaN(start.getTime())) {
+    return { canScan: false, buttonLabel: 'Scanning Not Open Yet' };
+  }
+
+  const timeZone = event.timezone || DEFAULT_EVENT_TIMEZONE;
+  const scanStartsAtMs = getLocalMidnightUtcMs(start, timeZone);
+
+  const fallbackEnd = start.getTime();
+  const end = event.end_at ? new Date(event.end_at) : null;
+  const scanEndsAtMs = end && !Number.isNaN(end.getTime()) ? end.getTime() : fallbackEnd;
+
+  if (nowMs < scanStartsAtMs) {
+    return { canScan: false, buttonLabel: 'Scanning Not Open Yet' };
+  }
+
+  if (nowMs > scanEndsAtMs) {
+    return { canScan: false, buttonLabel: 'Event Ended' };
+  }
+
+  return { canScan: true, buttonLabel: 'Scan Tickets' };
 }
 
 export function StaffEventsScreen({ onOpenScanner }: Props) {
@@ -118,18 +190,26 @@ export function StaffEventsScreen({ onOpenScanner }: Props) {
           tintColor={theme.colors.primary}
         />
       }
-      renderItem={({ item }) => (
-        <View style={styles.card}>
-          <Text style={styles.title}>{item.title}</Text>
-          <Text style={styles.meta}>{formatEventDate(item.start_at)}</Text>
-          <Text style={styles.meta}>{formatEventTime(item.start_at, item.end_at)}</Text>
-          {item.venue_name ? <Text style={styles.meta}>Venue: {item.venue_name}</Text> : null}
-          {item.role ? <Text style={styles.meta}>Role: {item.role}</Text> : null}
-          <View style={styles.actionWrap}>
-            <ThemedButton label="Scan Tickets" onPress={() => onOpenScanner(item.event_id, item.title)} />
+      renderItem={({ item }) => {
+        const availability = getScanAvailability(item, Date.now());
+
+        return (
+          <View style={styles.card}>
+            <Text style={styles.title}>{item.title}</Text>
+            <Text style={styles.meta}>{formatEventDate(item.start_at)}</Text>
+            <Text style={styles.meta}>{formatEventTime(item.start_at, item.end_at)}</Text>
+            {item.venue_name ? <Text style={styles.meta}>Venue: {item.venue_name}</Text> : null}
+            {item.role ? <Text style={styles.meta}>Role: {item.role}</Text> : null}
+            <View style={styles.actionWrap}>
+              <ThemedButton
+                label={availability.buttonLabel}
+                onPress={() => onOpenScanner(item.event_id, item.title)}
+                disabled={!availability.canScan}
+              />
+            </View>
           </View>
-        </View>
-      )}
+        );
+      }}
     />
   );
 }
