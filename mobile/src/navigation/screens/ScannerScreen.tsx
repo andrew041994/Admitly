@@ -222,7 +222,7 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
             <Text style={styles.subtitle}>{eventTitle}</Text>
           </View>
           <Pressable onPress={() => setTorchEnabled((prev) => !prev)} style={styles.topActionButton}>
-            <Text style={styles.topActionText}>{torchEnabled ? 'Torch On' : 'Torch Off'}</Text>
+            <Text style={styles.topActionText}>{torchEnabled ? 'Turn Torch Off' : 'Turn Torch On'}</Text>
           </Pressable>
         </View>
 
@@ -280,7 +280,7 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
               </Pressable>
             </View>
           ) : (
-            <Text style={styles.hintText}>Point your camera at a ticket QR code.</Text>
+            <Text style={styles.hintText}>Hold the ticket QR code inside the frame.</Text>
           )}
 
           {/* TODO(phase-8): add manual code entry fallback when manual check-in endpoint is finalized. */}

@@ -54,7 +54,9 @@ function formatEventTime(startAt: string, endAt: string | null): string {
 
 type ScanAvailability = {
   canScan: boolean;
+  status: 'upcoming' | 'live' | 'ended';
   buttonLabel: 'Scan Tickets' | 'Scanning Not Open Yet' | 'Event Ended';
+  countdownLabel: string | null;
 };
 
 function getTimeParts(date: Date, timeZone: string) {
@@ -101,7 +103,7 @@ function getLocalMidnightUtcMs(date: Date, timeZone: string) {
 function getScanAvailability(event: StaffEvent, nowMs: number): ScanAvailability {
   const start = new Date(event.start_at);
   if (Number.isNaN(start.getTime())) {
-    return { canScan: false, buttonLabel: 'Scanning Not Open Yet' };
+    return { canScan: false, status: 'upcoming', buttonLabel: 'Scanning Not Open Yet', countdownLabel: null };
   }
 
   const timeZone = event.timezone || DEFAULT_EVENT_TIMEZONE;
@@ -112,14 +114,44 @@ function getScanAvailability(event: StaffEvent, nowMs: number): ScanAvailability
   const scanEndsAtMs = end && !Number.isNaN(end.getTime()) ? end.getTime() : fallbackEnd;
 
   if (nowMs < scanStartsAtMs) {
-    return { canScan: false, buttonLabel: 'Scanning Not Open Yet' };
+    return {
+      canScan: false,
+      status: 'upcoming',
+      buttonLabel: 'Scanning Not Open Yet',
+      countdownLabel: formatScanningCountdown(scanStartsAtMs - nowMs),
+    };
   }
 
   if (nowMs > scanEndsAtMs) {
-    return { canScan: false, buttonLabel: 'Event Ended' };
+    return { canScan: false, status: 'ended', buttonLabel: 'Event Ended', countdownLabel: null };
   }
 
-  return { canScan: true, buttonLabel: 'Scan Tickets' };
+  return { canScan: true, status: 'live', buttonLabel: 'Scan Tickets', countdownLabel: null };
+}
+
+function formatScanningCountdown(msUntilScanOpen: number): string {
+  const totalMinutes = Math.max(1, Math.ceil(msUntilScanOpen / 60000));
+  if (totalMinutes < 60) {
+    return `Scanning opens in ${totalMinutes} ${totalMinutes === 1 ? 'minute' : 'minutes'}`;
+  }
+
+  const totalHours = Math.ceil(totalMinutes / 60);
+  if (totalHours < 48) {
+    return `Scanning opens in ${totalHours} ${totalHours === 1 ? 'hour' : 'hours'}`;
+  }
+
+  const totalDays = Math.ceil(totalHours / 24);
+  return `Scanning opens in ${totalDays} ${totalDays === 1 ? 'day' : 'days'}`;
+}
+
+function getStatusBadgeLabel(status: ScanAvailability['status']): string {
+  if (status === 'upcoming') {
+    return 'Upcoming';
+  }
+  if (status === 'ended') {
+    return 'Ended';
+  }
+  return 'Live';
 }
 
 export function StaffEventsScreen({ onOpenScanner }: Props) {
@@ -195,11 +227,26 @@ export function StaffEventsScreen({ onOpenScanner }: Props) {
 
         return (
           <View style={styles.card}>
-            <Text style={styles.title}>{item.title}</Text>
+            <View style={styles.titleRow}>
+              <Text style={styles.title}>{item.title}</Text>
+              <View
+                style={[
+                  styles.statusBadge,
+                  availability.status === 'upcoming'
+                    ? styles.statusBadgeUpcoming
+                    : availability.status === 'live'
+                      ? styles.statusBadgeLive
+                      : styles.statusBadgeEnded,
+                ]}
+              >
+                <Text style={styles.statusBadgeText}>{getStatusBadgeLabel(availability.status)}</Text>
+              </View>
+            </View>
             <Text style={styles.meta}>{formatEventDate(item.start_at)}</Text>
             <Text style={styles.meta}>{formatEventTime(item.start_at, item.end_at)}</Text>
             {item.venue_name ? <Text style={styles.meta}>Venue: {item.venue_name}</Text> : null}
             {item.role ? <Text style={styles.meta}>Role: {item.role}</Text> : null}
+            {availability.countdownLabel ? <Text style={styles.countdownText}>{availability.countdownLabel}</Text> : null}
             <View style={styles.actionWrap}>
               <ThemedButton
                 label={availability.buttonLabel}
@@ -227,13 +274,49 @@ const styles = StyleSheet.create({
     padding: theme.spacing.md,
     gap: 4,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
   title: {
     color: theme.colors.textPrimary,
     fontSize: theme.typography.heading,
     fontWeight: '700',
+    flex: 1,
+  },
+  statusBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+    marginTop: 2,
+  },
+  statusBadgeUpcoming: {
+    borderColor: theme.colors.primaryMuted,
+    backgroundColor: '#1A1609',
+  },
+  statusBadgeLive: {
+    borderColor: theme.colors.success,
+    backgroundColor: 'rgba(52,199,89,0.18)',
+  },
+  statusBadgeEnded: {
+    borderColor: theme.colors.border,
+    backgroundColor: '#171717',
+  },
+  statusBadgeText: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.caption,
+    fontWeight: '700',
   },
   meta: {
     color: theme.colors.textSecondary,
+  },
+  countdownText: {
+    color: '#EFE3B2',
+    fontSize: theme.typography.label,
+    marginTop: 2,
   },
   actionWrap: {
     marginTop: theme.spacing.sm,
