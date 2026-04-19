@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.admin_support import router as admin_support_router
 from app.api.admin_finance import router as admin_finance_router
@@ -23,6 +24,18 @@ from app.api.venues import router as venues_router
 from app.core.config import settings
 
 app = FastAPI(title=settings.app_name)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "https://admitly.onrender.com",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(health_router)
 app.include_router(events_router)
 app.include_router(ticket_holds_router)
