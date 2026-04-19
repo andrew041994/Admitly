@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 import { ApiError } from '../../api/client';
-import { createEvent } from '../../api/organizer';
+import { createEvent, searchVenues, VenueSearchItem } from '../../api/organizer';
 import { theme } from '../../theme';
 
 type TierFormState = {
@@ -142,6 +142,9 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
   const [venueName, setVenueName] = useState('');
   const [addressText, setAddressText] = useState('');
+  const [selectedVenueId, setSelectedVenueId] = useState<number | null>(null);
+  const [venueSuggestions, setVenueSuggestions] = useState<VenueSearchItem[]>([]);
+  const [loadingVenueSuggestions, setLoadingVenueSuggestions] = useState(false);
   const [refundPolicyText, setRefundPolicyText] = useState('');
   const [termsText, setTermsText] = useState('');
   const [tiers, setTiers] = useState<TierFormState[]>([defaultTier()]);
@@ -173,6 +176,67 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   }, [normalizedCategoryOptions, trimmedCategorySearch]);
 
   const canRemoveTier = tiers.length > 1;
+  const trimmedVenueName = venueName.trim();
+
+  useEffect(() => {
+    let isCancelled = false;
+    if (!trimmedVenueName || trimmedVenueName.length < 2) {
+      setVenueSuggestions([]);
+      setLoadingVenueSuggestions(false);
+      return () => {
+        isCancelled = true;
+      };
+    }
+    const timeout = setTimeout(async () => {
+      setLoadingVenueSuggestions(true);
+      try {
+        const results = await searchVenues(trimmedVenueName, 8);
+        if (!isCancelled) {
+          setVenueSuggestions(results);
+        }
+      } catch {
+        if (!isCancelled) {
+          setVenueSuggestions([]);
+        }
+      } finally {
+        if (!isCancelled) {
+          setLoadingVenueSuggestions(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [trimmedVenueName]);
+
+  const onChangeVenueName = (value: string) => {
+    setVenueName(value);
+    if (selectedVenueId !== null) {
+      const selected = venueSuggestions.find((venue) => venue.id === selectedVenueId);
+      if (!selected || selected.name.trim().toLowerCase() !== value.trim().toLowerCase()) {
+        setSelectedVenueId(null);
+      }
+    }
+  };
+
+  const onChangeAddressText = (value: string) => {
+    setAddressText(value);
+    if (selectedVenueId !== null) {
+      const selected = venueSuggestions.find((venue) => venue.id === selectedVenueId);
+      if (!selected || (selected.address_text ?? '').trim() !== value.trim()) {
+        setSelectedVenueId(null);
+      }
+    }
+  };
+
+  const selectVenueSuggestion = (venue: VenueSearchItem) => {
+    setSelectedVenueId(venue.id);
+    setVenueName(venue.name);
+    setAddressText(venue.address_text ?? '');
+    setVenueSuggestions([]);
+  };
 
   const addTier = () => setTiers((current) => [...current, defaultTier()]);
   const removeTier = (index: number) => {
@@ -330,6 +394,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         sales_start_at: salesStartAtIso,
         sales_end_at: salesEndAtIso,
         timezone: GUYANA_TIMEZONE,
+        venue_id: selectedVenueId,
         custom_venue_name: venueName.trim(),
         custom_address_text: addressText.trim() || null,
         refund_policy_text: refundPolicyText.trim() || null,
@@ -411,13 +476,24 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         </View>
 
         <Text style={styles.sectionTitle}>Venue / Location</Text>
-        <TextInput style={styles.input} value={venueName} onChangeText={setVenueName} placeholder="Venue name" placeholderTextColor={theme.colors.textSecondary} />
+        <TextInput style={styles.input} value={venueName} onChangeText={onChangeVenueName} placeholder="Venue name" placeholderTextColor={theme.colors.textSecondary} />
+        {loadingVenueSuggestions ? <Text style={styles.hintText}>Searching venues…</Text> : null}
+        {venueSuggestions.length > 0 ? (
+          <View style={styles.suggestionsCard}>
+            {venueSuggestions.map((venue) => (
+              <Pressable key={venue.id} style={styles.suggestionItem} onPress={() => selectVenueSuggestion(venue)}>
+                <Text style={styles.suggestionTitle}>{venue.name}</Text>
+                {venue.address_text ? <Text style={styles.suggestionSubtitle}>{venue.address_text}</Text> : null}
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
         <TextInput
           style={[styles.input, styles.multiline]}
           multiline
           numberOfLines={3}
           value={addressText}
-          onChangeText={setAddressText}
+          onChangeText={onChangeAddressText}
           placeholder="Address"
           placeholderTextColor={theme.colors.textSecondary}
         />
@@ -601,6 +677,21 @@ const styles = StyleSheet.create({
   timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
   pickerValue: { color: theme.colors.textPrimary },
   placeholderValue: { color: theme.colors.textSecondary },
+  hintText: { color: theme.colors.textSecondary, fontSize: 12 },
+  suggestionsCard: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  suggestionItem: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  suggestionTitle: { color: theme.colors.textPrimary, fontWeight: '600' },
+  suggestionSubtitle: { color: theme.colors.textSecondary, marginTop: 2, fontSize: 12 },
   secondaryButton: {
     borderWidth: 1,
     borderColor: theme.colors.primary,

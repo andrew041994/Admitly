@@ -5,7 +5,7 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
@@ -289,6 +289,54 @@ def test_mine_active_listing_with_multiple_tiers_has_no_duplicates(client: TestC
     body = active.json()
     assert len(body) == 1
     assert body[0]["id"] == event.id
+
+
+def test_event_creation_reuses_existing_normalized_venue_and_searches(client: TestClient, db_session: Session) -> None:
+    creator = _seed_user(db_session, unique_email("venue_creator"), "Venue Creator")
+    organizer = OrganizerProfile(user_id=creator.id, business_name="Biz", display_name="Biz")
+    db_session.add(organizer)
+    db_session.flush()
+    existing_venue = Venue(
+        organizer_id=organizer.id,
+        name=" Providence Stadium ",
+        address_line1="  123   Main   Road  ",
+    )
+    db_session.add(existing_venue)
+    db_session.commit()
+
+    payload = {
+        "title": "Venue Memory Event",
+        "start_at": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+        "end_at": (datetime.now(UTC) + timedelta(days=2, hours=2)).isoformat(),
+        "custom_venue_name": "providence stadium",
+        "custom_address_text": "123 Main Road",
+        "ticket_tiers": [
+            {
+                "name": "General",
+                "price_amount": "100.00",
+                "currency": "GYD",
+                "quantity_total": 10,
+                "min_per_order": 1,
+                "max_per_order": 3,
+            }
+        ],
+    }
+    created = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
+    assert created.status_code == 201
+    body = created.json()
+    assert body["venue_id"] == existing_venue.id
+    assert body["custom_venue_name"] is None
+    assert body["custom_address_text"] is None
+
+    venues = db_session.query(Venue).filter(func.lower(Venue.name).like("%providence stadium%")).all()
+    assert len(venues) == 1
+
+    search = client.get("/venues/search", params={"q": "provi"}, headers={"x-user-id": str(creator.id)})
+    assert search.status_code == 200
+    results = search.json()
+    assert len(results) >= 1
+    assert results[0]["id"] == existing_venue.id
+    assert "123" in (results[0]["address_text"] or "")
 
 
 

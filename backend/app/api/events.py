@@ -63,6 +63,7 @@ from app.services.events import (
     get_event_refund_batch,
     list_event_refund_batches,
 )
+from app.services.venues import resolve_or_create_venue
 from app.services.organizer_events import (
     OrganizerEventAuthorizationError,
     OrganizerEventNotFoundError,
@@ -356,11 +357,35 @@ def create_event(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> EventCreateResponse:
+    organizer_profile = _ensure_organizer_profile(db, user_id=user_id)
+    resolved_venue_id = payload.venue_id
+    resolved_custom_venue_name = payload.custom_venue_name
+    resolved_custom_address_text = payload.custom_address_text
+
     if payload.venue_id is not None:
         venue = db.execute(select(Venue).where(Venue.id == payload.venue_id)).scalar_one_or_none()
         if venue is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venue not found.")
-    organizer_profile = _ensure_organizer_profile(db, user_id=user_id)
+        resolved_custom_venue_name = None
+        resolved_custom_address_text = None
+    elif payload.custom_venue_name and payload.custom_venue_name.strip() and payload.custom_address_text and payload.custom_address_text.strip():
+        venue = resolve_or_create_venue(
+            db,
+            organizer_id=organizer_profile.id,
+            venue_name=payload.custom_venue_name,
+            address_text=payload.custom_address_text,
+        )
+        resolved_venue_id = venue.id
+        resolved_custom_venue_name = None
+        resolved_custom_address_text = None
+
+    payload = payload.model_copy(
+        update={
+            "venue_id": resolved_venue_id,
+            "custom_venue_name": resolved_custom_venue_name,
+            "custom_address_text": resolved_custom_address_text,
+        }
+    )
     try:
         event, tiers = create_event_with_ticket_tiers(db, organizer_profile=organizer_profile, payload=payload)
         db.commit()

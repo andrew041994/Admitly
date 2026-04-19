@@ -24,6 +24,7 @@ export type CreateEventPayload = {
   sales_start_at?: string | null;
   sales_end_at?: string | null;
   timezone?: string;
+  venue_id?: number | null;
   custom_venue_name?: string | null;
   custom_address_text?: string | null;
   refund_policy_text?: string | null;
@@ -38,9 +39,16 @@ export type CreateEventResponse = {
   slug: string;
   status: string;
   timezone: string;
+  venue_id: number | null;
   custom_venue_name: string | null;
   custom_address_text: string | null;
   ticket_tiers: Array<{ id: number; name: string }>;
+};
+
+export type VenueSearchItem = {
+  id: number;
+  name: string;
+  address_text: string | null;
 };
 
 export type MyEventItem = {
@@ -219,4 +227,9 @@ export async function removeEventStaff(eventId: number, staffId: number): Promis
 export async function searchUsers(q: string): Promise<UserSearchResult[]> {
   const params = new URLSearchParams({ q });
   return apiRequest<UserSearchResult[]>({ path: `/users/search?${params.toString()}`, method: 'GET' });
+}
+
+export async function searchVenues(q: string, limit = 8): Promise<VenueSearchItem[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  return apiRequest<VenueSearchItem[]>({ path: `/venues/search?${params.toString()}`, method: 'GET' });
 }
