@@ -40,10 +40,25 @@ export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffMa
         </View>
       ) : null}
 
-      <Pressable style={styles.button} onPress={onOpenCreateEvent}><Text style={styles.buttonText}>Create Event</Text></Pressable>
-      <Pressable style={styles.button} onPress={onOpenMyEvents}><Text style={styles.buttonText}>My Events</Text></Pressable>
-      <Pressable style={styles.button} onPress={onOpenStaffEvents}><Text style={styles.buttonText}>Events I’m Working</Text></Pressable>
-      <Pressable style={styles.button} onPress={onOpenStaffManagement}><Text style={styles.buttonText}>Manage Staff</Text></Pressable>
+      <Text style={styles.sectionLabel}>Organizer</Text>
+      <Pressable style={styles.button} onPress={onOpenCreateEvent}>
+        <Text style={styles.buttonText}>Create Event</Text>
+        <Text style={styles.chevron}>›</Text>
+      </Pressable>
+      <Pressable style={styles.button} onPress={onOpenMyEvents}>
+        <Text style={styles.buttonText}>My Events</Text>
+        <Text style={styles.chevron}>›</Text>
+      </Pressable>
+      <Pressable style={styles.button} onPress={onOpenStaffManagement}>
+        <Text style={styles.buttonText}>Manage Staff</Text>
+        <Text style={styles.chevron}>›</Text>
+      </Pressable>
+
+      <Text style={styles.sectionLabel}>Staff</Text>
+      <Pressable style={styles.button} onPress={onOpenStaffEvents}>
+        <Text style={styles.buttonText}>Events I’m Working</Text>
+        <Text style={styles.chevron}>›</Text>
+      </Pressable>
       <Pressable style={styles.signOut} onPress={onSignOut}><Text style={styles.signOutText}>Logout</Text></Pressable>
     </View>
   );
@@ -55,8 +70,20 @@ const styles = StyleSheet.create({
   card: { backgroundColor: theme.colors.surface, borderRadius: theme.radius.md, padding: theme.spacing.md, gap: 6 },
   name: { color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700' },
   meta: { color: theme.colors.textSecondary },
-  button: { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.md, padding: theme.spacing.md },
+  sectionLabel: { color: theme.colors.textSecondary, fontSize: 13, fontWeight: '700', marginTop: theme.spacing.sm },
+  button: {
+    backgroundColor: theme.colors.surface,
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
   buttonText: { color: theme.colors.textPrimary, fontWeight: '600' },
+  chevron: { color: '#B8B1A1', fontSize: 18, fontWeight: '600', lineHeight: 18 },
   signOut: { marginTop: theme.spacing.md },
   signOutText: { color: theme.colors.primary, fontWeight: '700' },
   error: { color: theme.colors.error },

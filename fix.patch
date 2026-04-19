@@ -1,81 +1,87 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_organizer_event_management.py b/backend/tests/test_organizer_event_management.py
-index 55e4d25c377a833f2f216341e45d4087878e0445..ad5be6333f889a169ed95fb222bba23ae6c82c84 100644
---- a/backend/tests/test_organizer_event_management.py
-+++ b/backend/tests/test_organizer_event_management.py
-@@ -249,50 +249,72 @@ def test_discovery_requires_published_and_approved(client: TestClient, db_sessio
-     approved = _seed_event(
-         db_session,
-         owner,
-         title="Approved Discovery Event",
-         status=EventStatus.PUBLISHED,
-         approval_status=EventApprovalStatus.APPROVED,
-     )
-     pending = _seed_event(
-         db_session,
-         owner,
-         title="Pending Discovery Event",
-         status=EventStatus.PUBLISHED,
-         approval_status=EventApprovalStatus.PENDING,
-     )
-     approved.published_at = datetime.now(UTC)
-     pending.published_at = datetime.now(UTC)
-     db_session.flush()
+diff --git a/mobile/src/navigation/screens/ProfileScreen.tsx b/mobile/src/navigation/screens/ProfileScreen.tsx
+index 23b876509947632cf6685da6316db6d99e2f9185..3daa64272c1e12db5ed233be989897805ede4dd6 100644
+--- a/mobile/src/navigation/screens/ProfileScreen.tsx
++++ b/mobile/src/navigation/screens/ProfileScreen.tsx
+@@ -18,46 +18,73 @@ export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffMa
+   const [error, setError] = useState<string | null>(null);
  
-     response = client.get("/events/discover", headers={"x-user-id": str(owner.id)})
-     assert response.status_code == 200
-     ids = [row["id"] for row in response.json()]
-     assert approved.id in ids
-     assert pending.id not in ids
+   useEffect(() => {
+     getAccountProfile().then(setProfile).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load profile.'));
+   }, []);
  
+   if (!profile && !error) {
+     return <ActivityIndicator color={theme.colors.primary} style={{ marginTop: 36 }} />;
+   }
  
-+def test_discovery_this_week_bucket_returns_success(client: TestClient, db_session: Session) -> None:
-+    owner = _seed_user(db_session, unique_email("discover_week_owner"), "Discover Week Owner")
-+    event = _seed_event(
-+        db_session,
-+        owner,
-+        title="This Week Event",
-+        status=EventStatus.PUBLISHED,
-+        approval_status=EventApprovalStatus.APPROVED,
-+    )
-+    event.published_at = datetime.now(UTC)
-+    db_session.flush()
+   return (
+     <View style={styles.container}>
+       <Text style={styles.title}>Profile</Text>
+       {error ? <Text style={styles.error}>{error}</Text> : null}
+       {profile ? (
+         <View style={styles.card}>
+           <Text style={styles.name}>{profile.full_name}</Text>
+           <Text style={styles.meta}>{profile.email}</Text>
+           <Text style={styles.meta}>{profile.phone_number ?? 'No phone number added'}</Text>
+           <Text style={styles.meta}>My tickets: {profile.my_tickets_count}</Text>
+           <Text style={styles.meta}>My events: {profile.my_events_count}</Text>
+           <Text style={styles.meta}>Staff events: {profile.staff_events_count}</Text>
+         </View>
+       ) : null}
+ 
+-      <Pressable style={styles.button} onPress={onOpenCreateEvent}><Text style={styles.buttonText}>Create Event</Text></Pressable>
+-      <Pressable style={styles.button} onPress={onOpenMyEvents}><Text style={styles.buttonText}>My Events</Text></Pressable>
+-      <Pressable style={styles.button} onPress={onOpenStaffEvents}><Text style={styles.buttonText}>Events I’m Working</Text></Pressable>
+-      <Pressable style={styles.button} onPress={onOpenStaffManagement}><Text style={styles.buttonText}>Manage Staff</Text></Pressable>
++      <Text style={styles.sectionLabel}>Organizer</Text>
++      <Pressable style={styles.button} onPress={onOpenCreateEvent}>
++        <Text style={styles.buttonText}>Create Event</Text>
++        <Text style={styles.chevron}>›</Text>
++      </Pressable>
++      <Pressable style={styles.button} onPress={onOpenMyEvents}>
++        <Text style={styles.buttonText}>My Events</Text>
++        <Text style={styles.chevron}>›</Text>
++      </Pressable>
++      <Pressable style={styles.button} onPress={onOpenStaffManagement}>
++        <Text style={styles.buttonText}>Manage Staff</Text>
++        <Text style={styles.chevron}>›</Text>
++      </Pressable>
 +
-+    response = client.get(
-+        "/events/discover",
-+        params={"date_bucket": "this_week"},
-+        headers={"x-user-id": str(owner.id)},
-+    )
-+    assert response.status_code == 200
-+    ids = [row["id"] for row in response.json()]
-+    assert event.id in ids
-+
-+
- def test_organizer_event_status_variants_are_explicit(client: TestClient, db_session: Session) -> None:
-     owner = _seed_user(db_session, unique_email("states_owner"), "States Owner")
-     draft = _seed_event(db_session, owner, title="Draft State", status=EventStatus.DRAFT, approval_status=EventApprovalStatus.PENDING)
-     published_pending = _seed_event(
-         db_session,
-         owner,
-         title="Published Pending State",
-         status=EventStatus.PUBLISHED,
-         approval_status=EventApprovalStatus.PENDING,
-     )
-     published_pending.published_at = datetime.now(UTC)
-     published_approved = _seed_event(
-         db_session,
-         owner,
-         title="Published Approved State",
-         status=EventStatus.PUBLISHED,
-         approval_status=EventApprovalStatus.APPROVED,
-     )
-     published_approved.published_at = datetime.now(UTC)
-     cancelled = _seed_event(db_session, owner, title="Cancelled State", status=EventStatus.CANCELLED, approval_status=EventApprovalStatus.APPROVED)
-     db_session.flush()
++      <Text style={styles.sectionLabel}>Staff</Text>
++      <Pressable style={styles.button} onPress={onOpenStaffEvents}>
++        <Text style={styles.buttonText}>Events I’m Working</Text>
++        <Text style={styles.chevron}>›</Text>
++      </Pressable>
+       <Pressable style={styles.signOut} onPress={onSignOut}><Text style={styles.signOutText}>Logout</Text></Pressable>
+     </View>
+   );
+ }
  
-     listed = client.get("/events/organizer/events", headers={"x-user-id": str(owner.id)})
-     assert listed.status_code == 200
-     by_title = {row["title"]: row for row in listed.json()}
+ const styles = StyleSheet.create({
+   container: { flex: 1, backgroundColor: theme.colors.background, padding: theme.spacing.lg, gap: theme.spacing.sm },
+   title: { color: theme.colors.textPrimary, fontSize: 24, fontWeight: '700' },
+   card: { backgroundColor: theme.colors.surface, borderRadius: theme.radius.md, padding: theme.spacing.md, gap: 6 },
+   name: { color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700' },
+   meta: { color: theme.colors.textSecondary },
+-  button: { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.md, padding: theme.spacing.md },
++  sectionLabel: { color: theme.colors.textSecondary, fontSize: 13, fontWeight: '700', marginTop: theme.spacing.sm },
++  button: {
++    backgroundColor: theme.colors.surface,
++    borderColor: theme.colors.border,
++    borderWidth: 1,
++    borderRadius: theme.radius.md,
++    padding: theme.spacing.md,
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    gap: theme.spacing.sm,
++  },
+   buttonText: { color: theme.colors.textPrimary, fontWeight: '600' },
++  chevron: { color: '#B8B1A1', fontSize: 18, fontWeight: '600', lineHeight: 18 },
+   signOut: { marginTop: theme.spacing.md },
+   signOutText: { color: theme.colors.primary, fontWeight: '700' },
+   error: { color: theme.colors.error },
+ });
  
 EOF
 )
