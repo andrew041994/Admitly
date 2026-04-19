@@ -13,7 +13,15 @@ from app.models.user import User
 from app.models.venue import Venue
 
 
-def _seed_event(db: Session, *, slug: str, title: str, approval_status: EventApprovalStatus) -> Event:
+def _seed_event(
+    db: Session,
+    *,
+    slug: str,
+    title: str,
+    approval_status: EventApprovalStatus,
+    status: EventStatus = EventStatus.PUBLISHED,
+    cancelled_at: datetime | None = None,
+) -> Event:
     now = datetime(2026, 4, 10, tzinfo=timezone.utc)
     organizer_user = User(email=f"org-{slug}@test.local", full_name="Organizer")
     db.add(organizer_user)
@@ -38,12 +46,13 @@ def _seed_event(db: Session, *, slug: str, title: str, approval_status: EventApp
         slug=slug,
         start_at=now + timedelta(days=4),
         end_at=now + timedelta(days=4, hours=2),
-        status=EventStatus.PUBLISHED,
+        status=status,
         visibility=EventVisibility.PUBLIC,
         approval_status=approval_status,
         timezone="America/Guyana",
         is_location_pinned=False,
         published_at=now,
+        cancelled_at=cancelled_at,
     )
     db.add(event)
     db.commit()
@@ -91,3 +100,34 @@ def test_discovery_excludes_pending_and_includes_after_admin_approval(db_session
 
     after = discover_events(db=db_session, _user_id=viewer.id)
     assert any(item.id == pending.id for item in after)
+
+
+def test_pending_approval_list_excludes_cancelled_events(db_session: Session) -> None:
+    admin = User(email="admin-event-cancelled@test.local", full_name="Admin", is_admin=True)
+    db_session.add(admin)
+    db_session.commit()
+    db_session.refresh(admin)
+
+    active_pending = _seed_event(
+        db_session,
+        slug="active-pending-review-event",
+        title="Active Pending Review",
+        approval_status=EventApprovalStatus.PENDING,
+    )
+    _seed_event(
+        db_session,
+        slug="cancelled-status-pending-event",
+        title="Cancelled By Status",
+        approval_status=EventApprovalStatus.PENDING,
+        status=EventStatus.CANCELLED,
+    )
+    _seed_event(
+        db_session,
+        slug="cancelled-at-pending-event",
+        title="Cancelled By Timestamp",
+        approval_status=EventApprovalStatus.PENDING,
+        cancelled_at=datetime(2026, 4, 11, tzinfo=timezone.utc),
+    )
+
+    rows = list_pending_event_approvals(db=db_session, user_id=admin.id)
+    assert [row.id for row in rows] == [active_pending.id]

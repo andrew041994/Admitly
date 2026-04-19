@@ -347,6 +347,8 @@ def list_pending_event_approvals(
             select(Event)
             .options(joinedload(Event.organizer), joinedload(Event.venue))
             .where(Event.approval_status == EventApprovalStatus.PENDING)
+            .where(Event.status != EventStatus.CANCELLED)
+            .where(Event.cancelled_at.is_(None))
             .order_by(Event.created_at.asc(), Event.id.asc())
         )
         .scalars()
