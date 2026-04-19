@@ -27,6 +27,46 @@ const defaultTier = (): TierFormState => ({
 });
 
 const GUYANA_TIMEZONE = 'America/Guyana';
+const CATEGORY_OPTIONS = [
+  'Party',
+  'Concert',
+  'Festival',
+  'Cricket',
+  'Football',
+  'Soccer',
+  'Basketball',
+  'Bar-B-Que',
+  'Car Show',
+  'Car & Bike Show',
+  'Car Audio Show',
+  'Conference',
+  'Workshop',
+  'Seminar',
+  'Networking',
+  'Sports',
+  'Fitness',
+  'Food & Drink',
+  'Brunch',
+  'Nightlife',
+  'Comedy',
+  'Exhibition',
+  'Art',
+  'Culture',
+  'Family',
+  'Kids',
+  'Community',
+  'Fundraiser',
+  'Religious',
+  'Business',
+  'Fashion',
+  'Beauty',
+  'Wellness',
+  'Travel',
+  'Holiday',
+  'Education',
+  'Tech',
+  'Other',
+] as const;
 
 type DateTimeField = {
   date: Date | null;
@@ -91,6 +131,8 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const [shortDescription, setShortDescription] = useState('');
   const [longDescription, setLongDescription] = useState('');
   const [category, setCategory] = useState('');
+  const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
+  const [categorySearch, setCategorySearch] = useState('');
   const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
   const [endAt, setEndAt] = useState<DateTimeField>({ date: null, time: null });
   const [doorsOpenAt, setDoorsOpenAt] = useState<Date | null>(null);
@@ -107,6 +149,29 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const normalizedCategoryOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return CATEGORY_OPTIONS.filter((option) => {
+      const normalized = option.trim().toLowerCase();
+      if (seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
+  }, []);
+
+  const trimmedCategorySearch = categorySearch.trim();
+  const filteredCategoryOptions = useMemo(() => {
+    if (!trimmedCategorySearch) return normalizedCategoryOptions;
+    const normalizedSearch = trimmedCategorySearch.toLowerCase();
+    return normalizedCategoryOptions.filter((option) => option.toLowerCase().includes(normalizedSearch));
+  }, [normalizedCategoryOptions, trimmedCategorySearch]);
+
+  const exactMatchedCategoryOption = useMemo(() => {
+    if (!trimmedCategorySearch) return null;
+    const normalizedSearch = trimmedCategorySearch.toLowerCase();
+    return normalizedCategoryOptions.find((option) => option.toLowerCase() === normalizedSearch) ?? null;
+  }, [normalizedCategoryOptions, trimmedCategorySearch]);
+
   const canRemoveTier = tiers.length > 1;
 
   const addTier = () => setTiers((current) => [...current, defaultTier()]);
@@ -117,6 +182,20 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
 
   const updateTier = (index: number, patch: Partial<TierFormState>) => {
     setTiers((current) => current.map((tier, idx) => (idx === index ? { ...tier, ...patch } : tier)));
+  };
+
+  const openCategoryPicker = () => {
+    setCategorySearch(category.trim());
+    setIsCategoryPickerVisible(true);
+  };
+
+  const closeCategoryPicker = () => {
+    setIsCategoryPickerVisible(false);
+  };
+
+  const selectCategory = (value: string) => {
+    setCategory(value.trim());
+    closeCategoryPicker();
   };
 
   const openPicker = (nextSession: Exclude<PickerSession, null>) => {
@@ -291,7 +370,9 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
           placeholder="Long description"
           placeholderTextColor={theme.colors.textSecondary}
         />
-        <TextInput style={styles.input} value={category} onChangeText={setCategory} placeholder="Category" placeholderTextColor={theme.colors.textSecondary} />
+        <Pressable style={styles.input} onPress={openCategoryPicker}>
+          <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
+        </Pressable>
 
         <Text style={styles.sectionTitle}>Timing</Text>
         <View style={styles.timingCard}>
@@ -423,6 +504,55 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
           </View>
         </Modal>
       ) : null}
+
+      {isCategoryPickerVisible ? (
+        <Modal transparent animationType="fade" visible onRequestClose={closeCategoryPicker}>
+          <View style={styles.modalBackdrop}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeCategoryPicker} />
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeading}>
+                <Text style={styles.modalTitle}>Category</Text>
+                <Text style={styles.modalSubtitle}>Search or add a category</Text>
+              </View>
+              <View style={styles.modalActions}>
+                <Pressable onPress={closeCategoryPicker}>
+                  <Text style={styles.modalActionText}>Done</Text>
+                </Pressable>
+              </View>
+              <View style={styles.categoryPickerBody}>
+                <TextInput
+                  style={styles.input}
+                  value={categorySearch}
+                  onChangeText={setCategorySearch}
+                  placeholder="Search categories"
+                  placeholderTextColor={theme.colors.textSecondary}
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                />
+
+                {trimmedCategorySearch ? (
+                  <Pressable
+                    style={styles.categoryOption}
+                    onPress={() => selectCategory(exactMatchedCategoryOption ?? trimmedCategorySearch)}
+                  >
+                    <Text style={styles.categoryOptionText}>
+                      {exactMatchedCategoryOption ? `Use “${exactMatchedCategoryOption}”` : `Add “${trimmedCategorySearch}” as category`}
+                    </Text>
+                  </Pressable>
+                ) : null}
+
+                <ScrollView style={styles.categoryOptionsList} keyboardShouldPersistTaps="handled">
+                  {filteredCategoryOptions.map((option) => (
+                    <Pressable key={option} style={styles.categoryOption} onPress={() => selectCategory(option)}>
+                      <Text style={styles.categoryOptionText}>{option}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
     </>
   );
 }
@@ -461,6 +591,7 @@ const styles = StyleSheet.create({
   },
   timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
   pickerValue: { color: theme.colors.textPrimary },
+  placeholderValue: { color: theme.colors.textSecondary },
   secondaryButton: {
     borderWidth: 1,
     borderColor: theme.colors.primary,
@@ -532,5 +663,24 @@ const styles = StyleSheet.create({
   pickerFrame: {
     alignItems: 'center',
     paddingVertical: theme.spacing.md,
+  },
+  categoryPickerBody: {
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  categoryOptionsList: {
+    maxHeight: 280,
+  },
+  categoryOption: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
+  },
+  categoryOptionText: {
+    color: theme.colors.textPrimary,
+    fontWeight: '600',
   },
 });
