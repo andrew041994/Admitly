@@ -5,6 +5,7 @@ import { FinancePage } from '../pages/FinancePage';
 import { CheckInPage } from '../pages/CheckInPage';
 import { MessagingPage } from '../pages/MessagingPage';
 import { IntegrationsPage } from '../pages/IntegrationsPage';
+import { EventApprovalsPage } from '../pages/EventApprovalsPage';
 
 export function AppRouter() {
   return (
@@ -16,6 +17,7 @@ export function AppRouter() {
         <Route path="/check-in" element={<CheckInPage />} />
         <Route path="/integrations" element={<IntegrationsPage />} />
         <Route path="/messaging" element={<MessagingPage />} />
+        <Route path="/event-approvals" element={<EventApprovalsPage />} />
       </Route>
     </Routes>
   );

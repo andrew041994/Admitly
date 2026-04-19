@@ -60,6 +60,20 @@ class EventDiscoveryDetailResponse(EventDiscoveryItemResponse):
     ticket_tiers: list[EventDiscoveryTicketTierResponse]
 
 
+class AdminEventApprovalItemResponse(BaseModel):
+    id: int
+    title: str
+    slug: str
+    organizer_name: str | None
+    start_at: datetime
+    venue_name: str | None
+    custom_venue_name: str | None
+    approval_status: str
+    status: str
+    created_at: datetime
+    published_at: datetime | None
+
+
 class EventRefundBatchResponse(BaseModel):
     id: int
     event_id: int

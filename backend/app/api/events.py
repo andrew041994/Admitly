@@ -21,6 +21,7 @@ from app.models.ticket_tier import TicketTier
 from app.models.user import User
 from app.models.venue import Venue
 from app.schemas.event import (
+    AdminEventApprovalItemResponse,
     EventCancelRequest,
     EventCreateRequest,
     EventCreateResponse,
@@ -160,6 +161,22 @@ def _to_discovery_detail(event: Event, db: Session) -> EventDiscoveryDetailRespo
             is_active=tier.is_active,
         ))
     return EventDiscoveryDetailResponse(**item.model_dump(), long_description=event.long_description, ticket_tiers=tiers)
+
+
+def _to_admin_approval_item(event: Event) -> AdminEventApprovalItemResponse:
+    return AdminEventApprovalItemResponse(
+        id=event.id,
+        title=event.title,
+        slug=event.slug,
+        organizer_name=event.organizer.display_name if event.organizer else None,
+        start_at=event.start_at,
+        venue_name=event.venue.name if event.venue else None,
+        custom_venue_name=event.custom_venue_name,
+        approval_status=event.approval_status.value,
+        status=event.status.value,
+        created_at=event.created_at,
+        published_at=event.published_at,
+    )
 
 
 def _require_admin(db: Session, *, user_id: int) -> None:
@@ -317,6 +334,49 @@ def discover_events(
         events = filtered
 
     return [_to_discovery_item(event) for event in events]
+
+
+@router.get("/admin/pending-approval", response_model=list[AdminEventApprovalItemResponse])
+def list_pending_event_approvals(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[AdminEventApprovalItemResponse]:
+    _require_admin(db, user_id=user_id)
+    events = (
+        db.execute(
+            select(Event)
+            .options(joinedload(Event.organizer), joinedload(Event.venue))
+            .where(Event.approval_status == EventApprovalStatus.PENDING)
+            .order_by(Event.created_at.asc(), Event.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    return [_to_admin_approval_item(event) for event in events]
+
+
+@router.post("/admin/{event_id}/approve", response_model=AdminEventApprovalItemResponse)
+def approve_event_for_discovery(
+    event_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> AdminEventApprovalItemResponse:
+    _require_admin(db, user_id=user_id)
+    event = db.execute(
+        select(Event)
+        .options(joinedload(Event.organizer), joinedload(Event.venue))
+        .where(Event.id == event_id)
+    ).scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+
+    if event.approval_status != EventApprovalStatus.APPROVED:
+        event.approval_status = EventApprovalStatus.APPROVED
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+
+    return _to_admin_approval_item(event)
 
 
 @router.get("/discover/{event_id}", response_model=EventDiscoveryDetailResponse)
