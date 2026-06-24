@@ -43,6 +43,7 @@ from app.services.tickets import (
     CHECK_IN_STATUS_ALREADY_CHECKED_IN,
     CHECK_IN_STATUS_CANCELED_EVENT,
     CHECK_IN_STATUS_NOT_FOUND,
+    CHECK_IN_STATUS_UNAUTHORIZED,
     CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
     CHECK_IN_STATUS_VALID,
     CHECK_IN_STATUS_WRONG_EVENT,
@@ -937,6 +938,162 @@ def test_checkin_accepts_ticket_url_payload_and_reuses_phase17_validation(db_ses
     assert rejected.valid is False
     assert rejected.status == "refunded_or_invalidated"
 
+
+
+def test_qr_checkin_still_works_with_secure_token(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    result = check_in_ticket(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        ticket_code=ticket.qr_token or ticket.qr_payload,
+        method="qr",
+    )
+
+    assert result.valid is True
+    assert result.ticket.id == ticket.id
+    assert result.ticket.check_in_method == "qr"
+
+
+def test_manual_adm_code_checkin_works(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    ticket.manual_code = "ADM-123456"
+    db_session.commit()
+
+    result = check_in_ticket(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        ticket_code="ADM-123456",
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+
+    assert result.valid is True
+    assert result.ticket.id == ticket.id
+    assert result.ticket.check_in_method == CHECK_IN_METHOD_MANUAL
+
+
+def test_manual_raw_six_digits_checkin_normalizes(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    ticket.manual_code = "ADM-004829"
+    db_session.commit()
+
+    result = check_in_ticket(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        ticket_code="004829",
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+
+    assert result.valid is True
+    assert result.ticket.id == ticket.id
+
+
+def test_manual_code_from_another_event_does_not_check_in_ticket(db_session: Session) -> None:
+    order_1, _, _, _, event_1 = _seed_order(db_session, user_email=unique_email("manual_event_a"), quantity=1)
+    order_2, _, _, _, event_2 = _seed_order(db_session, user_email=unique_email("manual_event_b"), quantity=1)
+    ticket_1 = issue_tickets_for_completed_order(db_session, order_1)[0]
+    issue_tickets_for_completed_order(db_session, order_2)[0]
+    ticket_1.manual_code = "ADM-123456"
+    db_session.commit()
+
+    result = check_in_ticket(
+        db_session,
+        scanner_user_id=event_2.organizer.user_id,
+        event_id=event_2.id,
+        ticket_code="ADM-123456",
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+
+    assert result.valid is False
+    assert result.status == CHECK_IN_STATUS_NOT_FOUND
+    db_session.refresh(ticket_1)
+    assert ticket_1.status == TicketStatus.ISSUED
+    assert ticket_1.checked_in_at is None
+
+
+def test_same_manual_code_in_different_event_does_not_check_in_wrong_ticket(db_session: Session) -> None:
+    order_1, _, _, _, event_1 = _seed_order(db_session, user_email=unique_email("manual_event_1"), quantity=1)
+    order_2, _, _, _, event_2 = _seed_order(db_session, user_email=unique_email("manual_event_2"), quantity=1)
+    ticket_1 = issue_tickets_for_completed_order(db_session, order_1)[0]
+    ticket_2 = issue_tickets_for_completed_order(db_session, order_2)[0]
+    ticket_1.manual_code = "ADM-123456"
+    ticket_2.manual_code = "ADM-123456"
+    db_session.commit()
+
+    result = check_in_ticket(
+        db_session,
+        scanner_user_id=event_2.organizer.user_id,
+        event_id=event_2.id,
+        ticket_code="ADM-123456",
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+
+    assert result.valid is True
+    assert result.ticket.id == ticket_2.id
+    db_session.refresh(ticket_1)
+    assert ticket_1.status == TicketStatus.ISSUED
+
+
+def test_already_checked_in_manual_ticket_cannot_be_reused(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    ticket.manual_code = "ADM-123456"
+    db_session.commit()
+
+    first = check_in_ticket(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        ticket_code="123456",
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+    duplicate = check_in_ticket(
+        db_session,
+        scanner_user_id=event.organizer.user_id,
+        event_id=event.id,
+        ticket_code="123456",
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+
+    assert first.valid is True
+    assert duplicate.valid is False
+    assert duplicate.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN
+
+
+def test_unauthorized_user_cannot_validate_or_check_in_manual_code(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    ticket.manual_code = "ADM-123456"
+    unauthorized = User(email=unique_email("manual_unauthorized"), full_name="No Access")
+    db_session.add(unauthorized)
+    db_session.commit()
+
+    validated = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=unauthorized.id,
+        event_id=event.id,
+        ticket_code="ADM-123456",
+    )
+    admitted = check_in_ticket(
+        db_session,
+        scanner_user_id=unauthorized.id,
+        event_id=event.id,
+        ticket_code="ADM-123456",
+        method=CHECK_IN_METHOD_MANUAL,
+    )
+
+    assert validated.valid is False
+    assert validated.status == CHECK_IN_STATUS_UNAUTHORIZED
+    assert validated.ticket is None
+    assert admitted.valid is False
+    assert admitted.status == CHECK_IN_STATUS_UNAUTHORIZED
+    assert admitted.ticket is None
 
 def test_checkin_attempts_are_audited_for_validate_and_duplicate(db_session: Session) -> None:
     order, _, _, _, event = _seed_order(db_session, quantity=1)

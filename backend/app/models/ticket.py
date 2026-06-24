@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 class Ticket(TimestampMixin, Base):
     __tablename__ = "tickets"
+    __table_args__ = (UniqueConstraint("event_id", "manual_code", name="uq_tickets_event_manual_code"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[int] = mapped_column(
@@ -54,6 +55,7 @@ class Ticket(TimestampMixin, Base):
         index=True,
     )
     ticket_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    manual_code: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
     display_code: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
     qr_token: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
     qr_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

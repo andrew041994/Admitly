@@ -56,6 +56,7 @@ from app.services.tickets import (
     resend_ticket_notification,
     scan_ticket,
     check_in_ticket_manually,
+    format_manual_code_display,
 )
 from app.services.ticket_wallet import WalletTicketView, get_wallet_ticket, list_wallet_tickets
 from app.services.ticket_qr import (
@@ -147,6 +148,8 @@ def _to_ticket_response(db: Session, ticket) -> TicketResponse:
         ticket_tier_id=ticket.ticket_tier_id,
         status=ticket.status.value,
         ticket_code=ticket.ticket_code,
+        manual_code=ticket.manual_code,
+        manual_code_display=format_manual_code_display(ticket.manual_code) or ticket.manual_code,
         display_code=ticket.display_code,
         qr_payload=build_ticket_qr_payload(ticket),
         public_ticket_url=get_ticket_public_url(ticket),
@@ -201,6 +204,8 @@ def _to_wallet_ticket_card(view: WalletTicketView) -> WalletTicketCardItemRespon
     return WalletTicketCardItemResponse(
         id=ticket.id,
         ticket_code=ticket.ticket_code,
+        manual_code=ticket.manual_code,
+        manual_code_display=format_manual_code_display(ticket.manual_code) or ticket.manual_code,
         display_code=ticket.display_code,
         ticket_status=ticket.status.value,
         display_status=view.display_status,
@@ -380,6 +385,8 @@ def validate_event_ticket(
         message=result.message,
         ticket_id=result.ticket.id if result.ticket else None,
         ticket_code=result.ticket.ticket_code if result.ticket else None,
+        manual_code=result.ticket.manual_code if result.ticket else None,
+        manual_code_display=format_manual_code_display(result.ticket.manual_code) if result.ticket else None,
         event_id=event_id,
         checked_in_at=result.checked_in_at,
     )

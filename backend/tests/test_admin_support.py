@@ -129,6 +129,7 @@ def _seed(db: Session, *, suffix: str = "support") -> tuple[Order, User, User]:
             ticket_tier_id=tier.id,
             status=TicketStatus.ISSUED,
             ticket_code=f"TCK-{suffix}",
+            manual_code="ADM-123456",
             qr_payload=f"QR-{suffix}",
             issued_at=now,
         )

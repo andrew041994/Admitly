@@ -12,7 +12,9 @@ import {
 
 export function CheckInPage() {
   const [eventId, setEventId] = useState('');
-  const [lookup, setLookup] = useState('');
+  const [scanLookup, setScanLookup] = useState('');
+  const [manualDigits, setManualDigits] = useState('');
+  const [manualCodeError, setManualCodeError] = useState<string | null>(null);
   const [overrideNotes, setOverrideNotes] = useState('');
   const [validation, setValidation] = useState<CheckInValidationResponse | null>(null);
   const [result, setResult] = useState<CheckInResponse | null>(null);
@@ -20,14 +22,32 @@ export function CheckInPage() {
   const [loading, setLoading] = useState(false);
   const parsedEventId = useMemo(() => Number(eventId), [eventId]);
 
-  const ready = Number.isFinite(parsedEventId) && parsedEventId > 0 && lookup.trim().length > 0;
+  const scanLookupValue = scanLookup.trim();
+  const manualLookupValue = `ADM-${manualDigits}`;
+  const hasEvent = Number.isFinite(parsedEventId) && parsedEventId > 0;
+  const scanReady = hasEvent && scanLookupValue.length > 0;
+
+  function updateManualDigits(value: string) {
+    const digitsOnly = value.replace(/\D/g, '').slice(0, 6);
+    setManualDigits(digitsOnly);
+    setManualCodeError(/\D/.test(value) ? 'Check-in code must be 6 numbers.' : null);
+  }
+
+  function validateManualDigits() {
+    if (manualDigits.length !== 6) {
+      setManualCodeError('Enter the 6-digit check-in code.');
+      return false;
+    }
+    setManualCodeError(null);
+    return true;
+  }
 
   async function onValidate(e: FormEvent) {
     e.preventDefault();
-    if (!ready) return;
+    if (!scanReady) return;
     setLoading(true);
     try {
-      setValidation(await validateEventTicket(parsedEventId, lookup.trim()));
+      setValidation(await validateEventTicket(parsedEventId, scanLookupValue));
       setResult(null);
     } catch (error) {
       setValidation(null);
@@ -47,10 +67,11 @@ export function CheckInPage() {
   }
 
   async function onConfirm(method: 'qr' | 'manual') {
-    if (!ready) return;
+    const lookup = method === 'manual' ? manualLookupValue : scanLookupValue;
+    if (method === 'manual' ? !validateManualDigits() : !scanReady) return;
     setLoading(true);
     try {
-      setResult(await checkInEventTicket(parsedEventId, lookup.trim(), method));
+      setResult(await checkInEventTicket(parsedEventId, lookup, method));
       setValidation(null);
       setActivity(await fetchEventCheckInActivity(parsedEventId, 20));
     } catch (error) {
@@ -70,10 +91,10 @@ export function CheckInPage() {
   }
 
   async function onOverride(admit: boolean) {
-    if (!ready || !overrideNotes.trim()) return;
+    if (!scanReady || !overrideNotes.trim()) return;
     setLoading(true);
     try {
-      setResult(await overrideEventCheckIn(parsedEventId, lookup.trim(), admit, overrideNotes.trim()));
+      setResult(await overrideEventCheckIn(parsedEventId, scanLookupValue, admit, overrideNotes.trim()));
       setValidation(null);
       setActivity(await fetchEventCheckInActivity(parsedEventId, 20));
     } catch (error) {
@@ -113,16 +134,15 @@ export function CheckInPage() {
         />
         <input
           type="text"
-          placeholder="Scan payload or ticket code"
-          value={lookup}
-          onChange={(e) => setLookup(e.target.value)}
+          placeholder="Scan payload or secure ticket code"
+          value={scanLookup}
+          onChange={(e) => setScanLookup(e.target.value)}
           required
         />
-        <button type="submit" disabled={!ready || loading}>
-          Validate
+        <button type="submit" disabled={!scanReady || loading}>
+          Validate Scan
         </button>
       </form>
-
       {validation && (
         <div className={`result-panel ${validation.valid ? 'ok' : 'bad'}`}>
           <strong>{validation.code}</strong> — {validation.message}
@@ -135,11 +155,29 @@ export function CheckInPage() {
       )}
 
       <div className="inline-form">
-        <button onClick={() => onConfirm('qr')} disabled={!ready || loading}>
-          Admit (QR)
+        <button onClick={() => onConfirm('qr')} disabled={!scanReady || loading}>
+          Admit QR
         </button>
-        <button onClick={() => onConfirm('manual')} disabled={!ready || loading}>
-          Admit (Manual)
+      </div>
+
+      <div className="manual-checkin-section">
+        <label className="manual-checkin-label" htmlFor="manual-checkin-digits">Manual check-in code</label>
+        <div className="manual-code-input">
+          <span className="manual-code-prefix">ADM -</span>
+          <input
+            id="manual-checkin-digits"
+            type="text"
+            inputMode="numeric"
+            pattern="\d{6}"
+            maxLength={6}
+            placeholder="123456"
+            value={manualDigits}
+            onChange={(e) => updateManualDigits(e.target.value)}
+          />
+        </div>
+        {manualCodeError && <p className="error-text">{manualCodeError}</p>}
+        <button onClick={() => onConfirm('manual')} disabled={!hasEvent || loading}>
+          Admit Manual
         </button>
       </div>
 
@@ -150,10 +188,10 @@ export function CheckInPage() {
           value={overrideNotes}
           onChange={(e) => setOverrideNotes(e.target.value)}
         />
-        <button onClick={() => onOverride(true)} disabled={!ready || !overrideNotes.trim() || loading}>
+        <button onClick={() => onOverride(true)} disabled={!scanReady || !overrideNotes.trim() || loading}>
           Override Admit
         </button>
-        <button onClick={() => onOverride(false)} disabled={!ready || !overrideNotes.trim() || loading}>
+        <button onClick={() => onOverride(false)} disabled={!scanReady || !overrideNotes.trim() || loading}>
           Override Deny
         </button>
       </div>

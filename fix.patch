@@ -1,85 +1,1902 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/screens/ProfileScreen.tsx b/mobile/src/navigation/screens/ProfileScreen.tsx
-index 23b876509947632cf6685da6316db6d99e2f9185..3daa64272c1e12db5ed233be989897805ede4dd6 100644
---- a/mobile/src/navigation/screens/ProfileScreen.tsx
-+++ b/mobile/src/navigation/screens/ProfileScreen.tsx
-@@ -18,46 +18,73 @@ export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffMa
-   const [error, setError] = useState<string | null>(null);
+diff --git a/admin/src/pages/CheckInPage.tsx b/admin/src/pages/CheckInPage.tsx
+index 4a01d48049877b2d1cef43e2a0e67aac191bf01a..477d36babf542ed27130551d7e9db92afeaaa807 100644
+--- a/admin/src/pages/CheckInPage.tsx
++++ b/admin/src/pages/CheckInPage.tsx
+@@ -1,178 +1,216 @@
+ import { FormEvent, useMemo, useState } from 'react';
+ import { ApiError } from '../lib/apiClient';
+ import {
+   CheckInActivityItem,
+   CheckInResponse,
+   CheckInValidationResponse,
+   checkInEventTicket,
+   fetchEventCheckInActivity,
+   overrideEventCheckIn,
+   validateEventTicket,
+ } from '../lib/checkinApi';
  
-   useEffect(() => {
-     getAccountProfile().then(setProfile).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load profile.'));
-   }, []);
+ export function CheckInPage() {
+   const [eventId, setEventId] = useState('');
+-  const [lookup, setLookup] = useState('');
++  const [scanLookup, setScanLookup] = useState('');
++  const [manualDigits, setManualDigits] = useState('');
++  const [manualCodeError, setManualCodeError] = useState<string | null>(null);
+   const [overrideNotes, setOverrideNotes] = useState('');
+   const [validation, setValidation] = useState<CheckInValidationResponse | null>(null);
+   const [result, setResult] = useState<CheckInResponse | null>(null);
+   const [activity, setActivity] = useState<CheckInActivityItem[]>([]);
+   const [loading, setLoading] = useState(false);
+   const parsedEventId = useMemo(() => Number(eventId), [eventId]);
  
-   if (!profile && !error) {
-     return <ActivityIndicator color={theme.colors.primary} style={{ marginTop: 36 }} />;
+-  const ready = Number.isFinite(parsedEventId) && parsedEventId > 0 && lookup.trim().length > 0;
++  const scanLookupValue = scanLookup.trim();
++  const manualLookupValue = `ADM-${manualDigits}`;
++  const hasEvent = Number.isFinite(parsedEventId) && parsedEventId > 0;
++  const scanReady = hasEvent && scanLookupValue.length > 0;
++
++  function updateManualDigits(value: string) {
++    const digitsOnly = value.replace(/\D/g, '').slice(0, 6);
++    setManualDigits(digitsOnly);
++    setManualCodeError(/\D/.test(value) ? 'Check-in code must be 6 numbers.' : null);
++  }
++
++  function validateManualDigits() {
++    if (manualDigits.length !== 6) {
++      setManualCodeError('Enter the 6-digit check-in code.');
++      return false;
++    }
++    setManualCodeError(null);
++    return true;
++  }
+ 
+   async function onValidate(e: FormEvent) {
+     e.preventDefault();
+-    if (!ready) return;
++    if (!scanReady) return;
+     setLoading(true);
+     try {
+-      setValidation(await validateEventTicket(parsedEventId, lookup.trim()));
++      setValidation(await validateEventTicket(parsedEventId, scanLookupValue));
+       setResult(null);
+     } catch (error) {
+       setValidation(null);
+       setResult({
+         success: false,
+         code: 'error',
+         ticket_id: null,
+         event_id: parsedEventId,
+         status: null,
+         checked_in_at: null,
+         checked_in_by_user_id: null,
+         message: error instanceof ApiError ? error.detail : 'Validation failed.',
+       });
+     } finally {
+       setLoading(false);
+     }
+   }
+ 
+   async function onConfirm(method: 'qr' | 'manual') {
+-    if (!ready) return;
++    const lookup = method === 'manual' ? manualLookupValue : scanLookupValue;
++    if (method === 'manual' ? !validateManualDigits() : !scanReady) return;
+     setLoading(true);
+     try {
+-      setResult(await checkInEventTicket(parsedEventId, lookup.trim(), method));
++      setResult(await checkInEventTicket(parsedEventId, lookup, method));
+       setValidation(null);
+       setActivity(await fetchEventCheckInActivity(parsedEventId, 20));
+     } catch (error) {
+       setResult({
+         success: false,
+         code: 'error',
+         ticket_id: null,
+         event_id: parsedEventId,
+         status: null,
+         checked_in_at: null,
+         checked_in_by_user_id: null,
+         message: error instanceof ApiError ? error.detail : 'Check-in failed.',
+       });
+     } finally {
+       setLoading(false);
+     }
+   }
+ 
+   async function onOverride(admit: boolean) {
+-    if (!ready || !overrideNotes.trim()) return;
++    if (!scanReady || !overrideNotes.trim()) return;
+     setLoading(true);
+     try {
+-      setResult(await overrideEventCheckIn(parsedEventId, lookup.trim(), admit, overrideNotes.trim()));
++      setResult(await overrideEventCheckIn(parsedEventId, scanLookupValue, admit, overrideNotes.trim()));
+       setValidation(null);
+       setActivity(await fetchEventCheckInActivity(parsedEventId, 20));
+     } catch (error) {
+       setResult({
+         success: false,
+         code: 'error',
+         ticket_id: null,
+         event_id: parsedEventId,
+         status: null,
+         checked_in_at: null,
+         checked_in_by_user_id: null,
+         message: error instanceof ApiError ? error.detail : 'Override failed.',
+       });
+     } finally {
+       setLoading(false);
+     }
+   }
+ 
+   async function onRefreshActivity() {
+     if (!Number.isFinite(parsedEventId) || parsedEventId <= 0) return;
+     setActivity(await fetchEventCheckInActivity(parsedEventId, 20));
    }
  
    return (
-     <View style={styles.container}>
-       <Text style={styles.title}>Profile</Text>
-       {error ? <Text style={styles.error}>{error}</Text> : null}
-       {profile ? (
-         <View style={styles.card}>
-           <Text style={styles.name}>{profile.full_name}</Text>
-           <Text style={styles.meta}>{profile.email}</Text>
-           <Text style={styles.meta}>{profile.phone_number ?? 'No phone number added'}</Text>
-           <Text style={styles.meta}>My tickets: {profile.my_tickets_count}</Text>
-           <Text style={styles.meta}>My events: {profile.my_events_count}</Text>
-           <Text style={styles.meta}>Staff events: {profile.staff_events_count}</Text>
-         </View>
-       ) : null}
+     <section className="card">
+       <h2>Door Check-in</h2>
+       <p className="muted">Validate ticket codes, admit once, and review recent scan activity.</p>
  
--      <Pressable style={styles.button} onPress={onOpenCreateEvent}><Text style={styles.buttonText}>Create Event</Text></Pressable>
--      <Pressable style={styles.button} onPress={onOpenMyEvents}><Text style={styles.buttonText}>My Events</Text></Pressable>
--      <Pressable style={styles.button} onPress={onOpenStaffEvents}><Text style={styles.buttonText}>Events I’m Working</Text></Pressable>
--      <Pressable style={styles.button} onPress={onOpenStaffManagement}><Text style={styles.buttonText}>Manage Staff</Text></Pressable>
-+      <Text style={styles.sectionLabel}>Organizer</Text>
-+      <Pressable style={styles.button} onPress={onOpenCreateEvent}>
-+        <Text style={styles.buttonText}>Create Event</Text>
-+        <Text style={styles.chevron}>›</Text>
-+      </Pressable>
-+      <Pressable style={styles.button} onPress={onOpenMyEvents}>
-+        <Text style={styles.buttonText}>My Events</Text>
-+        <Text style={styles.chevron}>›</Text>
-+      </Pressable>
-+      <Pressable style={styles.button} onPress={onOpenStaffManagement}>
-+        <Text style={styles.buttonText}>Manage Staff</Text>
-+        <Text style={styles.chevron}>›</Text>
-+      </Pressable>
+       <form className="inline-form" onSubmit={onValidate}>
+         <input
+           type="number"
+           placeholder="Event ID"
+           value={eventId}
+           onChange={(e) => setEventId(e.target.value)}
+           min={1}
+           required
+         />
+         <input
+           type="text"
+-          placeholder="Scan payload or ticket code"
+-          value={lookup}
+-          onChange={(e) => setLookup(e.target.value)}
++          placeholder="Scan payload or secure ticket code"
++          value={scanLookup}
++          onChange={(e) => setScanLookup(e.target.value)}
+           required
+         />
+-        <button type="submit" disabled={!ready || loading}>
+-          Validate
++        <button type="submit" disabled={!scanReady || loading}>
++          Validate Scan
+         </button>
+       </form>
+-
+       {validation && (
+         <div className={`result-panel ${validation.valid ? 'ok' : 'bad'}`}>
+           <strong>{validation.code}</strong> — {validation.message}
+         </div>
+       )}
+       {result && (
+         <div className={`result-panel ${result.success ? 'ok' : 'bad'}`}>
+           <strong>{result.code ?? 'result'}</strong> — {result.message}
+         </div>
+       )}
+ 
+       <div className="inline-form">
+-        <button onClick={() => onConfirm('qr')} disabled={!ready || loading}>
+-          Admit (QR)
++        <button onClick={() => onConfirm('qr')} disabled={!scanReady || loading}>
++          Admit QR
+         </button>
+-        <button onClick={() => onConfirm('manual')} disabled={!ready || loading}>
+-          Admit (Manual)
++      </div>
 +
-+      <Text style={styles.sectionLabel}>Staff</Text>
-+      <Pressable style={styles.button} onPress={onOpenStaffEvents}>
-+        <Text style={styles.buttonText}>Events I’m Working</Text>
-+        <Text style={styles.chevron}>›</Text>
-+      </Pressable>
-       <Pressable style={styles.signOut} onPress={onSignOut}><Text style={styles.signOutText}>Logout</Text></Pressable>
-     </View>
++      <div className="manual-checkin-section">
++        <label className="manual-checkin-label" htmlFor="manual-checkin-digits">Manual check-in code</label>
++        <div className="manual-code-input">
++          <span className="manual-code-prefix">ADM -</span>
++          <input
++            id="manual-checkin-digits"
++            type="text"
++            inputMode="numeric"
++            pattern="\d{6}"
++            maxLength={6}
++            placeholder="123456"
++            value={manualDigits}
++            onChange={(e) => updateManualDigits(e.target.value)}
++          />
++        </div>
++        {manualCodeError && <p className="error-text">{manualCodeError}</p>}
++        <button onClick={() => onConfirm('manual')} disabled={!hasEvent || loading}>
++          Admit Manual
+         </button>
+       </div>
+ 
+       <div className="inline-form">
+         <input
+           type="text"
+           placeholder="Override note (required)"
+           value={overrideNotes}
+           onChange={(e) => setOverrideNotes(e.target.value)}
+         />
+-        <button onClick={() => onOverride(true)} disabled={!ready || !overrideNotes.trim() || loading}>
++        <button onClick={() => onOverride(true)} disabled={!scanReady || !overrideNotes.trim() || loading}>
+           Override Admit
+         </button>
+-        <button onClick={() => onOverride(false)} disabled={!ready || !overrideNotes.trim() || loading}>
++        <button onClick={() => onOverride(false)} disabled={!scanReady || !overrideNotes.trim() || loading}>
+           Override Deny
+         </button>
+       </div>
+ 
+       <div className="section-header">
+         <h3>Recent Activity</h3>
+         <button onClick={onRefreshActivity} disabled={!parsedEventId || loading}>
+           Refresh
+         </button>
+       </div>
+       <ul className="timeline-list">
+         {activity.map((row) => (
+           <li key={row.id}>
+             <strong>{row.result_code}</strong> ticket:{' '}
+             {row.ticket_id ?? 'n/a'} by user {row.actor_user_id ?? 'n/a'} at {new Date(row.attempted_at).toLocaleString()}
+             {row.notes ? ` — ${row.notes}` : ''}
+           </li>
+         ))}
+       </ul>
+     </section>
+   );
+ }
+diff --git a/admin/src/styles.css b/admin/src/styles.css
+index 2ae6f1e40983352852ce8a5f6c3a2dd0945c0e05..370895f09d72c4bc5bd0832811d29795087baf2e 100644
+--- a/admin/src/styles.css
++++ b/admin/src/styles.css
+@@ -240,33 +240,40 @@ button:disabled {
+   }
+ 
+   .lookup-row {
+     grid-template-columns: 140px 1fr auto;
+     align-items: end;
+   }
+ 
+   .summary-columns {
+     grid-template-columns: repeat(3, minmax(0, 1fr));
+   }
+ 
+   .form-grid {
+     grid-template-columns: repeat(2, minmax(0, 1fr));
+   }
+ 
+   .actions-grid {
+     grid-template-columns: repeat(2, minmax(0, 1fr));
+   }
+ }
+ 
+ .finance-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+ .finance-table th, .finance-table td { border-top: 1px solid #e5e7eb; padding: 0.4rem; text-align: left; }
+ .finance-table th { background: #f9fafb; }
+ 
+ .inline-form { display: grid; gap: 0.5rem; margin-bottom: 0.75rem; }
++.manual-checkin-section { display: grid; gap: 0.5rem; margin-bottom: 0.75rem; }
++.manual-checkin-label { font-weight: 700; }
++.manual-code-input { display: flex; align-items: center; border: 1px solid #d1d5db; border-radius: 0.5rem; overflow: hidden; background: #ffffff; }
++.manual-code-prefix { align-self: stretch; display: inline-flex; align-items: center; padding: 0 0.75rem; background: #f3f4f6; color: #111827; font-weight: 700; border-right: 1px solid #d1d5db; white-space: nowrap; }
++.manual-code-input input { border: 0; border-radius: 0; font-weight: 700; letter-spacing: 0.12em; }
++.manual-code-input input:focus { outline: 2px solid #2563eb; outline-offset: -2px; }
++
+ .result-panel { border-radius: 0.5rem; padding: 0.75rem; margin-bottom: 0.75rem; font-size: 1rem; font-weight: 600; }
+ .result-panel.ok { background: #dcfce7; color: #166534; }
+ .result-panel.bad { background: #fee2e2; color: #991b1b; }
+ .section-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+ .timeline-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+ .timeline-list li { border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 0.6rem; }
+ .simple-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+ .simple-table th, .simple-table td { border-bottom: 1px solid #e5e7eb; padding: 0.4rem; text-align: left; }
+diff --git a/backend/alembic/versions/20260411_0034_ticket_manual_codes.py b/backend/alembic/versions/20260411_0034_ticket_manual_codes.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8a31f8977dbbd68b179489a50879b15c45d6ba57
+--- /dev/null
++++ b/backend/alembic/versions/20260411_0034_ticket_manual_codes.py
+@@ -0,0 +1,46 @@
++"""Add manual ticket check-in codes
++
++Revision ID: 20260411_0034
++Revises: 20260410_0033
++Create Date: 2026-04-11 00:00:00
++"""
++
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++
++
++revision: str = "20260411_0034"
++down_revision: Union[str, None] = "20260410_0033"
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++
++def upgrade() -> None:
++    op.add_column("tickets", sa.Column("manual_code", sa.String(length=10), nullable=True))
++    op.execute(
++        """
++        WITH numbered AS (
++            SELECT
++                id,
++                row_number() OVER (PARTITION BY event_id ORDER BY md5(id::text || ':' || ticket_code)) AS rn,
++                ((hashtext(event_id::text) % 1000000 + 1000000) % 1000000) AS event_offset
++            FROM tickets
++            WHERE manual_code IS NULL
++        )
++        UPDATE tickets
++        SET manual_code = 'ADM-' || lpad(((((numbered.rn - 1) * 7919 + numbered.event_offset) % 1000000))::text, 6, '0')
++        FROM numbered
++        WHERE tickets.id = numbered.id
++        """
++    )
++    op.alter_column("tickets", "manual_code", existing_type=sa.String(length=10), nullable=False)
++    op.create_index(op.f("ix_tickets_manual_code"), "tickets", ["manual_code"], unique=False)
++    op.create_unique_constraint("uq_tickets_event_manual_code", "tickets", ["event_id", "manual_code"])
++
++
++def downgrade() -> None:
++    op.drop_constraint("uq_tickets_event_manual_code", "tickets", type_="unique")
++    op.drop_index(op.f("ix_tickets_manual_code"), table_name="tickets")
++    op.drop_column("tickets", "manual_code")
+diff --git a/backend/app/api/tickets.py b/backend/app/api/tickets.py
+index 6fb8bce4d3866cca3de0d70e764c09d2f72b62ae..0ed47c07af163cd83d61f9cdbc134e639936efd1 100644
+--- a/backend/app/api/tickets.py
++++ b/backend/app/api/tickets.py
+@@ -34,50 +34,51 @@ from app.schemas.ticket_wallet import (
+ )
+ from app.services.tickets import (
+     CHECK_IN_METHOD_MANUAL,
+     CHECK_IN_METHOD_QR,
+     CHECK_IN_STATUS_TRANSFER_PENDING,
+     TicketAuthorizationError,
+     TicketCheckInConflictError,
+     TicketCrossEventError,
+     TicketNotFoundError,
+     TicketTransferError,
+     TicketVoidError,
+     check_in_ticket,
+     get_event_check_in_summary,
+     get_ticket_by_qr_payload,
+     get_ticket_for_owner,
+     list_tickets_for_order_owner,
+     list_recent_check_in_attempts,
+     override_ticket_check_in,
+     build_transfer_claim_url,
+     create_ticket_transfer_invite,
+     validate_ticket_for_check_in,
+     void_ticket,
+     resend_ticket_notification,
+     scan_ticket,
+     check_in_ticket_manually,
++    format_manual_code_display,
+ )
+ from app.services.ticket_wallet import WalletTicketView, get_wallet_ticket, list_wallet_tickets
+ from app.services.ticket_qr import (
+     build_ticket_qr_payload,
+     ensure_ticket_qr,
+     generate_qr_png_bytes,
+     generate_ticket_qr_data_uri,
+     get_ticket_public_url,
+     get_ticket_qr_image_url,
+ )
+ from app.models.event import Event
+ 
+ 
+ router = APIRouter(tags=["tickets"])
+ 
+ _CHECK_IN_PUBLIC_CODE_MAP = {
+     "valid": "admitted",
+     "already_checked_in": "already_used",
+     "wrong_event": "wrong_event",
+     "invalid": "invalid_qr",
+     "not_found": "not_found",
+     "refunded_or_invalidated": "voided",
+     "unauthorized": "unauthorized",
+     "canceled_event": "event_not_admittable",
+     "order_not_admittable": "event_not_admittable",
+@@ -125,50 +126,52 @@ def _build_check_in_response(*, event_id: int, result) -> TicketCheckInResponse:
+ def _build_venue_address(event) -> str | None:
+     if event is None:
+         return None
+     if event.custom_address_text:
+         return event.custom_address_text
+     venue = event.venue
+     if venue is None:
+         return None
+     parts = [venue.address_line1, venue.address_line2, venue.city, venue.country]
+     clean = [p.strip() for p in parts if p and p.strip()]
+     return ", ".join(clean) if clean else None
+ 
+ 
+ def _to_ticket_response(db: Session, ticket) -> TicketResponse:
+     ensure_ticket_qr(db, ticket)
+     return TicketResponse(
+         id=ticket.id,
+         event_id=ticket.event_id,
+         order_id=ticket.order_id,
+         order_item_id=ticket.order_item_id,
+         purchaser_user_id=ticket.purchaser_user_id,
+         owner_user_id=ticket.owner_user_id,
+         ticket_tier_id=ticket.ticket_tier_id,
+         status=ticket.status.value,
+         ticket_code=ticket.ticket_code,
++        manual_code=ticket.manual_code,
++        manual_code_display=format_manual_code_display(ticket.manual_code) or ticket.manual_code,
+         display_code=ticket.display_code,
+         qr_payload=build_ticket_qr_payload(ticket),
+         public_ticket_url=get_ticket_public_url(ticket),
+         qr_image_url=get_ticket_qr_image_url(ticket),
+         event_title=ticket.event.title if ticket.event else None,
+         starts_at=ticket.event.start_at if ticket.event else None,
+         venue_name=(ticket.event.custom_venue_name or (ticket.event.venue.name if ticket.event and ticket.event.venue else None)) if ticket.event else None,
+         ticket_tier_name=ticket.ticket_tier.name if ticket.ticket_tier else None,
+         issued_at=ticket.issued_at,
+         checked_in_at=ticket.checked_in_at,
+         check_in_method=ticket.check_in_method,
+         transferred_at=ticket.transferred_at,
+         voided_at=ticket.voided_at,
+         voided_by_user_id=ticket.voided_by_user_id,
+         void_reason=ticket.void_reason,
+         transfer_count=ticket.transfer_count,
+     )
+ 
+ 
+ def _to_ticket_detail_response(db: Session, ticket) -> TicketDetailResponse:
+     base = _to_ticket_response(db, ticket)
+ 
+     base_data = base.model_dump()
+     event = ticket.event
+ 
+@@ -179,50 +182,52 @@ def _to_ticket_detail_response(db: Session, ticket) -> TicketDetailResponse:
+         **base_data,
+         ticket_id=ticket.id,
+         ticket_public_id=ticket.display_code,
+         attendee_name=ticket.owner.full_name if ticket.owner else None,
+         attendee_email=ticket.owner.email if ticket.owner else None,
+         event_description=event.long_description if event else None,
+         venue_address=_build_venue_address(event),
+         ends_at=event.end_at if event else None,
+         timezone=event.timezone if event else None,
+         order_reference=ticket.order.reference_code if ticket.order else None,
+         ticket_tier_name=ticket.ticket_tier.name if ticket.ticket_tier else None,
+         ticket_status=ticket.status.value,
+         transferred_from_user_id=ticket.purchaser_user_id if ticket.owner_user_id != ticket.purchaser_user_id else None,
+         transferred_to_user_id=ticket.owner_user_id if ticket.owner_user_id != ticket.purchaser_user_id else None,
+         created_at=ticket.created_at,
+         subtitle=ticket.ticket_tier.name if ticket.ticket_tier else None,
+     )
+ 
+ 
+ def _to_wallet_ticket_card(view: WalletTicketView) -> WalletTicketCardItemResponse:
+     ticket = view.ticket
+     event = ticket.event
+     return WalletTicketCardItemResponse(
+         id=ticket.id,
+         ticket_code=ticket.ticket_code,
++        manual_code=ticket.manual_code,
++        manual_code_display=format_manual_code_display(ticket.manual_code) or ticket.manual_code,
+         display_code=ticket.display_code,
+         ticket_status=ticket.status.value,
+         display_status=view.display_status,
+         is_valid_for_entry=view.is_valid_for_entry,
+         can_display_entry_code=view.can_display_entry_code,
+         event=WalletEventSummary(
+             id=event.id,
+             title=event.title,
+             start_at=event.start_at,
+             end_at=event.end_at,
+             timezone=event.timezone,
+             banner_image_url=event.cover_image_url,
+             is_upcoming=view.event_is_upcoming,
+             status=event.status.value,
+         ),
+         venue=WalletVenueSummary(
+             name=event.custom_venue_name or (event.venue.name if event.venue else None),
+             address_summary=_build_venue_address(event),
+         ),
+         organizer=WalletOrganizerSummary(name=event.organizer.display_name if event.organizer else None),
+         ticket_tier_name=ticket.ticket_tier.name,
+         ownership=WalletOwnershipSummary(
+             is_current_owner=True,
+             purchaser_user_id=ticket.purchaser_user_id,
+             owner_user_id=ticket.owner_user_id,
+@@ -358,50 +363,52 @@ def void_existing_ticket(
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+ 
+     return _to_ticket_response(db, ticket)
+ 
+ 
+ @router.post("/events/{event_id}/check-in/validate", response_model=TicketCheckInValidateResponse)
+ def validate_event_ticket(
+     event_id: int,
+     payload: TicketCheckInValidateRequest,
+     db: Session = Depends(get_db),
+     user_id: int = Depends(get_current_user_id),
+ ) -> TicketCheckInValidateResponse:
+     result = validate_ticket_for_check_in(
+         db,
+         actor_user_id=user_id,
+         event_id=event_id,
+         qr_payload=payload.qr_payload,
+         ticket_code=payload.ticket_code,
+     )
+     return TicketCheckInValidateResponse(
+         valid=result.valid,
+         code=result.status,
+         message=result.message,
+         ticket_id=result.ticket.id if result.ticket else None,
+         ticket_code=result.ticket.ticket_code if result.ticket else None,
++        manual_code=result.ticket.manual_code if result.ticket else None,
++        manual_code_display=format_manual_code_display(result.ticket.manual_code) if result.ticket else None,
+         event_id=event_id,
+         checked_in_at=result.checked_in_at,
+     )
+ 
+ 
+ @router.post("/events/{event_id}/check-in/confirm", response_model=TicketCheckInResponse)
+ def confirm_event_ticket_check_in(
+     event_id: int,
+     payload: TicketCheckInConfirmRequest,
+     db: Session = Depends(get_db),
+     user_id: int = Depends(get_current_user_id),
+ ) -> TicketCheckInResponse:
+     method = payload.method or CHECK_IN_METHOD_QR
+     result = check_in_ticket(
+         db,
+         scanner_user_id=user_id,
+         event_id=event_id,
+         qr_payload=payload.qr_payload,
+         ticket_code=payload.ticket_code,
+         method=method,
+     )
+     return _build_check_in_response(event_id=event_id, result=result)
+ 
+ 
+ @router.post("/events/{event_id}/check-in/manual", response_model=TicketCheckInResponse)
+diff --git a/backend/app/models/ticket.py b/backend/app/models/ticket.py
+index 32e6b47b541423afa57c355310b10b54f154a747..22d2071ab172bad821c663264b232cd9cd9e9118 100644
+--- a/backend/app/models/ticket.py
++++ b/backend/app/models/ticket.py
+@@ -1,81 +1,83 @@
+ from __future__ import annotations
+ 
+ from datetime import datetime
+ from typing import TYPE_CHECKING
+ 
+-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
++from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+ from sqlalchemy.orm import Mapped, mapped_column, relationship
+ 
+ from app.db.base import Base
+ from app.models.enums import CheckInStatus, TicketStatus
+ from app.models.mixins import TimestampMixin
+ from app.models.sa_enum import db_enum
+ 
+ if TYPE_CHECKING:
+     from app.models.event import Event
+     from app.models.order import Order
+     from app.models.order_item import OrderItem
+     from app.models.ticket_check_in_attempt import TicketCheckInAttempt
+     from app.models.ticket_scan_log import TicketScanLog
+     from app.models.ticket_tier import TicketTier
+     from app.models.ticket_transfer_invite import TicketTransferInvite
+     from app.models.user import User
+ 
+ 
+ class Ticket(TimestampMixin, Base):
+     __tablename__ = "tickets"
++    __table_args__ = (UniqueConstraint("event_id", "manual_code", name="uq_tickets_event_manual_code"),)
+ 
+     id: Mapped[int] = mapped_column(primary_key=True)
+     order_id: Mapped[int] = mapped_column(
+         ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True
+     )
+     order_item_id: Mapped[int] = mapped_column(
+         ForeignKey("order_items.id", ondelete="CASCADE"), nullable=False, index=True
+     )
+     event_id: Mapped[int] = mapped_column(
+         ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+     )
+     user_id: Mapped[int] = mapped_column(
+         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+     )
+     purchaser_user_id: Mapped[int] = mapped_column(
+         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+     )
+     owner_user_id: Mapped[int] = mapped_column(
+         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+     )
+     ticket_tier_id: Mapped[int] = mapped_column(
+         ForeignKey("ticket_tiers.id"), nullable=False, index=True
+     )
+     status: Mapped[TicketStatus] = mapped_column(
+         db_enum(TicketStatus, name="ticket_status"),
+         nullable=False,
+         default=TicketStatus.ISSUED,
+         index=True,
+     )
+     ticket_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
++    manual_code: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+     display_code: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
+     qr_token: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
+     qr_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+     qr_payload: Mapped[str] = mapped_column(Text, nullable=False)
+     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+     checked_in_at: Mapped[datetime | None] = mapped_column(
+         DateTime(timezone=True), nullable=True
+     )
+     check_in_status: Mapped[CheckInStatus] = mapped_column(
+         db_enum(CheckInStatus, name="check_in_status"),
+         nullable=False,
+         default=CheckInStatus.NOT_CHECKED_IN,
+         index=True,
+     )
+     transferred_at: Mapped[datetime | None] = mapped_column(
+         DateTime(timezone=True), nullable=True
+     )
+     voided_at: Mapped[datetime | None] = mapped_column(
+         DateTime(timezone=True), nullable=True
+     )
+     transfer_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+     checked_in_by_user_id: Mapped[int | None] = mapped_column(
+         ForeignKey("users.id"), nullable=True, index=True
+     )
+     check_in_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
+diff --git a/backend/app/schemas/ticket.py b/backend/app/schemas/ticket.py
+index 28bfc31b77b500017bfec1cfeee689a561f5faac..2e313b3508b54c90e10800a39543ac595e13b9f7 100644
+--- a/backend/app/schemas/ticket.py
++++ b/backend/app/schemas/ticket.py
+@@ -1,42 +1,44 @@
+ from datetime import datetime
+ 
+ from pydantic import BaseModel, ConfigDict
+ 
+ 
+ class TicketResponse(BaseModel):
+     model_config = ConfigDict(from_attributes=True)
+ 
+     id: int
+     event_id: int
+     order_id: int
+     order_item_id: int
+     purchaser_user_id: int
+     owner_user_id: int
+     ticket_tier_id: int
+     status: str
+     ticket_code: str
++    manual_code: str
++    manual_code_display: str
+     display_code: str | None = None
+     qr_payload: str
+     public_ticket_url: str
+     qr_image_url: str
+     event_title: str | None = None
+     starts_at: datetime | None = None
+     venue_name: str | None = None
+     ticket_tier_name: str | None = None
+     issued_at: datetime
+     checked_in_at: datetime | None
+     check_in_method: str | None = None
+     transferred_at: datetime | None
+     voided_at: datetime | None
+     voided_by_user_id: int | None
+     void_reason: str | None
+     transfer_count: int
+ 
+ 
+ class TicketDetailResponse(TicketResponse):
+     ticket_id: int
+     ticket_public_id: str | None = None
+     attendee_name: str | None = None
+     attendee_email: str | None = None
+     event_description: str | None = None
+     venue_address: str | None = None
+@@ -77,50 +79,52 @@ class TicketCheckInRequest(BaseModel):
+ 
+ 
+ class TicketCheckInResponse(BaseModel):
+     success: bool
+     code: str | None = None
+     ticket_id: int | None
+     event_id: int
+     status: str | None
+     checked_in_at: datetime | None
+     checked_in_by_user_id: int | None
+     message: str
+     ui_signal: str
+ 
+ 
+ class TicketCheckInValidateRequest(BaseModel):
+     qr_payload: str | None = None
+     ticket_code: str | None = None
+ 
+ 
+ class TicketCheckInValidateResponse(BaseModel):
+     valid: bool
+     code: str
+     message: str
+     ticket_id: int | None
+     ticket_code: str | None
++    manual_code: str | None = None
++    manual_code_display: str | None = None
+     event_id: int
+     checked_in_at: datetime | None
+ 
+ 
+ class TicketCheckInConfirmRequest(BaseModel):
+     qr_payload: str | None = None
+     ticket_code: str | None = None
+     method: str | None = None
+ 
+ 
+ class TicketCheckInSummaryResponse(BaseModel):
+     event_id: int
+     total_admittable_tickets: int
+     checked_in_tickets: int
+     remaining_tickets: int
+ 
+ 
+ class TicketCheckInOverrideRequest(BaseModel):
+     qr_payload: str | None = None
+     ticket_code: str | None = None
+     admit: bool
+     notes: str
+ 
+ 
+ class TicketCheckInAttemptResponse(BaseModel):
+diff --git a/backend/app/schemas/ticket_wallet.py b/backend/app/schemas/ticket_wallet.py
+index 128f5fbf5ed47d50f7de9a1582010d8143323ef4..9befdd81991be7b59cbcd544a218ecb4e5f01d90 100644
+--- a/backend/app/schemas/ticket_wallet.py
++++ b/backend/app/schemas/ticket_wallet.py
+@@ -15,50 +15,52 @@ class WalletEventSummary(BaseModel):
+     is_upcoming: bool
+     status: str | None = None
+ 
+ 
+ class WalletVenueSummary(BaseModel):
+     name: str | None = None
+     address_summary: str | None = None
+ 
+ 
+ class WalletOrganizerSummary(BaseModel):
+     name: str | None = None
+ 
+ 
+ class WalletOwnershipSummary(BaseModel):
+     is_current_owner: bool
+     purchaser_user_id: int
+     owner_user_id: int
+     acquired_via_transfer: bool
+ 
+ 
+ class WalletTicketCardItemResponse(BaseModel):
+     model_config = ConfigDict(from_attributes=True)
+ 
+     id: int
+     ticket_code: str
++    manual_code: str
++    manual_code_display: str
+     display_code: str | None = None
+     ticket_status: str
+     display_status: str
+     is_valid_for_entry: bool
+     can_display_entry_code: bool
+     event: WalletEventSummary
+     venue: WalletVenueSummary
+     organizer: WalletOrganizerSummary
+     ticket_tier_name: str
+     ownership: WalletOwnershipSummary
+     order_id: int
+     order_reference: str | None = None
+     issued_at: datetime
+     checked_in_at: datetime | None = None
+     transferred_at: datetime | None = None
+     transfer_count: int
+ 
+ 
+ class WalletTicketDetailResponse(WalletTicketCardItemResponse):
+     qr_payload: str
+     check_in_token: str
+     check_in_method: str | None = None
+     voided_at: datetime | None = None
+     void_reason: str | None = None
+     order_status: str
+diff --git a/backend/app/services/tickets.py b/backend/app/services/tickets.py
+index 683240525d7475260082e8f998c4485989cac973..228525f9332528dd5dc4cfa23c22422c057cc9d4 100644
+--- a/backend/app/services/tickets.py
++++ b/backend/app/services/tickets.py
+@@ -1,27 +1,28 @@
+ from __future__ import annotations
+ 
++import re
+ import secrets
+ from dataclasses import dataclass
+ from datetime import datetime, time, timedelta, timezone
+ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+ 
+ from sqlalchemy import and_, func, or_, select
+ from sqlalchemy.orm import Session, joinedload, object_session
+ 
+ from app.core.config import settings
+ from app.core.security import normalize_email
+ from app.models.event import Event
+ from app.models.enums import (
+     CheckInStatus,
+     EventStatus,
+     OrderStatus,
+     TicketScanStatus,
+     TicketStatus,
+     TransferInviteStatus,
+ )
+ from app.models.order import Order
+ from app.models.order_item import OrderItem
+ from app.models.ticket import Ticket
+ from app.models.ticket_check_in_attempt import TicketCheckInAttempt
+ from app.models.ticket_scan_log import TicketScanLog
+ from app.models.ticket_transfer_invite import TicketTransferInvite
+@@ -143,54 +144,98 @@ class TicketScanResult:
+ 
+ def _to_aware_datetime(value: datetime) -> datetime:
+     if value.tzinfo is None:
+         return value.replace(tzinfo=timezone.utc)
+     return value
+ 
+ 
+ def _resolve_event_timezone(event: Event | None) -> ZoneInfo:
+     timezone_name = (event.timezone if event is not None else "") or DEFAULT_EVENT_TIMEZONE
+     try:
+         return ZoneInfo(timezone_name)
+     except ZoneInfoNotFoundError:
+         return ZoneInfo(DEFAULT_EVENT_TIMEZONE)
+ 
+ 
+ def _is_scan_within_event_window(*, event: Event, now: datetime) -> bool:
+     event_tz = _resolve_event_timezone(event)
+     local_now = _to_aware_datetime(now).astimezone(event_tz)
+     local_start_at = _to_aware_datetime(event.start_at).astimezone(event_tz)
+     local_end_at = _to_aware_datetime(event.end_at).astimezone(event_tz)
+ 
+     allowed_start = datetime.combine(local_start_at.date(), time.min, tzinfo=event_tz)
+     return allowed_start <= local_now <= local_end_at
+ 
+ 
++MANUAL_CODE_PREFIX = "ADM"
++MANUAL_CODE_RE = re.compile(r"^(?:ADM(?:\s*-?\s*)?)?(\d{6})$", re.IGNORECASE)
++
++
++class InvalidManualCodeError(TicketError):
++    """Raised when a manual check-in code cannot be normalized."""
++
++
++def format_manual_code_display(manual_code: str | None) -> str | None:
++    if not manual_code:
++        return None
++    prefix, sep, digits = manual_code.partition("-")
++    if sep and prefix.upper() == MANUAL_CODE_PREFIX and len(digits) == 6:
++        return f"{MANUAL_CODE_PREFIX} - {digits}"
++    return manual_code
++
++
++def normalize_manual_code(value: str | None) -> str:
++    raw = (value or "").strip()
++    match = MANUAL_CODE_RE.fullmatch(raw)
++    if not match:
++        raise InvalidManualCodeError("Invalid manual code format.")
++    return f"{MANUAL_CODE_PREFIX}-{match.group(1)}"
++
++
+ def _generate_ticket_code() -> str:
+     return secrets.token_urlsafe(24)
+ 
+ 
++def _generate_manual_code() -> str:
++    return f"{MANUAL_CODE_PREFIX}-{secrets.randbelow(1_000_000):06d}"
++
++
++def _issue_manual_code(db: Session, *, event_id: int, reserved: set[str] | None = None) -> str:
++    reserved = reserved if reserved is not None else set()
++    for _ in range(10):
++        manual_code = _generate_manual_code()
++        if manual_code in reserved:
++            continue
++        existing = db.execute(
++            select(Ticket.id).where(Ticket.event_id == event_id, Ticket.manual_code == manual_code)
++        ).scalar_one_or_none()
++        if existing is None:
++            reserved.add(manual_code)
++            return manual_code
++    raise TicketIssuanceError("Unable to generate a unique manual ticket code.")
++
++
+ def _issue_ticket_qr_fields(db: Session) -> tuple[str, str, datetime]:
+     for _ in range(10):
+         qr_token = generate_ticket_qr_token()
+         existing = db.execute(select(Ticket.id).where(Ticket.qr_token == qr_token)).scalar_one_or_none()
+         if existing is not None:
+             continue
+         display_code = generate_ticket_display_code(qr_token=qr_token)
+         return qr_token, display_code, get_guyana_now()
+     raise TicketIssuanceError("Unable to generate a unique QR token for ticket issuance.")
+ 
+ 
+ def notify_ticket_issued(ticket: Ticket) -> None:
+     db = object_session(ticket)
+     if db is None:
+         return
+     order = ticket.order
+     if order is None:
+         return
+     notify_tickets_issued(db, order, [ticket])
+ 
+ 
+ def notify_ticket_transferred(ticket: Ticket, *, from_user_id: int, to_user_id: int) -> None:
+     db = object_session(ticket)
+     if db is None:
+         return
+@@ -272,65 +317,68 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
+         db.execute(select(OrderItem).where(OrderItem.order_id == locked_order.id).order_by(OrderItem.id.asc()))
+         .scalars()
+         .all()
+     )
+ 
+     expected_total = sum(item.quantity for item in order_items)
+     existing_tickets = (
+         db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
+         .scalars()
+         .all()
+     )
+     existing_count = len(existing_tickets)
+     if existing_count == expected_total:
+         for ticket in existing_tickets:
+             if not ticket.qr_token:
+                 ensure_ticket_qr(db, ticket)
+         db.flush()
+         return existing_tickets
+     if existing_count != 0:
+         raise TicketIssuanceError(
+             f"Partial ticket issuance detected for order {locked_order.id}: {existing_count}/{expected_total}."
+         )
+ 
+     now = get_guyana_now()
+     tickets_to_create: list[Ticket] = []
++    reserved_manual_codes: set[str] = set()
+     for item in order_items:
+         for _ in range(item.quantity):
+             ticket_code = _generate_ticket_code()
+             qr_token, display_code, qr_generated_at = _issue_ticket_qr_fields(db)
++            manual_code = _issue_manual_code(db, event_id=locked_order.event_id, reserved=reserved_manual_codes)
+             tickets_to_create.append(
+                 Ticket(
+                     order_id=locked_order.id,
+                     order_item_id=item.id,
+                     event_id=locked_order.event_id,
+                     user_id=locked_order.user_id,
+                     purchaser_user_id=locked_order.user_id,
+                     owner_user_id=locked_order.user_id,
+                     ticket_tier_id=item.ticket_tier_id,
+                     status=TicketStatus.ISSUED,
+                     ticket_code=ticket_code,
++                    manual_code=manual_code,
+                     display_code=display_code,
+                     qr_token=qr_token,
+                     qr_generated_at=qr_generated_at,
+                     qr_payload=qr_token,
+                     issued_at=now,
+                 )
+             )
+ 
+     db.add_all(tickets_to_create)
+     db.flush()
+     issued_tickets = (
+         db.execute(select(Ticket).where(Ticket.order_id == locked_order.id).order_by(Ticket.id.asc()))
+         .scalars()
+         .all()
+     )
+     for ticket in issued_tickets:
+         notify_ticket_issued(ticket)
+     return issued_tickets
+ 
+ 
+ def can_void_event_ticket(db: Session, *, user_id: int, event_id: int) -> bool:
+     return has_event_permission_by_id(
+         db,
+         user_id=user_id,
+         event_id=event_id,
+@@ -838,50 +886,78 @@ def get_ticket_by_qr_payload(db: Session, *, qr_payload: str) -> Ticket | None:
+         return None
+ 
+     ticket = (
+         db.execute(
+             select(Ticket).where(
+                 or_(
+                     Ticket.ticket_code == lookup,
+                     Ticket.qr_payload == lookup,
+                     Ticket.qr_token == lookup,
+                     Ticket.display_code == lookup,
+                 )
+             )
+         )
+         .scalars()
+         .first()
+     )
+ 
+     if ticket is not None and not ticket.qr_token:
+         ensure_ticket_qr(db, ticket)
+         db.flush()
+ 
+     return ticket
+ 
+ 
+ 
++
++def _lookup_ticket_for_check_in(db: Session, *, lookup: str, event_id: int | None = None, for_update: bool = False):
++    manual_code: str | None = None
++    try:
++        manual_code = normalize_manual_code(lookup)
++    except InvalidManualCodeError:
++        manual_code = None
++
++    if manual_code is not None:
++        if event_id is None:
++            return None
++        stmt = select(Ticket).where(Ticket.event_id == event_id, Ticket.manual_code == manual_code)
++        if for_update:
++            stmt = stmt.with_for_update()
++        return db.execute(stmt).scalars().first()
++
++    conditions = [
++        Ticket.ticket_code == lookup,
++        Ticket.qr_payload == lookup,
++        Ticket.qr_token == lookup,
++        Ticket.display_code == lookup,
++    ]
++
++    stmt = select(Ticket).where(or_(*conditions))
++    if for_update:
++        stmt = stmt.with_for_update()
++    return db.execute(stmt).scalars().first()
++
+ def _is_event_admittable(event: Event | None) -> bool:
+     if event is None:
+         return False
+     return event.status != EventStatus.CANCELLED and event.cancelled_at is None
+ 
+ 
+ def _is_order_admittable(order: Order | None) -> bool:
+     if order is None:
+         return False
+     return (
+         order.status == OrderStatus.COMPLETED
+         and order.payment_verification_status == "verified"
+         and order.refund_status != "refunded"
+     )
+ 
+ 
+ def _record_check_in_attempt(
+     db: Session,
+     *,
+     event_id: int,
+     actor_user_id: int | None,
+     ticket: Ticket | None,
+     result_code: str,
+     reason_code: str | None,
+     reason_message: str,
+@@ -999,60 +1075,81 @@ def validate_ticket_for_check_in(
+     qr_payload: str | None = None,
+     ticket_code: str | None = None,
+ ) -> TicketCheckInValidationResult:
+     lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
+     if not lookup:
+         result = TicketCheckInValidationResult(
+             valid=False,
+             status=CHECK_IN_STATUS_INVALID,
+             message="A ticket code or QR payload is required.",
+             event_id=event_id,
+             reason_code=CHECK_IN_STATUS_INVALID,
+         )
+         _record_check_in_attempt(
+             db,
+             event_id=event_id,
+             actor_user_id=actor_user_id,
+             ticket=None,
+             result_code=result.status,
+             reason_code=result.reason_code,
+             reason_message=result.message,
+             method="validate",
+         )
+         db.flush()
+         return result
+ 
+-    ticket = (
+-        db.execute(
+-            select(Ticket)
+-            .options(joinedload(Ticket.event), joinedload(Ticket.order))
+-            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
++    manual_lookup = False
++    try:
++        normalize_manual_code(lookup)
++        manual_lookup = True
++    except InvalidManualCodeError:
++        manual_lookup = False
++
++    if manual_lookup and not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
++        result = TicketCheckInValidationResult(
++            valid=False,
++            status=CHECK_IN_STATUS_UNAUTHORIZED,
++            message="Not authorized to check in tickets for this event.",
++            event_id=event_id,
++            reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
+         )
+-        .unique()
+-        .scalars()
+-        .first()
+-    )
++        _record_check_in_attempt(
++            db,
++            event_id=event_id,
++            actor_user_id=actor_user_id,
++            ticket=None,
++            result_code=result.status,
++            reason_code=result.reason_code,
++            reason_message=result.message,
++            method="validate",
++        )
++        db.flush()
++        return result
++
++    ticket = _lookup_ticket_for_check_in(db, lookup=lookup, event_id=event_id)
++    if ticket is not None:
++        db.refresh(ticket, attribute_names=["event", "order"])
+     if ticket is None:
+         result = TicketCheckInValidationResult(
+             valid=False,
+             status=CHECK_IN_STATUS_NOT_FOUND,
+             message="Ticket not found.",
+             event_id=event_id,
+             reason_code=CHECK_IN_STATUS_NOT_FOUND,
+         )
+     elif get_active_pending_transfer_for_ticket(db, ticket_id=ticket.id) is not None:
+         result = TicketCheckInValidationResult(
+             valid=False,
+             status=CHECK_IN_STATUS_TRANSFER_PENDING,
+             message="Ticket transfer is pending acceptance.",
+             event_id=event_id,
+             ticket=ticket,
+             reason_code=CHECK_IN_STATUS_TRANSFER_PENDING,
+         )
+     elif not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
+         result = TicketCheckInValidationResult(
+             valid=False,
+             status=CHECK_IN_STATUS_UNAUTHORIZED,
+             message="Not authorized to check in tickets for this event.",
+             event_id=event_id,
+             ticket=ticket,
+             reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
+@@ -1083,81 +1180,80 @@ def check_in_ticket(
+     method: str = CHECK_IN_METHOD_QR,
+ ) -> TicketCheckInValidationResult:
+     if method not in {CHECK_IN_METHOD_QR, CHECK_IN_METHOD_MANUAL}:
+         method = CHECK_IN_METHOD_QR
+     if not can_actor_check_in_event(db, user_id=scanner_user_id, event_id=event_id):
+         result = TicketCheckInValidationResult(
+             valid=False,
+             status=CHECK_IN_STATUS_UNAUTHORIZED,
+             message="Not authorized to check in tickets for this event.",
+             event_id=event_id,
+             reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
+         )
+         _record_check_in_attempt(
+             db,
+             event_id=event_id,
+             actor_user_id=scanner_user_id,
+             ticket=None,
+             result_code=result.status,
+             reason_code=result.reason_code,
+             reason_message=result.message,
+             method=method,
+         )
+         db.flush()
+         return result
+ 
+-    lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
++    raw_lookup = ticket_code or qr_payload
++    try:
++        lookup = normalize_manual_code(raw_lookup) if method == CHECK_IN_METHOD_MANUAL else extract_ticket_lookup_value(raw_lookup)
++    except InvalidManualCodeError:
++        lookup = ""
++        invalid_message = "Invalid manual code format."
++    else:
++        invalid_message = "A ticket code or QR payload is required."
+     if not lookup:
+         result = TicketCheckInValidationResult(
+             valid=False,
+             status=CHECK_IN_STATUS_INVALID,
+-            message="A ticket code or QR payload is required.",
++            message=invalid_message,
+             event_id=event_id,
+             reason_code=CHECK_IN_STATUS_INVALID,
+         )
+         _record_check_in_attempt(
+             db,
+             event_id=event_id,
+             actor_user_id=scanner_user_id,
+             ticket=None,
+             result_code=result.status,
+             reason_code=result.reason_code,
+             reason_message=result.message,
+             method=method,
+         )
+         db.flush()
+         return result
+ 
+-    ticket = (
+-        db.execute(
+-            select(Ticket)
+-            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
+-            .with_for_update()
+-        )
+-        .scalars()
+-        .first()
+-    )
++    ticket = _lookup_ticket_for_check_in(db, lookup=lookup, event_id=event_id, for_update=True)
+     if ticket is None:
+         result = TicketCheckInValidationResult(
+             valid=False,
+             status=CHECK_IN_STATUS_NOT_FOUND,
+             message="Ticket not found.",
+             event_id=event_id,
+             reason_code=CHECK_IN_STATUS_NOT_FOUND,
+         )
+         _record_check_in_attempt(
+             db,
+             event_id=event_id,
+             actor_user_id=scanner_user_id,
+             ticket=None,
+             result_code=result.status,
+             reason_code=result.reason_code,
+             reason_message=result.message,
+             method=method,
+         )
+         db.flush()
+         return result
+     db.refresh(ticket, attribute_names=["event", "order"])
+     result = _evaluate_ticket_for_entry(ticket=ticket, event_id=event_id)
+     if not result.valid:
+         _record_check_in_attempt(
+             db,
+@@ -1228,59 +1324,51 @@ def get_event_check_in_summary(
+         total_admittable_tickets=len(admittable),
+         checked_in_tickets=checked_in_count,
+         remaining_tickets=max(0, len(admittable) - checked_in_count),
+     )
+ 
+ 
+ def override_ticket_check_in(
+     db: Session,
+     *,
+     actor_user_id: int,
+     event_id: int,
+     qr_payload: str | None = None,
+     ticket_code: str | None = None,
+     admit: bool,
+     notes: str,
+ ) -> TicketCheckInValidationResult:
+     if not can_actor_override_check_in(db, user_id=actor_user_id, event_id=event_id):
+         raise TicketAuthorizationError("Not authorized to override ticket check-in for this event.")
+     if not _normalize_optional(notes):
+         raise TicketCheckInConflictError("Manual override notes are required.")
+ 
+     lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
+     if not lookup:
+         raise TicketNotFoundError("A ticket code or QR payload is required.")
+ 
+-    ticket = (
+-        db.execute(
+-            select(Ticket)
+-            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
+-            .with_for_update()
+-        )
+-        .scalars()
+-        .first()
+-    )
++    ticket = _lookup_ticket_for_check_in(db, lookup=lookup, event_id=event_id, for_update=True)
+     if ticket is None:
+         _record_check_in_attempt(
+             db,
+             event_id=event_id,
+             actor_user_id=actor_user_id,
+             ticket=None,
+             result_code=CHECK_IN_STATUS_NOT_FOUND,
+             reason_code=CHECK_IN_STATUS_NOT_FOUND,
+             reason_message="Ticket not found for override.",
+             method=CHECK_IN_METHOD_OVERRIDE,
+             notes=notes,
+         )
+         db.flush()
+         raise TicketNotFoundError("Ticket not found.")
+     db.refresh(ticket, attribute_names=["event", "order"])
+     if ticket.event_id != event_id:
+         raise TicketCrossEventError("Ticket does not belong to this event.")
+ 
+     now = get_guyana_now()
+     if admit:
+         if ticket.status == TicketStatus.CHECKED_IN:
+             result = TicketCheckInValidationResult(
+                 valid=False,
+                 status=CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+                 message="Ticket has already been checked in.",
+diff --git a/backend/tests/test_admin_support.py b/backend/tests/test_admin_support.py
+index 3398036bb285bd5ef1abfb3b0d6238b1b36bfc9a..4dc9d9cd19d2815ae2a3fd80b3ea5d32833542a7 100644
+--- a/backend/tests/test_admin_support.py
++++ b/backend/tests/test_admin_support.py
+@@ -107,50 +107,51 @@ def _seed(db: Session, *, suffix: str = "support") -> tuple[Order, User, User]:
+         subtotal_amount=Decimal("100.00"),
+         discount_amount=Decimal("10.00"),
+         total_amount=Decimal("90.00"),
+         pricing_source=PricingSource.PROMO_CODE,
+         promo_code_text="SAVE10",
+         payment_reference="MMG-123",
+         payment_verification_status="verified",
+         paid_at=now,
+     )
+     db.add(order)
+     db.flush()
+     order_item = OrderItem(order_id=order.id, ticket_tier_id=tier.id, quantity=1, unit_price=Decimal("100.00"))
+     db.add(order_item)
+     db.flush()
+     db.add(
+         Ticket(
+             order_id=order.id,
+             order_item_id=order_item.id,
+             event_id=event.id,
+             user_id=non_admin.id,
+             purchaser_user_id=non_admin.id,
+             owner_user_id=non_admin.id,
+             ticket_tier_id=tier.id,
+             status=TicketStatus.ISSUED,
+             ticket_code=f"TCK-{suffix}",
++            manual_code="ADM-123456",
+             qr_payload=f"QR-{suffix}",
+             issued_at=now,
+         )
+     )
+     db.commit()
+     db.refresh(order)
+     return order, admin, non_admin
+ 
+ 
+ def test_get_or_create_case_returns_existing_active_case(db_session: Session) -> None:
+     order, admin, _ = _seed(db_session, suffix="existing")
+     case1 = get_or_create_support_case_for_order(db_session, order.id, created_by_user_id=admin.id)
+     case2 = get_or_create_support_case_for_order(db_session, order.id, created_by_user_id=admin.id)
+     assert case1.id == case2.id
+ 
+ 
+ def test_adding_note_creates_case_and_audit(db_session: Session) -> None:
+     order, admin, _ = _seed(db_session, suffix="note")
+     created = create_support_note(order.id, SupportNoteCreateRequest(body="  Investigating payment mismatch  "), db=db_session, user_id=admin.id)
+     assert created.body == "Investigating payment mismatch"
+     case = db_session.execute(select(SupportCase).where(SupportCase.order_id == order.id)).scalar_one()
+     assert case is not None
+     audit = db_session.execute(select(AdminActionAudit).where(AdminActionAudit.action_type == "support_note_added")).scalar_one()
+     assert audit.actor_user_id == admin.id
+ 
+diff --git a/backend/tests/test_ticket_manual_codes.py b/backend/tests/test_ticket_manual_codes.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1c741c9f2a8ee6c104337e86d54e0f0f918c8044
+--- /dev/null
++++ b/backend/tests/test_ticket_manual_codes.py
+@@ -0,0 +1,72 @@
++import pytest
++
++from app.services import tickets
++from app.services.tickets import InvalidManualCodeError, normalize_manual_code
++
++
++@pytest.mark.parametrize(
++    (raw, expected),
++    [
++        ("ADM - 123456", "ADM-123456"),
++        ("ADM-123456", "ADM-123456"),
++        ("adm123456", "ADM-123456"),
++        ("123456", "ADM-123456"),
++    ],
++)
++def test_normalize_manual_code_accepts_supported_forms(raw, expected):
++    assert normalize_manual_code(raw) == expected
++
++
++@pytest.mark.parametrize("raw", ["12345", "1234567", "ADM-ABC123", "ADM_123456", "ADM-12345A"])
++def test_normalize_manual_code_rejects_invalid_values(raw):
++    with pytest.raises(InvalidManualCodeError):
++        normalize_manual_code(raw)
++
++
++def test_generate_manual_code_preserves_leading_zeros(monkeypatch):
++    monkeypatch.setattr(tickets.secrets, "randbelow", lambda upper: 4829)
++    assert tickets._generate_manual_code() == "ADM-004829"
++
++
++def test_generate_manual_code_uses_six_digits(monkeypatch):
++    monkeypatch.setattr(tickets.secrets, "randbelow", lambda upper: 482913)
++    code = tickets._generate_manual_code()
++    assert code == "ADM-482913"
++    assert code.removeprefix("ADM-").isdigit()
++    assert len(code.removeprefix("ADM-")) == 6
++
++
++class _Scalar:
++    def __init__(self, value):
++        self.value = value
++
++    def scalar_one_or_none(self):
++        return self.value
++
++
++class _FakeDb:
++    def __init__(self, existing_results):
++        self.existing_results = list(existing_results)
++        self.calls = 0
++
++    def execute(self, statement):
++        self.calls += 1
++        return _Scalar(self.existing_results.pop(0))
++
++
++def test_issue_manual_code_retries_on_collision(monkeypatch):
++    generated = iter([111111, 222222])
++    monkeypatch.setattr(tickets.secrets, "randbelow", lambda upper: next(generated))
++    db = _FakeDb([1, None])
++
++    assert tickets._issue_manual_code(db, event_id=10) == "ADM-222222"
++    assert db.calls == 2
++
++
++def test_issue_manual_code_fails_after_retries(monkeypatch):
++    monkeypatch.setattr(tickets.secrets, "randbelow", lambda upper: 123456)
++    db = _FakeDb([1] * 10)
++
++    with pytest.raises(tickets.TicketIssuanceError):
++        tickets._issue_manual_code(db, event_id=10)
++    assert db.calls == 10
+diff --git a/backend/tests/test_tickets_service.py b/backend/tests/test_tickets_service.py
+index 3d19e48f34a36f73533982c6ab36cf440db6a103..5652cd008b7a08f489144fa77626b7471a81a32d 100644
+--- a/backend/tests/test_tickets_service.py
++++ b/backend/tests/test_tickets_service.py
+@@ -21,50 +21,51 @@ from app.models.enums import (
+     CheckInStatus,
+     EventApprovalStatus,
+     EventStaffRole,
+     EventStatus,
+     EventVisibility,
+     OrderStatus,
+     TicketStatus,
+ )
+ from app.api.tickets import check_in_event_ticket, get_ticket_detail, get_ticket_qr_by_ticket_id
+ from app.schemas.ticket import TicketCheckInRequest
+ from app.services.orders import complete_paid_order
+ from app.services.ticket_qr import (
+     QR_PAYLOAD_PREFIX,
+     build_ticket_qr_payload,
+     ensure_ticket_qr,
+     generate_qr_png_bytes,
+     generate_signed_ticket_qr_payload,
+     generate_ticket_qr_payload,
+ )
+ from app.services.tickets import (
+     CHECK_IN_METHOD_MANUAL,
+     CHECK_IN_STATUS_MANUAL_OVERRIDE_ADMITTED,
+     CHECK_IN_STATUS_ALREADY_CHECKED_IN,
+     CHECK_IN_STATUS_CANCELED_EVENT,
+     CHECK_IN_STATUS_NOT_FOUND,
++    CHECK_IN_STATUS_UNAUTHORIZED,
+     CHECK_IN_STATUS_ORDER_NOT_ADMITTABLE,
+     CHECK_IN_STATUS_VALID,
+     CHECK_IN_STATUS_WRONG_EVENT,
+     TicketAuthorizationError,
+     TicketCheckInConflictError,
+     TicketCrossEventError,
+     TicketIssuanceError,
+     TicketNotFoundError,
+     TicketTransferError,
+     TicketVoidError,
+     check_in_ticket,
+     can_check_in_event_tickets,
+     can_void_event_ticket,
+     check_in_ticket_for_event,
+     get_event_check_in_summary,
+     issue_tickets_for_completed_order,
+     list_recent_check_in_attempts,
+     list_tickets_for_order_owner,
+     list_tickets_for_user,
+     override_ticket_check_in,
+     transfer_ticket_to_user,
+     validate_ticket_for_check_in,
+     void_ticket,
+     scan_ticket,
+ )
+@@ -916,50 +917,206 @@ def test_checkin_accepts_ticket_url_payload_and_reuses_phase17_validation(db_ses
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+ 
+     url_payload = build_ticket_qr_payload(ticket)
+     valid = validate_ticket_for_check_in(
+         db_session,
+         actor_user_id=event.organizer.user_id,
+         event_id=event.id,
+         qr_payload=url_payload,
+     )
+     assert valid.valid is True
+ 
+     ticket.status = TicketStatus.VOIDED
+     db_session.commit()
+ 
+     rejected = validate_ticket_for_check_in(
+         db_session,
+         actor_user_id=event.organizer.user_id,
+         event_id=event.id,
+         qr_payload=url_payload,
+     )
+     assert rejected.valid is False
+     assert rejected.status == "refunded_or_invalidated"
+ 
+ 
++
++def test_qr_checkin_still_works_with_secure_token(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++
++    result = check_in_ticket(
++        db_session,
++        scanner_user_id=event.organizer.user_id,
++        event_id=event.id,
++        ticket_code=ticket.qr_token or ticket.qr_payload,
++        method="qr",
++    )
++
++    assert result.valid is True
++    assert result.ticket.id == ticket.id
++    assert result.ticket.check_in_method == "qr"
++
++
++def test_manual_adm_code_checkin_works(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    ticket.manual_code = "ADM-123456"
++    db_session.commit()
++
++    result = check_in_ticket(
++        db_session,
++        scanner_user_id=event.organizer.user_id,
++        event_id=event.id,
++        ticket_code="ADM-123456",
++        method=CHECK_IN_METHOD_MANUAL,
++    )
++
++    assert result.valid is True
++    assert result.ticket.id == ticket.id
++    assert result.ticket.check_in_method == CHECK_IN_METHOD_MANUAL
++
++
++def test_manual_raw_six_digits_checkin_normalizes(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    ticket.manual_code = "ADM-004829"
++    db_session.commit()
++
++    result = check_in_ticket(
++        db_session,
++        scanner_user_id=event.organizer.user_id,
++        event_id=event.id,
++        ticket_code="004829",
++        method=CHECK_IN_METHOD_MANUAL,
++    )
++
++    assert result.valid is True
++    assert result.ticket.id == ticket.id
++
++
++def test_manual_code_from_another_event_does_not_check_in_ticket(db_session: Session) -> None:
++    order_1, _, _, _, event_1 = _seed_order(db_session, user_email=unique_email("manual_event_a"), quantity=1)
++    order_2, _, _, _, event_2 = _seed_order(db_session, user_email=unique_email("manual_event_b"), quantity=1)
++    ticket_1 = issue_tickets_for_completed_order(db_session, order_1)[0]
++    issue_tickets_for_completed_order(db_session, order_2)[0]
++    ticket_1.manual_code = "ADM-123456"
++    db_session.commit()
++
++    result = check_in_ticket(
++        db_session,
++        scanner_user_id=event_2.organizer.user_id,
++        event_id=event_2.id,
++        ticket_code="ADM-123456",
++        method=CHECK_IN_METHOD_MANUAL,
++    )
++
++    assert result.valid is False
++    assert result.status == CHECK_IN_STATUS_NOT_FOUND
++    db_session.refresh(ticket_1)
++    assert ticket_1.status == TicketStatus.ISSUED
++    assert ticket_1.checked_in_at is None
++
++
++def test_same_manual_code_in_different_event_does_not_check_in_wrong_ticket(db_session: Session) -> None:
++    order_1, _, _, _, event_1 = _seed_order(db_session, user_email=unique_email("manual_event_1"), quantity=1)
++    order_2, _, _, _, event_2 = _seed_order(db_session, user_email=unique_email("manual_event_2"), quantity=1)
++    ticket_1 = issue_tickets_for_completed_order(db_session, order_1)[0]
++    ticket_2 = issue_tickets_for_completed_order(db_session, order_2)[0]
++    ticket_1.manual_code = "ADM-123456"
++    ticket_2.manual_code = "ADM-123456"
++    db_session.commit()
++
++    result = check_in_ticket(
++        db_session,
++        scanner_user_id=event_2.organizer.user_id,
++        event_id=event_2.id,
++        ticket_code="ADM-123456",
++        method=CHECK_IN_METHOD_MANUAL,
++    )
++
++    assert result.valid is True
++    assert result.ticket.id == ticket_2.id
++    db_session.refresh(ticket_1)
++    assert ticket_1.status == TicketStatus.ISSUED
++
++
++def test_already_checked_in_manual_ticket_cannot_be_reused(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    ticket.manual_code = "ADM-123456"
++    db_session.commit()
++
++    first = check_in_ticket(
++        db_session,
++        scanner_user_id=event.organizer.user_id,
++        event_id=event.id,
++        ticket_code="123456",
++        method=CHECK_IN_METHOD_MANUAL,
++    )
++    duplicate = check_in_ticket(
++        db_session,
++        scanner_user_id=event.organizer.user_id,
++        event_id=event.id,
++        ticket_code="123456",
++        method=CHECK_IN_METHOD_MANUAL,
++    )
++
++    assert first.valid is True
++    assert duplicate.valid is False
++    assert duplicate.status == CHECK_IN_STATUS_ALREADY_CHECKED_IN
++
++
++def test_unauthorized_user_cannot_validate_or_check_in_manual_code(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    ticket.manual_code = "ADM-123456"
++    unauthorized = User(email=unique_email("manual_unauthorized"), full_name="No Access")
++    db_session.add(unauthorized)
++    db_session.commit()
++
++    validated = validate_ticket_for_check_in(
++        db_session,
++        actor_user_id=unauthorized.id,
++        event_id=event.id,
++        ticket_code="ADM-123456",
++    )
++    admitted = check_in_ticket(
++        db_session,
++        scanner_user_id=unauthorized.id,
++        event_id=event.id,
++        ticket_code="ADM-123456",
++        method=CHECK_IN_METHOD_MANUAL,
++    )
++
++    assert validated.valid is False
++    assert validated.status == CHECK_IN_STATUS_UNAUTHORIZED
++    assert validated.ticket is None
++    assert admitted.valid is False
++    assert admitted.status == CHECK_IN_STATUS_UNAUTHORIZED
++    assert admitted.ticket is None
++
+ def test_checkin_attempts_are_audited_for_validate_and_duplicate(db_session: Session) -> None:
+     order, _, _, _, event = _seed_order(db_session, quantity=1)
+     ticket = issue_tickets_for_completed_order(db_session, order)[0]
+ 
+     validated = validate_ticket_for_check_in(
+         db_session,
+         actor_user_id=event.organizer.user_id,
+         event_id=event.id,
+         ticket_code=ticket.ticket_code,
+     )
+     assert validated.valid is True
+ 
+     admitted = check_in_ticket(
+         db_session,
+         scanner_user_id=event.organizer.user_id,
+         event_id=event.id,
+         ticket_code=ticket.ticket_code,
+         method=CHECK_IN_METHOD_MANUAL,
+     )
+     assert admitted.valid is True
+ 
+     duplicate = check_in_ticket(
+         db_session,
+         scanner_user_id=event.organizer.user_id,
+         event_id=event.id,
+diff --git a/mobile/src/api/tickets.ts b/mobile/src/api/tickets.ts
+index 8daeb1cebdd1ee7758292cf144141de97330d746..819d1480c36cd686332983324cfaf0379b7214f9 100644
+--- a/mobile/src/api/tickets.ts
++++ b/mobile/src/api/tickets.ts
+@@ -1,30 +1,32 @@
+ import { apiRequest } from './client';
+ 
+ export type WalletTicketCard = {
+   id: number;
+   ticket_code: string;
++  manual_code: string;
++  manual_code_display: string;
+   ticket_status: string;
+   display_status: 'active' | 'used' | 'invalid' | string;
+   is_valid_for_entry: boolean;
+   can_display_entry_code: boolean;
+   event: {
+     id: number;
+     title: string;
+     start_at: string;
+     end_at: string | null;
+     timezone: string | null;
+     banner_image_url: string | null;
+     is_upcoming: boolean;
+     status: string | null;
+   };
+   venue: {
+     name: string | null;
+     address_summary: string | null;
+   };
+   organizer: {
+     name: string | null;
+   };
+   ticket_tier_name: string;
+   order_id: number;
+   order_reference: string | null;
+   issued_at: string;
+diff --git a/mobile/src/navigation/screens/MyTicketsScreen.tsx b/mobile/src/navigation/screens/MyTicketsScreen.tsx
+index 7b53693a044b48bd9fdfb93149832e69600032d5..fa5f94d85a5612e9fec22fe43ac4c973955bae91 100644
+--- a/mobile/src/navigation/screens/MyTicketsScreen.tsx
++++ b/mobile/src/navigation/screens/MyTicketsScreen.tsx
+@@ -64,51 +64,51 @@ export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
+     return (
+       <Screen>
+         <View style={styles.stateWrap}>
+           <Text style={styles.stateTitle}>No tickets yet</Text>
+           <Text style={styles.stateText}>When you buy tickets, they will appear in your wallet.</Text>
+         </View>
+       </Screen>
+     );
+   }
+ 
+   return (
+     <Screen padded={false}>
+       <FlatList
+         data={[{ key: 'Upcoming', items: grouped.upcoming }, { key: 'Past', items: grouped.past }]}
+         keyExtractor={(item) => item.key}
+         contentContainerStyle={styles.listContent}
+         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadTickets(true)} tintColor={theme.colors.primary} />}
+         renderItem={({ item }) => (
+           <View>
+             {item.items.length > 0 && <Text style={styles.sectionTitle}>{item.key}</Text>}
+             {item.items.map((ticket) => (
+               <Pressable key={ticket.id} style={styles.card} onPress={() => onOpenTicket(ticket.id)}>
+                 <View style={styles.row}><Text style={styles.title}>{ticket.event.title}</Text><Text style={[styles.badge, ticket.display_status === 'active' ? styles.badgeActive : styles.badgeMuted]}>{statusLabel(ticket.display_status)}</Text></View>
+                 <Text style={styles.meta}>{formatDate(ticket.event.start_at)}</Text>
+                 <Text style={styles.meta}>{ticket.venue.name ?? ticket.venue.address_summary ?? 'Venue TBA'}</Text>
+-                <Text style={styles.meta}>{ticket.ticket_tier_name} • {ticket.ticket_code}</Text>
++                <Text style={styles.meta}>{ticket.ticket_tier_name} • {ticket.manual_code_display}</Text>
+                 <Text style={styles.link}>View Ticket</Text>
+               </Pressable>
+             ))}
+           </View>
+         )}
+       />
+     </Screen>
    );
  }
  
  const styles = StyleSheet.create({
-   container: { flex: 1, backgroundColor: theme.colors.background, padding: theme.spacing.lg, gap: theme.spacing.sm },
-   title: { color: theme.colors.textPrimary, fontSize: 24, fontWeight: '700' },
-   card: { backgroundColor: theme.colors.surface, borderRadius: theme.radius.md, padding: theme.spacing.md, gap: 6 },
-   name: { color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700' },
+   listContent: { padding: theme.spacing.lg, gap: theme.spacing.md },
+   sectionTitle: { color: theme.colors.textPrimary, fontWeight: '700', marginBottom: theme.spacing.sm, fontSize: theme.typography.body },
+   card: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.lg, padding: theme.spacing.md, gap: theme.spacing.xs, marginBottom: theme.spacing.sm },
+   row: { flexDirection: 'row', justifyContent: 'space-between', gap: theme.spacing.sm, alignItems: 'center' },
+   title: { color: theme.colors.textPrimary, fontWeight: '700', flex: 1 },
+   meta: { color: theme.colors.textSecondary, fontSize: theme.typography.caption },
+   link: { color: theme.colors.primary, fontWeight: '600', marginTop: theme.spacing.xs },
+   badge: { borderRadius: 999, paddingHorizontal: theme.spacing.sm, paddingVertical: 2, fontSize: theme.typography.caption, overflow: 'hidden' },
+   badgeActive: { backgroundColor: '#1f2c13', color: '#98e067' },
+   badgeMuted: { backgroundColor: '#2a2a2a', color: theme.colors.textSecondary },
+   stateWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: theme.spacing.md, padding: theme.spacing.lg },
+   stateTitle: { color: theme.colors.textPrimary, fontWeight: '700', fontSize: theme.typography.heading },
+   stateText: { color: theme.colors.textSecondary, textAlign: 'center' },
+   errorText: { color: theme.colors.error, textAlign: 'center' },
+diff --git a/mobile/src/navigation/screens/TicketDetailScreen.tsx b/mobile/src/navigation/screens/TicketDetailScreen.tsx
+index 02aaf62f5bd196d7e196d29f036ddbc9359bfe3f..f977c607df05013eaffd4c7c7979be939320cccd 100644
+--- a/mobile/src/navigation/screens/TicketDetailScreen.tsx
++++ b/mobile/src/navigation/screens/TicketDetailScreen.tsx
+@@ -1,65 +1,77 @@
+ import { useEffect, useState } from 'react';
+ import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
+ 
+ import { ApiError } from '../../api/client';
+ import { WalletTicketDetail, getMyTicket, getMyTicketQr } from '../../api/tickets';
+ import { Screen } from '../../components/Screen';
+ import { theme } from '../../theme';
+ 
+ type TicketDetailScreenProps = {
+   ticketId: number;
+ };
+ 
+ function formatDate(iso: string): string {
+   return new Intl.DateTimeFormat(undefined, { dateStyle: 'full', timeStyle: 'short' }).format(new Date(iso));
+ }
+ 
++function formatManualCode(code: string): string {
++  const digits = code.replace(/^ADM-/i, '');
++  return `ADM - ${digits}`;
++}
++
+ export function TicketDetailScreen({ ticketId }: TicketDetailScreenProps) {
+   const [ticket, setTicket] = useState<WalletTicketDetail | null>(null);
+   const [qrDataUri, setQrDataUri] = useState<string | null>(null);
+   const [error, setError] = useState<string | null>(null);
+ 
+   useEffect(() => {
+     Promise.all([getMyTicket(ticketId), getMyTicketQr(ticketId)])
+       .then(([ticketData, qrData]) => {
+         setTicket(ticketData);
+         setQrDataUri(qrData.qr_data_uri);
+       })
+       .catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load ticket.'));
+   }, [ticketId]);
+ 
+   if (error) return <Screen><View style={styles.stateWrap}><Text style={styles.error}>{error}</Text></View></Screen>;
+   if (!ticket) return <Screen><View style={styles.stateWrap}><ActivityIndicator color={theme.colors.primary} /></View></Screen>;
+ 
+   return (
+     <Screen>
+       <View style={styles.container}>
+         <Text style={styles.title}>{ticket.event.title}</Text>
+         <Text style={styles.meta}>{formatDate(ticket.event.start_at)}</Text>
+         <Text style={styles.meta}>{ticket.venue.name ?? ticket.venue.address_summary ?? 'Venue TBA'}</Text>
+-        <Text style={styles.meta}>Ticket: {ticket.ticket_tier_name} • {ticket.ticket_code}</Text>
++        <Text style={styles.meta}>Ticket: {ticket.ticket_tier_name}</Text>
++        <View style={styles.manualCodeWrap}>
++          <Text style={styles.manualCodeLabel}>Check-in Code</Text>
++          <Text style={styles.manualCode}>{ticket.manual_code_display || formatManualCode(ticket.manual_code)}</Text>
++        </View>
+         <Text style={styles.meta}>Status: {ticket.display_status}</Text>
+ 
+         {ticket.can_display_entry_code && qrDataUri ? (
+           <View style={styles.qrWrap}>
+             <Image source={{ uri: qrDataUri }} style={styles.qr} />
+-            <Text style={styles.helper}>Present this code at entry.</Text>
++            <Text style={styles.helper}>Present this QR code at entry. Scanner not working? Give staff your check-in code.</Text>
+           </View>
+         ) : (
+           <Text style={styles.helper}>Entry code unavailable for this ticket.</Text>
+         )}
+       </View>
+     </Screen>
+   );
+ }
+ 
+ const styles = StyleSheet.create({
+   container: { gap: theme.spacing.sm },
+   title: { color: theme.colors.textPrimary, fontSize: theme.typography.heading, fontWeight: '700' },
    meta: { color: theme.colors.textSecondary },
--  button: { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.md, padding: theme.spacing.md },
-+  sectionLabel: { color: theme.colors.textSecondary, fontSize: 13, fontWeight: '700', marginTop: theme.spacing.sm },
-+  button: {
-+    backgroundColor: theme.colors.surface,
-+    borderColor: theme.colors.border,
-+    borderWidth: 1,
-+    borderRadius: theme.radius.md,
-+    padding: theme.spacing.md,
-+    flexDirection: 'row',
-+    alignItems: 'center',
-+    justifyContent: 'space-between',
-+    gap: theme.spacing.sm,
-+  },
-   buttonText: { color: theme.colors.textPrimary, fontWeight: '600' },
-+  chevron: { color: '#B8B1A1', fontSize: 18, fontWeight: '600', lineHeight: 18 },
-   signOut: { marginTop: theme.spacing.md },
-   signOutText: { color: theme.colors.primary, fontWeight: '700' },
++  manualCodeWrap: { marginVertical: theme.spacing.md, alignItems: 'center', gap: theme.spacing.xs, backgroundColor: theme.colors.surface, borderRadius: theme.radius.lg, borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing.lg },
++  manualCodeLabel: { color: theme.colors.textSecondary, fontSize: 14, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8 },
++  manualCode: { color: theme.colors.textPrimary, fontSize: 30, fontWeight: '800', letterSpacing: 1.2 },
+   qrWrap: { marginTop: theme.spacing.lg, alignItems: 'center', gap: theme.spacing.sm, backgroundColor: theme.colors.surface, borderRadius: theme.radius.lg, borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing.lg },
+   qr: { width: 220, height: 220, borderRadius: theme.radius.sm, backgroundColor: '#fff' },
+   helper: { color: theme.colors.textSecondary, textAlign: 'center' },
+   stateWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
    error: { color: theme.colors.error },
  });
  

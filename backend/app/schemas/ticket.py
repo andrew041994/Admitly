@@ -15,6 +15,8 @@ class TicketResponse(BaseModel):
     ticket_tier_id: int
     status: str
     ticket_code: str
+    manual_code: str
+    manual_code_display: str
     display_code: str | None = None
     qr_payload: str
     public_ticket_url: str
@@ -99,6 +101,8 @@ class TicketCheckInValidateResponse(BaseModel):
     message: str
     ticket_id: int | None
     ticket_code: str | None
+    manual_code: str | None = None
+    manual_code_display: str | None = None
     event_id: int
     checked_in_at: datetime | None
 

@@ -86,7 +86,7 @@ export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
                 <View style={styles.row}><Text style={styles.title}>{ticket.event.title}</Text><Text style={[styles.badge, ticket.display_status === 'active' ? styles.badgeActive : styles.badgeMuted]}>{statusLabel(ticket.display_status)}</Text></View>
                 <Text style={styles.meta}>{formatDate(ticket.event.start_at)}</Text>
                 <Text style={styles.meta}>{ticket.venue.name ?? ticket.venue.address_summary ?? 'Venue TBA'}</Text>
-                <Text style={styles.meta}>{ticket.ticket_tier_name} • {ticket.ticket_code}</Text>
+                <Text style={styles.meta}>{ticket.ticket_tier_name} • {ticket.manual_code_display}</Text>
                 <Text style={styles.link}>View Ticket</Text>
               </Pressable>
             ))}

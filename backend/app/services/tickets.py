@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
@@ -165,8 +166,52 @@ def _is_scan_within_event_window(*, event: Event, now: datetime) -> bool:
     return allowed_start <= local_now <= local_end_at
 
 
+MANUAL_CODE_PREFIX = "ADM"
+MANUAL_CODE_RE = re.compile(r"^(?:ADM(?:\s*-?\s*)?)?(\d{6})$", re.IGNORECASE)
+
+
+class InvalidManualCodeError(TicketError):
+    """Raised when a manual check-in code cannot be normalized."""
+
+
+def format_manual_code_display(manual_code: str | None) -> str | None:
+    if not manual_code:
+        return None
+    prefix, sep, digits = manual_code.partition("-")
+    if sep and prefix.upper() == MANUAL_CODE_PREFIX and len(digits) == 6:
+        return f"{MANUAL_CODE_PREFIX} - {digits}"
+    return manual_code
+
+
+def normalize_manual_code(value: str | None) -> str:
+    raw = (value or "").strip()
+    match = MANUAL_CODE_RE.fullmatch(raw)
+    if not match:
+        raise InvalidManualCodeError("Invalid manual code format.")
+    return f"{MANUAL_CODE_PREFIX}-{match.group(1)}"
+
+
 def _generate_ticket_code() -> str:
     return secrets.token_urlsafe(24)
+
+
+def _generate_manual_code() -> str:
+    return f"{MANUAL_CODE_PREFIX}-{secrets.randbelow(1_000_000):06d}"
+
+
+def _issue_manual_code(db: Session, *, event_id: int, reserved: set[str] | None = None) -> str:
+    reserved = reserved if reserved is not None else set()
+    for _ in range(10):
+        manual_code = _generate_manual_code()
+        if manual_code in reserved:
+            continue
+        existing = db.execute(
+            select(Ticket.id).where(Ticket.event_id == event_id, Ticket.manual_code == manual_code)
+        ).scalar_one_or_none()
+        if existing is None:
+            reserved.add(manual_code)
+            return manual_code
+    raise TicketIssuanceError("Unable to generate a unique manual ticket code.")
 
 
 def _issue_ticket_qr_fields(db: Session) -> tuple[str, str, datetime]:
@@ -294,10 +339,12 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
 
     now = get_guyana_now()
     tickets_to_create: list[Ticket] = []
+    reserved_manual_codes: set[str] = set()
     for item in order_items:
         for _ in range(item.quantity):
             ticket_code = _generate_ticket_code()
             qr_token, display_code, qr_generated_at = _issue_ticket_qr_fields(db)
+            manual_code = _issue_manual_code(db, event_id=locked_order.event_id, reserved=reserved_manual_codes)
             tickets_to_create.append(
                 Ticket(
                     order_id=locked_order.id,
@@ -309,6 +356,7 @@ def issue_tickets_for_completed_order(db: Session, order: Order) -> list[Ticket]
                     ticket_tier_id=item.ticket_tier_id,
                     status=TicketStatus.ISSUED,
                     ticket_code=ticket_code,
+                    manual_code=manual_code,
                     display_code=display_code,
                     qr_token=qr_token,
                     qr_generated_at=qr_generated_at,
@@ -860,6 +908,34 @@ def get_ticket_by_qr_payload(db: Session, *, qr_payload: str) -> Ticket | None:
 
 
 
+
+def _lookup_ticket_for_check_in(db: Session, *, lookup: str, event_id: int | None = None, for_update: bool = False):
+    manual_code: str | None = None
+    try:
+        manual_code = normalize_manual_code(lookup)
+    except InvalidManualCodeError:
+        manual_code = None
+
+    if manual_code is not None:
+        if event_id is None:
+            return None
+        stmt = select(Ticket).where(Ticket.event_id == event_id, Ticket.manual_code == manual_code)
+        if for_update:
+            stmt = stmt.with_for_update()
+        return db.execute(stmt).scalars().first()
+
+    conditions = [
+        Ticket.ticket_code == lookup,
+        Ticket.qr_payload == lookup,
+        Ticket.qr_token == lookup,
+        Ticket.display_code == lookup,
+    ]
+
+    stmt = select(Ticket).where(or_(*conditions))
+    if for_update:
+        stmt = stmt.with_for_update()
+    return db.execute(stmt).scalars().first()
+
 def _is_event_admittable(event: Event | None) -> bool:
     if event is None:
         return False
@@ -1021,16 +1097,37 @@ def validate_ticket_for_check_in(
         db.flush()
         return result
 
-    ticket = (
-        db.execute(
-            select(Ticket)
-            .options(joinedload(Ticket.event), joinedload(Ticket.order))
-            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
+    manual_lookup = False
+    try:
+        normalize_manual_code(lookup)
+        manual_lookup = True
+    except InvalidManualCodeError:
+        manual_lookup = False
+
+    if manual_lookup and not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
+        result = TicketCheckInValidationResult(
+            valid=False,
+            status=CHECK_IN_STATUS_UNAUTHORIZED,
+            message="Not authorized to check in tickets for this event.",
+            event_id=event_id,
+            reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
         )
-        .unique()
-        .scalars()
-        .first()
-    )
+        _record_check_in_attempt(
+            db,
+            event_id=event_id,
+            actor_user_id=actor_user_id,
+            ticket=None,
+            result_code=result.status,
+            reason_code=result.reason_code,
+            reason_message=result.message,
+            method="validate",
+        )
+        db.flush()
+        return result
+
+    ticket = _lookup_ticket_for_check_in(db, lookup=lookup, event_id=event_id)
+    if ticket is not None:
+        db.refresh(ticket, attribute_names=["event", "order"])
     if ticket is None:
         result = TicketCheckInValidationResult(
             valid=False,
@@ -1105,12 +1202,19 @@ def check_in_ticket(
         db.flush()
         return result
 
-    lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
+    raw_lookup = ticket_code or qr_payload
+    try:
+        lookup = normalize_manual_code(raw_lookup) if method == CHECK_IN_METHOD_MANUAL else extract_ticket_lookup_value(raw_lookup)
+    except InvalidManualCodeError:
+        lookup = ""
+        invalid_message = "Invalid manual code format."
+    else:
+        invalid_message = "A ticket code or QR payload is required."
     if not lookup:
         result = TicketCheckInValidationResult(
             valid=False,
             status=CHECK_IN_STATUS_INVALID,
-            message="A ticket code or QR payload is required.",
+            message=invalid_message,
             event_id=event_id,
             reason_code=CHECK_IN_STATUS_INVALID,
         )
@@ -1127,15 +1231,7 @@ def check_in_ticket(
         db.flush()
         return result
 
-    ticket = (
-        db.execute(
-            select(Ticket)
-            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
-            .with_for_update()
-        )
-        .scalars()
-        .first()
-    )
+    ticket = _lookup_ticket_for_check_in(db, lookup=lookup, event_id=event_id, for_update=True)
     if ticket is None:
         result = TicketCheckInValidationResult(
             valid=False,
@@ -1250,15 +1346,7 @@ def override_ticket_check_in(
     if not lookup:
         raise TicketNotFoundError("A ticket code or QR payload is required.")
 
-    ticket = (
-        db.execute(
-            select(Ticket)
-            .where(or_(Ticket.ticket_code == lookup, Ticket.qr_payload == lookup, Ticket.qr_token == lookup, Ticket.display_code == lookup))
-            .with_for_update()
-        )
-        .scalars()
-        .first()
-    )
+    ticket = _lookup_ticket_for_check_in(db, lookup=lookup, event_id=event_id, for_update=True)
     if ticket is None:
         _record_check_in_attempt(
             db,

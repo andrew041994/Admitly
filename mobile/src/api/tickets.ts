@@ -3,6 +3,8 @@ import { apiRequest } from './client';
 export type WalletTicketCard = {
   id: number;
   ticket_code: string;
+  manual_code: string;
+  manual_code_display: string;
   ticket_status: string;
   display_status: 'active' | 'used' | 'invalid' | string;
   is_valid_for_entry: boolean;
