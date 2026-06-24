@@ -170,6 +170,17 @@ MANUAL_CODE_PREFIX = "ADM"
 MANUAL_CODE_RE = re.compile(r"^(?:ADM(?:\s*-?\s*)?)?(\d{6})$", re.IGNORECASE)
 
 
+def _looks_like_manual_code_attempt(raw: str | None) -> bool:
+    value = (raw or "").strip()
+    compact = re.sub(r"\s+", "", value)
+    upper_compact = compact.upper()
+    return (
+        upper_compact.startswith(MANUAL_CODE_PREFIX)
+        or (value.isdigit() and len(value) != 6)
+        or (MANUAL_CODE_PREFIX in upper_compact and not MANUAL_CODE_RE.fullmatch(value))
+    )
+
+
 class InvalidManualCodeError(TicketError):
     """Raised when a manual check-in code cannot be normalized."""
 
@@ -1203,12 +1214,20 @@ def check_in_ticket(
         return result
 
     raw_lookup = ticket_code or qr_payload
-    try:
-        lookup = normalize_manual_code(raw_lookup) if method == CHECK_IN_METHOD_MANUAL else extract_ticket_lookup_value(raw_lookup)
-    except InvalidManualCodeError:
-        lookup = ""
-        invalid_message = "Invalid manual code format."
+    manual_lookup = False
+    if method == CHECK_IN_METHOD_MANUAL:
+        try:
+            lookup = normalize_manual_code(raw_lookup)
+            manual_lookup = True
+        except InvalidManualCodeError:
+            if _looks_like_manual_code_attempt(raw_lookup):
+                lookup = ""
+                invalid_message = "Invalid manual code format."
+            else:
+                lookup = extract_ticket_lookup_value(raw_lookup)
+                invalid_message = "A ticket code or QR payload is required."
     else:
+        lookup = extract_ticket_lookup_value(raw_lookup)
         invalid_message = "A ticket code or QR payload is required."
     if not lookup:
         result = TicketCheckInValidationResult(
@@ -1231,7 +1250,12 @@ def check_in_ticket(
         db.flush()
         return result
 
-    ticket = _lookup_ticket_for_check_in(db, lookup=lookup, event_id=event_id, for_update=True)
+    ticket = _lookup_ticket_for_check_in(
+        db,
+        lookup=lookup,
+        event_id=event_id if method == CHECK_IN_METHOD_MANUAL or manual_lookup else None,
+        for_update=True,
+    )
     if ticket is None:
         result = TicketCheckInValidationResult(
             valid=False,
