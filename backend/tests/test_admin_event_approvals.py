@@ -93,12 +93,28 @@ def test_discovery_excludes_pending_and_includes_after_admin_approval(db_session
 
     pending = _seed_event(db_session, slug="discover-pending-event", title="Needs Approval", approval_status=EventApprovalStatus.PENDING)
 
-    before = discover_events(db=db_session, _user_id=viewer.id)
+    before = discover_events(
+        q=None,
+        category=None,
+        city=None,
+        date_bucket=None,
+        is_free=None,
+        db=db_session,
+        _user_id=viewer.id,
+    )
     assert all(item.id != pending.id for item in before)
 
     approve_event_for_discovery(event_id=pending.id, db=db_session, user_id=admin.id)
 
-    after = discover_events(db=db_session, _user_id=viewer.id)
+    after = discover_events(
+        q=None,
+        category=None,
+        city=None,
+        date_bucket=None,
+        is_free=None,
+        db=db_session,
+        _user_id=viewer.id,
+    )
     assert any(item.id == pending.id for item in after)
 
 

@@ -26,7 +26,7 @@ from tests.utils import unique_email
 
 
 def _seed_reporting_data(db: Session):
-    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
 
     organizer_user = User(email=unique_email("organizer"), full_name="Organizer")
     unrelated_user = User(email=unique_email("viewer"), full_name="Viewer")

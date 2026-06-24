@@ -46,10 +46,19 @@ def test_dev_test_checkout_handler_returns_payload_when_enabled(monkeypatch) -> 
     monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
     monkeypatch.setattr("app.api.orders.complete_dev_test_checkout_for_order", _fake_complete_checkout)
 
+    class _FakeDb:
+        def __init__(self) -> None:
+            self.commit_calls = 0
+
+        def commit(self) -> None:
+            self.commit_calls += 1
+
+    db = _FakeDb()
+
     try:
         response = complete_dev_test_checkout(
             order_id=77,
-            db=object(),
+            db=db,
             current_user=SimpleNamespace(id=123),
             client_ip="127.0.0.1",
         )
@@ -57,6 +66,7 @@ def test_dev_test_checkout_handler_returns_payload_when_enabled(monkeypatch) -> 
         settings.enable_dev_test_checkout = previous_enabled
         settings.env = previous_env
 
+    assert db.commit_calls == 1
     assert response.order_id == 77
     assert response.provider == "dev_test"
     assert response.payment_reference == "pay-ref-77"
