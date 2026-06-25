@@ -14,6 +14,27 @@ export type EventTicketTier = {
 
 export type PurchaseSelectionItem = { ticket_tier_id: number; quantity: number };
 
+export type EventEndedDetail = {
+  code: 'EVENT_ENDED';
+  event_id: number;
+  event_title: string;
+  event_end_at: string;
+  server_now: string;
+  message: string;
+};
+
+export type StartedEventConfirmationDetail = {
+  code: 'EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED';
+  event_id: number;
+  event_title: string;
+  event_start_at: string;
+  event_end_at: string;
+  server_now: string;
+  seconds_until_event_end: number;
+  human_readable_time_remaining: string;
+  message: string;
+};
+
 export type OrderItem = { id: number; ticket_tier_id: number; quantity: number; unit_price: number };
 
 export type Order = {
@@ -62,8 +83,16 @@ export type DevTestCheckoutResponse = {
   message: string;
 };
 
-export async function createOrderFromSelection(eventId: number, items: PurchaseSelectionItem[]): Promise<Order> {
-  return apiRequest<Order>({ path: '/orders', method: 'POST', body: JSON.stringify({ event_id: eventId, items }) });
+export async function createOrderFromSelection(
+  eventId: number,
+  items: PurchaseSelectionItem[],
+  acknowledgeStartedEvent = false,
+): Promise<Order> {
+  return apiRequest<Order>({
+    path: '/orders',
+    method: 'POST',
+    body: JSON.stringify({ event_id: eventId, items, acknowledge_started_event: acknowledgeStartedEvent }),
+  });
 }
 
 export async function initiateMmgCheckout(orderId: number): Promise<MmgCheckoutResponse> {

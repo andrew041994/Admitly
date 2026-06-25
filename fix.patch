@@ -1,129 +1,1383 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/tests/test_admin_event_approvals.py b/backend/tests/test_admin_event_approvals.py
-index 795b6fa82d29177892cd75e1a81538ca6d19df83..d9ce431437c26dfcb1090c8e55ecddf1d4f3c5de 100644
---- a/backend/tests/test_admin_event_approvals.py
-+++ b/backend/tests/test_admin_event_approvals.py
-@@ -1,79 +1,83 @@
+diff --git a/backend/app/api/orders.py b/backend/app/api/orders.py
+index 0abfb2cc5c8633c1606f931e98e4cc84b983b247..033342d73ea7cc2f2f1a8f956ce117ec72f327af 100644
+--- a/backend/app/api/orders.py
++++ b/backend/app/api/orders.py
+@@ -1,30 +1,38 @@
++from datetime import datetime, timezone
++
+ from fastapi import APIRouter, Depends, HTTPException, status
+ from sqlalchemy.orm import Session
+ from app.models.user import User
+-from app.services.ticket_holds import create_ticket_hold
++from app.services.ticket_holds import (
++    InsufficientAvailabilityError,
++    TicketHoldError,
++    TicketHoldWindowClosedError,
++    create_ticket_hold,
++)
+ from app.models.event import Event
++from app.models.enums import EventApprovalStatus, EventStatus
+ from app.models.ticket_tier import TicketTier
+ from sqlalchemy import select
+ 
+ from app.api.rate_limit import apply_rate_limit, request_client_ip
+ from app.api.auth import get_current_user
+ from app.api.ticket_holds import get_current_user_id
+ from app.core.config import settings
+ from app.db.session import get_db
+ from app.schemas.mmg import (
+     CompleteDevTestCheckoutResponse,
+     CreateOrderMMGAgentResponse,
+     CreateOrderMMGCheckoutResponse,
+     CompleteMMGAgentPaymentRequest,
+     CompleteMMGAgentPaymentResponse,
+ )
+ from app.schemas.notification import NotificationDispatchResponse
+ from app.schemas.order import (
+     CreateOrderFromSelectionRequest,
+     CreatePendingOrderFromHoldsRequest,
+     OrderCancelRequest,
+     OrderItemResponse,
+     OrderRefundRequest,
+     OrderResponse,
+ )
+ from app.services.orders import (
+@@ -93,133 +101,210 @@ def _to_order_response(order) -> OrderResponse:
+         refund_status=order.refund_status,
+         cancelled_at=order.cancelled_at,
+         cancelled_by_user_id=order.cancelled_by_user_id,
+         cancel_reason=order.cancel_reason,
+         refunded_at=order.refunded_at,
+         refunded_by_user_id=order.refunded_by_user_id,
+         refund_reason=order.refund_reason,
+         created_at=order.created_at,
+         reference_code=order.reference_code,
+         payment_method=order.payment_method,
+         payment_verification_status=order.payment_verification_status,
+         updated_at=order.updated_at,
+         items=[
+             OrderItemResponse(
+                 id=item.id,
+                 ticket_tier_id=item.ticket_tier_id,
+                 quantity=item.quantity,
+                 unit_price=float(item.unit_price),
+             )
+             for item in order.order_items
+         ],
+     )
+ 
+ 
+ 
++def _to_aware_datetime(value: datetime) -> datetime:
++    if value.tzinfo is None:
++        return value.replace(tzinfo=timezone.utc)
++    return value
++
++
++def _format_time_remaining(seconds: int) -> str:
++    seconds = max(0, seconds)
++    hours, remainder = divmod(seconds, 3600)
++    minutes, remaining_seconds = divmod(remainder, 60)
++    parts: list[str] = []
++    if hours:
++        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
++    if minutes:
++        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
++    if not parts:
++        parts.append(f"{remaining_seconds} second{'s' if remaining_seconds != 1 else ''}")
++    return " and ".join(parts)
++
++
++def _event_ended_detail(event: Event, now: datetime) -> dict:
++    return {
++        "code": "EVENT_ENDED",
++        "message": "This event has ended and tickets are no longer available.",
++        "event_id": event.id,
++        "event_title": event.title,
++        "event_end_at": _to_aware_datetime(event.end_at).isoformat(),
++        "server_now": now.isoformat(),
++    }
++
++
++def _event_not_sellable_detail(event: Event) -> dict:
++    return {
++        "code": "EVENT_NOT_SELLABLE",
++        "message": "This event is not currently available for ticket purchases.",
++        "event_id": event.id,
++        "event_title": event.title,
++    }
++
++
++def _started_event_confirmation_detail(event: Event, now: datetime) -> dict:
++    seconds_until_end = max(0, int((_to_aware_datetime(event.end_at) - now).total_seconds()))
++    time_remaining = _format_time_remaining(seconds_until_end)
++    return {
++        "code": "EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED",
++        "event_id": event.id,
++        "event_title": event.title,
++        "event_start_at": _to_aware_datetime(event.start_at).isoformat(),
++        "event_end_at": _to_aware_datetime(event.end_at).isoformat(),
++        "server_now": now.isoformat(),
++        "seconds_until_event_end": seconds_until_end,
++        "human_readable_time_remaining": time_remaining,
++        "message": f"This event has already started and ends in {time_remaining}. Do you want to continue buying tickets?",
++    }
++
+ 
+ @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
+ def create_order_from_selection(
+     payload: CreateOrderFromSelectionRequest,
+     db: Session = Depends(get_db),
+     current_user: User = Depends(get_current_user),
+     client_ip: str = Depends(request_client_ip),
+ ) -> OrderResponse:
+     apply_rate_limit(
+         scope="order_create",
+         key=f"{current_user.id}:{client_ip}",
+         limit=settings.rate_limit_order_create_count,
+         window_seconds=settings.rate_limit_order_create_window_seconds,
+     )
+ 
+     hold_ids: list[int] = []
++    reference_now = datetime.now(timezone.utc)
+     event = db.execute(select(Event).where(Event.id == payload.event_id)).scalar_one_or_none()
+     if event is None:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+ 
++    if (
++        event.status != EventStatus.PUBLISHED
++        or event.approval_status != EventApprovalStatus.APPROVED
++        or event.cancelled_at is not None
++    ):
++        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_event_not_sellable_detail(event))
++    if reference_now >= _to_aware_datetime(event.end_at):
++        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_event_ended_detail(event, reference_now))
++    if _to_aware_datetime(event.start_at) <= reference_now and not payload.acknowledge_started_event:
++        raise HTTPException(
++            status_code=status.HTTP_409_CONFLICT,
++            detail=_started_event_confirmation_detail(event, reference_now),
++        )
++
+     for item in payload.items:
+         tier = db.execute(select(TicketTier).where(TicketTier.id == item.ticket_tier_id)).scalar_one_or_none()
+         if tier is None or tier.event_id != payload.event_id:
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ticket tier selection.")
+         if item.quantity < tier.min_per_order or item.quantity > tier.max_per_order:
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ticket quantity is outside allowed range.")
+ 
+-        hold_result = create_ticket_hold(
+-            db,
+-            user_id=current_user.id,
+-            ticket_tier_id=item.ticket_tier_id,
+-            quantity=item.quantity,
+-        )
++        try:
++            hold_result = create_ticket_hold(
++                db,
++                user_id=current_user.id,
++                ticket_tier_id=item.ticket_tier_id,
++                quantity=item.quantity,
++                now=reference_now,
++            )
++        except InsufficientAvailabilityError as exc:
++            db.rollback()
++            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
++        except TicketHoldWindowClosedError as exc:
++            db.rollback()
++            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
++        except TicketHoldError as exc:
++            db.rollback()
++            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+         hold_ids.append(hold_result.hold.id)
+ 
+     order = create_pending_order_from_holds(db, user_id=current_user.id, hold_ids=hold_ids)
+     db.commit()
+     db.refresh(order)
+-    print("DATABASE_URL =", settings.database_url)
+-
+-    print("CREATED ORDER ID =", order.id)
+ 
+     return _to_order_response(order)
+ 
+ 
+ @router.post("/from-holds", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
+ def create_order_from_holds(
+     payload: CreatePendingOrderFromHoldsRequest,
+     db: Session = Depends(get_db),
+     current_user: User = Depends(get_current_user),
+     client_ip: str = Depends(request_client_ip),
+ ) -> OrderResponse:
+     apply_rate_limit(
+         scope="order_create",
+         key=f"{current_user.id}:{client_ip}",
+         limit=settings.rate_limit_order_create_count,
+         window_seconds=settings.rate_limit_order_create_window_seconds,
+     )
+     try:
+         order = create_pending_order_from_holds(
+             db,
+             user_id=current_user.id,
+             hold_ids=payload.hold_ids,
+             promo_code_text=payload.promo_code_text,
+         )
+         db.commit()
+         db.refresh(order)
+ 
+     except PromoCodeValidationError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+     except EmptyHoldSelectionError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+     except HoldNotFoundError as exc:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+     except HoldOwnershipError as exc:
+         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+     except HoldExpiredError as exc:
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+     except HoldAlreadyAttachedError as exc:
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+     except HoldEventMismatchError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+-    print("CREATED ORDER ID =", order.id)
+ 
+     return _to_order_response(order)
+ 
+ 
+ @router.get("/{order_id}", response_model=OrderResponse)
+ def get_order(
+     order_id: int,
+     db: Session = Depends(get_db),
+     current_user: User = Depends(get_current_user),
+ ) -> OrderResponse:
+     order = get_order_for_user(db, order_id=order_id, user_id=current_user.id)
+     if order is None:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found.")
+ 
+     return _to_order_response(order)
+ 
+ 
+ @router.post("/{order_id}/cancel", response_model=OrderResponse)
+ def cancel_order(
+     order_id: int,
+     payload: OrderCancelRequest,
+     db: Session = Depends(get_db),
+     current_user: User = Depends(get_current_user),
+ ) -> OrderResponse:
+     try:
+diff --git a/backend/app/schemas/order.py b/backend/app/schemas/order.py
+index d5c29bf5ac3f711e61b0501414e7c0413e9704d8..2615266b178da4dfa281f47ec431b137e509f338 100644
+--- a/backend/app/schemas/order.py
++++ b/backend/app/schemas/order.py
+@@ -38,30 +38,31 @@ class OrderResponse(BaseModel):
+     pricing_source: str | None = None
+     is_comp: bool | None = None
+     promo_code_text: str | None = None
+     currency: str
+     refund_status: str | None = None
+     cancelled_at: datetime | None = None
+     cancelled_by_user_id: int | None = None
+     cancel_reason: str | None = None
+     refunded_at: datetime | None = None
+     refunded_by_user_id: int | None = None
+     refund_reason: str | None = None
+     created_at: datetime
+     updated_at: datetime
+     reference_code: str
+     items: list[OrderItemResponse]
+ 
+ 
+ class TicketSelectionItemRequest(BaseModel):
+     ticket_tier_id: int
+     quantity: int = Field(gt=0)
+ 
+ 
+ class CreateOrderFromSelectionRequest(BaseModel):
+     event_id: int
+     items: list[TicketSelectionItemRequest] = Field(min_length=1)
++    acknowledge_started_event: bool = False
+ 
+ 
+ class OrderStatusResponse(OrderResponse):
+     payment_method: str | None = None
+     payment_verification_status: str | None = None
+diff --git a/backend/app/services/__init__.py b/backend/app/services/__init__.py
+index 84dbc6f7a41668dfbdb2612eed35f2ed63f97b3b..9440c4b155580482fa2b1bff2416a3e60c0d995d 100644
+--- a/backend/app/services/__init__.py
++++ b/backend/app/services/__init__.py
+@@ -1,63 +1,65 @@
+ from app.services.orders import (
+     EmptyHoldSelectionError,
+     HoldAlreadyAttachedError,
+     HoldEventMismatchError,
+     HoldExpiredError,
+     HoldNotFoundError,
+     HoldOwnershipError,
+     OrderFlowError,
+     OrderNotFoundError,
+     OrderNotPayableError,
+     complete_paid_order,
+     create_pending_order_from_holds,
+     get_order_for_user,
+     validate_order_still_payable,
+ )
+ from app.services.reminders import (
+     ReminderDispatchSummary,
+     dispatch_due_event_reminders,
+     run_event_reminder_dispatch_job,
+ )
+ from app.services.ticket_holds import (
+     HoldCreationResult,
++    EventEndedError,
+     InsufficientAvailabilityError,
+     TicketHoldError,
+     TicketHoldWindowClosedError,
+     TicketTierCapacitySummary,
+     calculate_ticket_hold_expiry,
+     create_ticket_hold,
+     get_event_ticket_tier_capacity_summaries,
+     get_guyana_now,
+     get_ticket_tier_capacity_summary,
+     get_ticket_type_availability,
+ )
+ 
+ __all__ = [
+     "ReminderDispatchSummary",
+     "dispatch_due_event_reminders",
+     "run_event_reminder_dispatch_job",
+     "HoldCreationResult",
++    "EventEndedError",
+     "InsufficientAvailabilityError",
+     "TicketHoldError",
+     "TicketHoldWindowClosedError",
+     "TicketTierCapacitySummary",
+     "calculate_ticket_hold_expiry",
+     "create_ticket_hold",
+     "get_event_ticket_tier_capacity_summaries",
+     "get_guyana_now",
+     "get_ticket_tier_capacity_summary",
+     "get_ticket_type_availability",
+     "OrderFlowError",
+     "OrderNotFoundError",
+     "OrderNotPayableError",
+     "EmptyHoldSelectionError",
+     "HoldNotFoundError",
+     "HoldOwnershipError",
+     "HoldExpiredError",
+     "HoldAlreadyAttachedError",
+     "HoldEventMismatchError",
+     "create_pending_order_from_holds",
+     "get_order_for_user",
+     "validate_order_still_payable",
+     "complete_paid_order",
+ ]
+diff --git a/backend/app/services/ticket_holds.py b/backend/app/services/ticket_holds.py
+index 8ce3d3ad4fd74834b89be12dc4e4be96457aa75f..9d355cb0b451897fc32d8cb3c3a248dcd34121bb 100644
+--- a/backend/app/services/ticket_holds.py
++++ b/backend/app/services/ticket_holds.py
+@@ -1,92 +1,101 @@
  from __future__ import annotations
  
--from datetime import datetime, timedelta, timezone
-+from datetime import datetime, timedelta
-+from zoneinfo import ZoneInfo
+ from dataclasses import dataclass
+ from datetime import datetime, time, timedelta, timezone
+ from zoneinfo import ZoneInfo
  
- from sqlalchemy import select
+ from sqlalchemy import func, select
  from sqlalchemy.orm import Session
  
- from app.api.events import approve_event_for_discovery, discover_events, list_pending_event_approvals
  from app.models.event import Event
- from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility
- from app.models.organizer_profile import OrganizerProfile
- from app.models.user import User
- from app.models.venue import Venue
+ from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus
+ from app.models.order import Order
+ from app.models.order_item import OrderItem
+ from app.models.ticket_hold import TicketHold
+ from app.models.ticket_tier import TicketTier
+ 
+ GUYANA_TZ = ZoneInfo("America/Guyana")
  
  
-+GUYANA_TZ = ZoneInfo("America/Guyana")
+ class TicketHoldError(ValueError):
+     """Base business-rule error for ticket holds."""
+ 
+ 
+ class TicketHoldWindowClosedError(TicketHoldError):
+-    """Raised when event start is inside hold restriction window."""
++    """Raised when ticket holds are unavailable for event timing rules."""
 +
 +
- def _seed_event(
++class EventEndedError(TicketHoldWindowClosedError):
++    """Raised when attempting to hold tickets after an event has ended."""
+ 
+ 
+ class InsufficientAvailabilityError(TicketHoldError):
+     """Raised when requested ticket quantity exceeds current availability."""
+ 
+ 
+ @dataclass(slots=True)
+ class HoldCreationResult:
+     hold: TicketHold
+     availability_remaining: int
+ 
+ 
+ @dataclass(slots=True, frozen=True)
+ class TicketTierCapacitySummary:
+     ticket_tier_id: int
+     total_capacity: int
+     committed_quantity: int
+     active_hold_quantity: int
+     available_quantity: int
+ 
+ 
+ def _to_aware(dt: datetime) -> datetime:
+     if dt.tzinfo is None:
+         return dt.replace(tzinfo=timezone.utc)
+     return dt
+ 
+ 
+ def get_guyana_now() -> datetime:
+     return datetime.now(tz=GUYANA_TZ)
+ 
+ 
+-def calculate_ticket_hold_expiry(event_starts_at: datetime, now: datetime | None = None) -> datetime:
++def calculate_ticket_hold_expiry(
++    event_starts_at: datetime,
++    now: datetime | None = None,
++    event_ends_at: datetime | None = None,
++) -> datetime:
+     current = _to_aware(now) if now is not None else get_guyana_now()
+     current_guyana = current.astimezone(GUYANA_TZ)
+-    event_start_guyana = _to_aware(event_starts_at).astimezone(GUYANA_TZ)
+ 
+-    if event_start_guyana <= current_guyana + timedelta(hours=8):
+-        raise TicketHoldWindowClosedError(
+-            "Ticket holds are not allowed within 8 hours of event start."
+-        )
++    if event_ends_at is not None:
++        event_end_guyana = _to_aware(event_ends_at).astimezone(GUYANA_TZ)
++        if current_guyana >= event_end_guyana:
++            raise EventEndedError("Ticket holds are not allowed after an event has ended.")
++        return min(current_guyana + timedelta(hours=48), event_end_guyana)
+ 
+-    return min(current_guyana + timedelta(hours=48), event_start_guyana - timedelta(hours=8))
++    event_start_guyana = _to_aware(event_starts_at).astimezone(GUYANA_TZ)
++    return current_guyana + timedelta(hours=48) if event_start_guyana <= current_guyana else min(current_guyana + timedelta(hours=48), event_start_guyana)
+ 
+ 
+ def get_ticket_tier_capacity_summary(
      db: Session,
      *,
-     slug: str,
-     title: str,
-     approval_status: EventApprovalStatus,
-     status: EventStatus = EventStatus.PUBLISHED,
-     cancelled_at: datetime | None = None,
- ) -> Event:
--    now = datetime(2026, 4, 10, tzinfo=timezone.utc)
-+    now = datetime.now(GUYANA_TZ).replace(microsecond=0)
-     organizer_user = User(email=f"org-{slug}@test.local", full_name="Organizer")
-     db.add(organizer_user)
+     ticket_tier_id: int,
+     now: datetime | None = None,
+ ) -> TicketTierCapacitySummary:
+     reference_now = _to_aware(now) if now is not None else get_guyana_now()
+     if now is None:
+         reference_now = datetime.combine(reference_now.date(), time.min, tzinfo=reference_now.tzinfo)
+ 
+     ticket_tier = db.execute(select(TicketTier).where(TicketTier.id == ticket_tier_id)).scalar_one_or_none()
+     if ticket_tier is None:
+         raise TicketHoldError("Ticket tier not found.")
+ 
+     committed_quantity = (
+         db.execute(
+             select(func.coalesce(func.sum(OrderItem.quantity), 0))
+             .join(Order, Order.id == OrderItem.order_id)
+             .where(OrderItem.ticket_tier_id == ticket_tier_id, Order.status == OrderStatus.COMPLETED)
+         ).scalar_one()
+         or 0
+     )
+     active_hold_quantity = (
+@@ -141,47 +150,51 @@ def create_ticket_hold(
+     *,
+     user_id: int,
+     ticket_tier_id: int,
+     quantity: int,
+     now: datetime | None = None,
+ ) -> HoldCreationResult:
+     if quantity <= 0:
+         raise TicketHoldError("Quantity must be greater than 0.")
+ 
+     reference_now = _to_aware(now) if now is not None else get_guyana_now()
+ 
+     ticket_tier = db.execute(
+         select(TicketTier)
+         .where(TicketTier.id == ticket_tier_id)
+         .with_for_update()
+     ).scalar_one_or_none()
+ 
+     if ticket_tier is None:
+         raise TicketHoldError("Ticket tier not found.")
+ 
+     event = db.execute(select(Event).where(Event.id == ticket_tier.event_id)).scalar_one_or_none()
+     if event is None:
+         raise TicketHoldError("Event not found.")
+     if not ticket_tier.is_active:
+         raise TicketHoldError("Ticket tier is not active.")
++    if event.status == EventStatus.CANCELLED or event.cancelled_at is not None:
++        raise TicketHoldError("Event has been cancelled.")
+     if event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
+         raise TicketHoldError("Event is not currently sellable.")
++    if reference_now >= _to_aware(event.end_at):
++        raise EventEndedError("Ticket holds are not allowed after an event has ended.")
+ 
+     availability_summary = get_ticket_tier_capacity_summary(db, ticket_tier_id=ticket_tier_id, now=reference_now)
+     availability = availability_summary.available_quantity
+     if quantity > availability:
+         raise InsufficientAvailabilityError("Insufficient availability for requested quantity.")
+ 
+-    expires_at = calculate_ticket_hold_expiry(event.start_at, now=reference_now)
++    expires_at = calculate_ticket_hold_expiry(event.start_at, now=reference_now, event_ends_at=event.end_at)
+ 
+     hold = TicketHold(
+         event_id=event.id,
+         ticket_tier_id=ticket_tier.id,
+         user_id=user_id,
+         quantity=quantity,
+         expires_at=expires_at,
+     )
+     db.add(hold)
      db.flush()
  
-     organizer = OrganizerProfile(
-         user_id=organizer_user.id,
-         business_name="Organizer Biz",
-         display_name="Organizer Biz",
-     )
+     db.refresh(hold)
+     return HoldCreationResult(hold=hold, availability_remaining=availability - quantity)
+diff --git a/backend/tests/test_orders_api.py b/backend/tests/test_orders_api.py
+index 9ced20760e4a16528e5c5b52350d05e28f9597da..f254433318e70f42232694f41b51dfd17abd9ffd 100644
+--- a/backend/tests/test_orders_api.py
++++ b/backend/tests/test_orders_api.py
+@@ -1,34 +1,40 @@
+ import os
++from datetime import datetime, timedelta, timezone
++from decimal import Decimal
+ from types import SimpleNamespace
+ 
+ import pytest
+ from fastapi import HTTPException
+ 
+-from app.api.orders import complete_dev_test_checkout
++from app.api.orders import _started_event_confirmation_detail, create_order_from_selection, complete_dev_test_checkout
+ from app.core.config import settings
+ from app.main import app
++from app.models import Event, OrganizerProfile, TicketTier, User, Venue
++from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
++from app.schemas.order import CreateOrderFromSelectionRequest, TicketSelectionItemRequest
++from tests.utils import unique_email
+ 
+ 
+ def test_dev_test_checkout_route_registered() -> None:
+     route_paths = {route.path for route in app.routes}
+ 
+     assert "/orders/{order_id}/payments/dev-test/complete" in route_paths
+ 
+ 
+ def test_dev_test_checkout_route_is_post_and_defaults_to_http_200() -> None:
+     target_route = next(route for route in app.routes if route.path == "/orders/{order_id}/payments/dev-test/complete")
+ 
+     assert "POST" in target_route.methods
+     assert target_route.status_code is None
+ 
+ 
+ def test_dev_test_checkout_handler_returns_payload_when_enabled(monkeypatch) -> None:
+     previous_enabled = settings.enable_dev_test_checkout
+     previous_env = settings.env
+ 
+     settings.enable_dev_test_checkout = True
+     settings.env = "development"
+ 
+     def _fake_complete_checkout(db, *, order_id: int, user_id: int):
+         assert order_id == 77
+         assert user_id == 123
+@@ -114,25 +120,255 @@ def test_dev_test_checkout_handler_commits_after_success(monkeypatch) -> None:
+     finally:
+         settings.enable_dev_test_checkout = previous_enabled
+         settings.env = previous_env
+ 
+     assert db.commit_calls == 1
+ 
+ 
+ def test_dev_test_checkout_handler_returns_403_when_disabled(monkeypatch) -> None:
+     previous_enabled = settings.enable_dev_test_checkout
+     settings.enable_dev_test_checkout = False
+     monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
+ 
+     try:
+         with pytest.raises(HTTPException) as exc:
+             complete_dev_test_checkout(
+                 order_id=77,
+                 db=object(),
+                 current_user=SimpleNamespace(id=123),
+                 client_ip="127.0.0.1",
+             )
+     finally:
+         settings.enable_dev_test_checkout = previous_enabled
+ 
+     assert exc.value.status_code == 403
+     assert exc.value.detail == "Dev test checkout is disabled."
++
++
++def test_started_event_confirmation_detail_contains_stable_code_and_time_remaining() -> None:
++    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
++    event = Event(
++        id=42,
++        organizer_id=1,
++        venue_id=1,
++        title="Late Show",
++        slug="late-show",
++        start_at=now - timedelta(hours=1),
++        end_at=now + timedelta(hours=2, minutes=30),
++        status=EventStatus.PUBLISHED,
++        visibility=EventVisibility.PUBLIC,
++        approval_status=EventApprovalStatus.APPROVED,
++        timezone="America/Guyana",
++        is_location_pinned=False,
++    )
++
++    detail = _started_event_confirmation_detail(event, now)
++
++    assert detail["code"] == "EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED"
++    assert detail["event_id"] == 42
++    assert detail["event_title"] == "Late Show"
++    assert detail["seconds_until_event_end"] == 9000
++    assert detail["human_readable_time_remaining"] == "2 hours and 30 minutes"
++    assert "This event has already started" in detail["message"]
++
++
++def _seed_orderable_event(
++    db,
++    *,
++    start_at: datetime,
++    end_at: datetime,
++    status: EventStatus = EventStatus.PUBLISHED,
++    approval_status: EventApprovalStatus = EventApprovalStatus.APPROVED,
++) -> tuple[User, Event, TicketTier]:
++    owner = User(email=unique_email("order-api-owner"), full_name="Owner")
++    buyer = User(email=unique_email("order-api-buyer"), full_name="Buyer")
++    db.add_all([owner, buyer])
++    db.flush()
++
++    organizer = OrganizerProfile(user_id=owner.id, business_name="Biz", display_name="Biz")
++    db.add(organizer)
++    db.flush()
++
++    venue = Venue(organizer_id=organizer.id, name="Venue")
++    db.add(venue)
++    db.flush()
++
++    event = Event(
++        organizer_id=organizer.id,
++        venue_id=venue.id,
++        title="Concert",
++        slug=f"order-api-{unique_email('event').replace('@', '-')}",
++        start_at=start_at,
++        end_at=end_at,
++        status=status,
++        visibility=EventVisibility.PUBLIC,
++        approval_status=approval_status,
++        timezone="America/Guyana",
++        is_location_pinned=False,
++    )
++    db.add(event)
++    db.flush()
++
++    tier = TicketTier(
++        event_id=event.id,
++        name="General",
++        tier_code="GENERAL",
++        price_amount=Decimal("100.00"),
++        currency="GYD",
++        quantity_total=10,
++        quantity_sold=0,
++        quantity_held=0,
++        min_per_order=1,
++        max_per_order=10,
++        is_active=True,
++        sort_order=0,
++    )
++    db.add(tier)
++    db.commit()
++    db.refresh(buyer)
++    db.refresh(event)
++    db.refresh(tier)
++    return buyer, event, tier
++
++
++def _selection_payload(event_id: int, tier_id: int, *, acknowledge_started_event: bool = False) -> CreateOrderFromSelectionRequest:
++    return CreateOrderFromSelectionRequest(
++        event_id=event_id,
++        items=[TicketSelectionItemRequest(ticket_tier_id=tier_id, quantity=1)],
++        acknowledge_started_event=acknowledge_started_event,
++    )
++
++
++def test_future_event_order_creation_still_works(db_session, monkeypatch) -> None:
++    now = datetime.now(timezone.utc)
++    buyer, event, tier = _seed_orderable_event(
++        db_session,
++        start_at=now + timedelta(days=2),
++        end_at=now + timedelta(days=2, hours=4),
++    )
++    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
++
++    response = create_order_from_selection(
++        payload=_selection_payload(event.id, tier.id),
++        db=db_session,
++        current_user=buyer,
++        client_ip="127.0.0.1",
++    )
++
++    assert response.event_id == event.id
++    assert response.status == OrderStatus.AWAITING_PAYMENT.value
++    assert len(response.items) == 1
++
++
++def test_started_event_without_acknowledgement_returns_409_confirmation(db_session, monkeypatch) -> None:
++    now = datetime.now(timezone.utc)
++    buyer, event, tier = _seed_orderable_event(
++        db_session,
++        start_at=now - timedelta(hours=1),
++        end_at=now + timedelta(hours=3),
++    )
++    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
++
++    with pytest.raises(HTTPException) as exc:
++        create_order_from_selection(
++            payload=_selection_payload(event.id, tier.id),
++            db=db_session,
++            current_user=buyer,
++            client_ip="127.0.0.1",
++        )
++
++    assert exc.value.status_code == 409
++    assert exc.value.detail["code"] == "EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED"
++    assert exc.value.detail["event_id"] == event.id
++    assert exc.value.detail["seconds_until_event_end"] > 0
++    assert "human_readable_time_remaining" in exc.value.detail
++
++
++def test_started_event_with_acknowledgement_creates_order_and_hold(db_session, monkeypatch) -> None:
++    now = datetime.now(timezone.utc)
++    buyer, event, tier = _seed_orderable_event(
++        db_session,
++        start_at=now - timedelta(hours=1),
++        end_at=now + timedelta(hours=3),
++    )
++    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
++
++    response = create_order_from_selection(
++        payload=_selection_payload(event.id, tier.id, acknowledge_started_event=True),
++        db=db_session,
++        current_user=buyer,
++        client_ip="127.0.0.1",
++    )
++
++    assert response.event_id == event.id
++    assert response.status == OrderStatus.AWAITING_PAYMENT.value
++    assert len(response.items) == 1
++
++
++def test_ended_event_returns_409_event_ended(db_session, monkeypatch) -> None:
++    now = datetime.now(timezone.utc)
++    buyer, event, tier = _seed_orderable_event(
++        db_session,
++        start_at=now - timedelta(hours=5),
++        end_at=now - timedelta(minutes=1),
++    )
++    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
++
++    with pytest.raises(HTTPException) as exc:
++        create_order_from_selection(
++            payload=_selection_payload(event.id, tier.id, acknowledge_started_event=True),
++            db=db_session,
++            current_user=buyer,
++            client_ip="127.0.0.1",
++        )
++
++    assert exc.value.status_code == 409
++    assert exc.value.detail["code"] == "EVENT_ENDED"
++    assert exc.value.detail["message"] == "This event has ended and tickets are no longer available."
++    assert exc.value.detail["event_id"] == event.id
++
++
++def test_cancelled_started_event_returns_controlled_rejection_not_confirmation(db_session, monkeypatch) -> None:
++    now = datetime.now(timezone.utc)
++    buyer, event, tier = _seed_orderable_event(
++        db_session,
++        start_at=now - timedelta(hours=1),
++        end_at=now + timedelta(hours=3),
++        status=EventStatus.CANCELLED,
++    )
++    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
++
++    with pytest.raises(HTTPException) as exc:
++        create_order_from_selection(
++            payload=_selection_payload(event.id, tier.id),
++            db=db_session,
++            current_user=buyer,
++            client_ip="127.0.0.1",
++        )
++
++    assert exc.value.status_code == 409
++    assert exc.value.detail["code"] == "EVENT_NOT_SELLABLE"
++    assert exc.value.detail["code"] != "EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED"
++
++
++def test_cancelled_at_started_event_returns_controlled_rejection_not_confirmation(db_session, monkeypatch) -> None:
++    now = datetime.now(timezone.utc)
++    buyer, event, tier = _seed_orderable_event(
++        db_session,
++        start_at=now - timedelta(hours=1),
++        end_at=now + timedelta(hours=3),
++    )
++    event.cancelled_at = now - timedelta(minutes=10)
++    db_session.commit()
++    monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
++
++    with pytest.raises(HTTPException) as exc:
++        create_order_from_selection(
++            payload=_selection_payload(event.id, tier.id),
++            db=db_session,
++            current_user=buyer,
++            client_ip="127.0.0.1",
++        )
++
++    assert exc.value.status_code == 409
++    assert exc.value.detail["code"] == "EVENT_NOT_SELLABLE"
++    assert exc.value.detail["code"] != "EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED"
+diff --git a/backend/tests/test_ticket_holds_service.py b/backend/tests/test_ticket_holds_service.py
+index 191d897e43fd7eb6eeeca6fbda34783b8f4c05e5..1a1fb18c9248fece3733bddf6c444a2bc6a7f87e 100644
+--- a/backend/tests/test_ticket_holds_service.py
++++ b/backend/tests/test_ticket_holds_service.py
+@@ -1,121 +1,170 @@
+ from datetime import datetime, timedelta, timezone
+ 
+ import pytest
+ from sqlalchemy import create_engine
+ from sqlalchemy.orm import Session, sessionmaker
+ 
+ from app.db.base import Base
+ from app.models import Event, OrganizerProfile, Order, OrderItem, TicketHold, TicketTier, User, Venue
+ from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
+ from app.services.ticket_holds import (
+     InsufficientAvailabilityError,
+     TicketHoldWindowClosedError,
+     calculate_ticket_hold_expiry,
+     create_ticket_hold,
+     get_ticket_tier_capacity_summary,
+     get_ticket_type_availability,
+ )
+ from tests.utils import unique_email
+ 
+ 
+ 
+-def _seed_ticket_tier(db: Session, start_at: datetime, quantity_total: int = 100) -> TicketTier:
++def _seed_ticket_tier(db: Session, start_at: datetime, quantity_total: int = 100, end_at: datetime | None = None, status: EventStatus = EventStatus.PUBLISHED) -> TicketTier:
+     user = User(email=unique_email("owner"), full_name="Owner")
+     db.add(user)
+     db.flush()
+ 
+     organizer = OrganizerProfile(user_id=user.id, business_name="Biz", display_name="Biz")
      db.add(organizer)
      db.flush()
  
-     venue = Venue(organizer_id=organizer.id, name="Main Hall")
+     venue = Venue(organizer_id=organizer.id, name="Venue")
      db.add(venue)
      db.flush()
  
      event = Event(
          organizer_id=organizer.id,
          venue_id=venue.id,
-         title=title,
-         slug=slug,
--        start_at=now + timedelta(days=4),
--        end_at=now + timedelta(days=4, hours=2),
-+        start_at=now + timedelta(days=1),
-+        end_at=now + timedelta(days=1, hours=3),
-         status=status,
+         title="Concert",
+         slug=f"concert-{int(start_at.timestamp())}",
+         start_at=start_at,
+-        end_at=start_at + timedelta(hours=4),
+-        status=EventStatus.PUBLISHED,
++        end_at=end_at or start_at + timedelta(hours=4),
++        status=status,
          visibility=EventVisibility.PUBLIC,
-         approval_status=approval_status,
+         approval_status=EventApprovalStatus.APPROVED,
          timezone="America/Guyana",
          is_location_pinned=False,
--        published_at=now,
-+        published_at=now - timedelta(minutes=5),
-         cancelled_at=cancelled_at,
      )
      db.add(event)
+     db.flush()
+ 
+     tier = TicketTier(
+         event_id=event.id,
+         name="General",
+         tier_code="GENERAL",
+         price_amount=100,
+         currency="GYD",
+         quantity_total=quantity_total,
+         quantity_sold=0,
+         quantity_held=0,
+         min_per_order=1,
+         max_per_order=10,
+         is_active=True,
+         sort_order=0,
+     )
+     db.add(tier)
      db.commit()
-     db.refresh(event)
-     return event
+     db.refresh(tier)
+     return tier
  
  
- def test_pending_approval_list_and_approve_updates_state(db_session: Session) -> None:
-     admin = User(email="admin-event-approve@test.local", full_name="Admin", is_admin=True)
-     db_session.add(admin)
+ def test_hold_expiry_defaults_to_48_hours_when_event_far_away() -> None:
+     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+     event_start = now + timedelta(days=4)
+ 
+     expires = calculate_ticket_hold_expiry(event_start, now=now)
+ 
+     assert expires == now.astimezone(expires.tzinfo) + timedelta(hours=48)
+ 
+ 
+-def test_hold_expiry_truncates_to_8_hours_before_event() -> None:
++def test_hold_expiry_truncates_to_event_start_when_event_is_soon() -> None:
+     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+     event_start = now + timedelta(hours=30)
+ 
+     expires = calculate_ticket_hold_expiry(event_start, now=now)
+ 
+-    assert expires == event_start.astimezone(expires.tzinfo) - timedelta(hours=8)
++    assert expires == event_start.astimezone(expires.tzinfo)
+ 
+ 
+-def test_hold_rejected_when_event_starts_within_8_hours(db_session: Session) -> None:
++def test_hold_allowed_when_event_starts_within_8_hours(db_session: Session) -> None:
+     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+     tier = _seed_ticket_tier(db_session, start_at=now + timedelta(hours=8))
+ 
++    result = create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
++
++    assert result.hold.id is not None
++
++
++def test_hold_allowed_after_event_start_before_event_end(db_session: Session) -> None:
++    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
++    tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=1), end_at=now + timedelta(hours=3))
++
++    result = create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
++
++    assert result.hold.id is not None
++    assert result.hold.expires_at <= (now + timedelta(hours=3)).astimezone(result.hold.expires_at.tzinfo)
++
++
++def test_hold_rejected_after_event_end(db_session: Session) -> None:
++    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
++    tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=5), end_at=now - timedelta(minutes=1))
++
+     with pytest.raises(TicketHoldWindowClosedError):
+         create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+ 
+ 
++def test_hold_rejected_when_event_cancelled(db_session: Session) -> None:
++    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
++    tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=1), end_at=now + timedelta(hours=3), status=EventStatus.CANCELLED)
++
++    with pytest.raises(ValueError, match="cancelled"):
++        create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
++
++
++def test_hold_rejected_when_event_has_cancelled_at(db_session: Session) -> None:
++    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
++    tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=1), end_at=now + timedelta(hours=3))
++    event = db_session.get(Event, tier.event_id)
++    assert event is not None
++    event.cancelled_at = now - timedelta(minutes=15)
++    db_session.commit()
++
++    with pytest.raises(ValueError, match="cancelled"):
++        create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
++
++
++def test_hold_expiry_for_started_event_is_not_after_event_end() -> None:
++    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
++    event_start = now - timedelta(hours=1)
++    event_end = now + timedelta(minutes=45)
++
++    expires = calculate_ticket_hold_expiry(event_start, now=now, event_ends_at=event_end)
++
++    assert expires <= event_end.astimezone(expires.tzinfo)
++
++
+ def test_expired_holds_do_not_count_against_availability(db_session: Session) -> None:
+     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+     tier = _seed_ticket_tier(db_session, start_at=now + timedelta(days=3), quantity_total=10)
+ 
+     expired = TicketHold(
+         event_id=tier.event_id,
+         ticket_tier_id=tier.id,
+         user_id=1,
+         quantity=3,
+         expires_at=now - timedelta(minutes=1),
+     )
+     db_session.add(expired)
      db_session.commit()
-     db_session.refresh(admin)
  
-     pending = _seed_event(db_session, slug="pending-review-event", title="Pending Review", approval_status=EventApprovalStatus.PENDING)
+     availability = get_ticket_type_availability(db_session, ticket_tier_id=tier.id, now=now)
+     assert availability == 10
  
-     rows = list_pending_event_approvals(db=db_session, user_id=admin.id)
-     assert [row.id for row in rows] == [pending.id]
-     assert rows[0].approval_status == EventApprovalStatus.PENDING.value
  
-     updated = approve_event_for_discovery(event_id=pending.id, db=db_session, user_id=admin.id)
-     assert updated.id == pending.id
-     assert updated.approval_status == EventApprovalStatus.APPROVED.value
+ def test_completed_orders_count_pending_do_not(db_session: Session) -> None:
+     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+     tier = _seed_ticket_tier(db_session, start_at=now + timedelta(days=3), quantity_total=10)
  
-     refreshed = db_session.execute(select(Event).where(Event.id == pending.id)).scalar_one()
-@@ -120,30 +124,30 @@ def test_discovery_excludes_pending_and_includes_after_admin_approval(db_session
+     completed_order = Order(
+         user_id=1,
+         event_id=tier.event_id,
+diff --git a/mobile/src/api/client.ts b/mobile/src/api/client.ts
+index f046bff0990e968348b3cedcf1149fba38dc9788..c504f55dd21fec40bdd633da7ee87ae83df89e32 100644
+--- a/mobile/src/api/client.ts
++++ b/mobile/src/api/client.ts
+@@ -1,47 +1,56 @@
+ import { env } from '../config/env';
  
- def test_pending_approval_list_excludes_cancelled_events(db_session: Session) -> None:
-     admin = User(email="admin-event-cancelled@test.local", full_name="Admin", is_admin=True)
-     db_session.add(admin)
-     db_session.commit()
-     db_session.refresh(admin)
+ let authToken: string | null = null;
  
-     active_pending = _seed_event(
-         db_session,
-         slug="active-pending-review-event",
-         title="Active Pending Review",
-         approval_status=EventApprovalStatus.PENDING,
-     )
-     _seed_event(
-         db_session,
-         slug="cancelled-status-pending-event",
-         title="Cancelled By Status",
-         approval_status=EventApprovalStatus.PENDING,
-         status=EventStatus.CANCELLED,
-     )
-     _seed_event(
-         db_session,
-         slug="cancelled-at-pending-event",
-         title="Cancelled By Timestamp",
-         approval_status=EventApprovalStatus.PENDING,
--        cancelled_at=datetime(2026, 4, 11, tzinfo=timezone.utc),
-+        cancelled_at=datetime.now(GUYANA_TZ).replace(microsecond=0),
-     )
+ export class ApiError extends Error {
+   status: number;
++  detail: unknown;
  
-     rows = list_pending_event_approvals(db=db_session, user_id=admin.id)
-     assert [row.id for row in rows] == [active_pending.id]
+-  constructor(message: string, status: number) {
++  constructor(message: string, status: number, detail?: unknown) {
+     super(message);
+     this.name = 'ApiError';
+     this.status = status;
++    this.detail = detail;
+   }
+ }
+ 
+ export function setApiAuthToken(token: string | null) {
+   authToken = token;
+ }
+ 
+ type ApiOptions = RequestInit & { path: string };
+ 
+ export async function apiRequest<T>({ path, headers, ...init }: ApiOptions): Promise<T> {
+   const response = await fetch(`${env.apiBaseUrl}${path}`, {
+     ...init,
+     headers: {
+       'Content-Type': 'application/json',
+       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+       ...(headers ?? {}),
+     },
+   });
+ 
+   if (!response.ok) {
+-    let detail = `API request failed: ${response.status}`;
++    let message = `API request failed: ${response.status}`;
++    let parsedDetail: unknown;
+ 
+     try {
+-      const errorBody = (await response.json()) as { detail?: string };
+-      if (errorBody.detail) {
+-        detail = errorBody.detail;
++      const errorBody = (await response.json()) as { detail?: unknown };
++      parsedDetail = errorBody.detail;
++      if (typeof errorBody.detail === 'string') {
++        message = errorBody.detail;
++      } else if (errorBody.detail && typeof errorBody.detail === 'object' && 'message' in errorBody.detail) {
++        const detailMessage = (errorBody.detail as { message?: unknown }).message;
++        if (typeof detailMessage === 'string') {
++          message = detailMessage;
++        }
+       }
+     } catch {
+       // ignore body parsing errors and keep generic message
+     }
+ 
+-    throw new ApiError(detail, response.status);
++    throw new ApiError(message, response.status, parsedDetail);
+   }
+ 
+   return (await response.json()) as T;
+ }
+diff --git a/mobile/src/api/orders.ts b/mobile/src/api/orders.ts
+index 951db291998cce2515e903c7e1ebd47c2aad2213..17c41b4fb534a7f44c7693b98f34575da1bc8ee6 100644
+--- a/mobile/src/api/orders.ts
++++ b/mobile/src/api/orders.ts
+@@ -1,91 +1,120 @@
+ import { apiRequest } from './client';
+ 
+ export type EventTicketTier = {
+   id: number;
+   name: string;
+   description: string | null;
+   price_amount: string;
+   currency: string;
+   min_per_order: number;
+   max_per_order: number;
+   available_quantity: number;
+   is_active: boolean;
+ };
+ 
+ export type PurchaseSelectionItem = { ticket_tier_id: number; quantity: number };
+ 
++export type EventEndedDetail = {
++  code: 'EVENT_ENDED';
++  event_id: number;
++  event_title: string;
++  event_end_at: string;
++  server_now: string;
++  message: string;
++};
++
++export type StartedEventConfirmationDetail = {
++  code: 'EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED';
++  event_id: number;
++  event_title: string;
++  event_start_at: string;
++  event_end_at: string;
++  server_now: string;
++  seconds_until_event_end: number;
++  human_readable_time_remaining: string;
++  message: string;
++};
++
+ export type OrderItem = { id: number; ticket_tier_id: number; quantity: number; unit_price: number };
+ 
+ export type Order = {
+   id: number;
+   event_id: number;
+   status: string;
+   subtotal_amount: number;
+   discount_amount: number;
+   total_amount: number;
+   currency: string;
+   reference_code: string;
+   payment_method: string | null;
+   payment_verification_status: string;
+   items: OrderItem[];
+ };
+ 
+ export type MmgCheckoutResponse = {
+   order_id: number;
+   payment_reference: string;
+   checkout_url: string | null;
+   status: string;
+   payment_verification_status: string;
+ };
+ 
+ export type MmgAgentResponse = {
+   order_id: number;
+   payment_reference: string;
+   instructions: string | null;
+   status: string;
+   payment_verification_status: string;
+ };
+ 
+ export type CompleteMmgAgentResponse = {
+   order_id: number;
+   payment_reference: string;
+   status: string;
+   payment_verification_status: string;
+   message: string;
+ };
+ 
+ export type DevTestCheckoutResponse = {
+   order_id: number;
+   payment_reference: string;
+   status: string;
+   payment_verification_status: string;
+   message: string;
+ };
+ 
+-export async function createOrderFromSelection(eventId: number, items: PurchaseSelectionItem[]): Promise<Order> {
+-  return apiRequest<Order>({ path: '/orders', method: 'POST', body: JSON.stringify({ event_id: eventId, items }) });
++export async function createOrderFromSelection(
++  eventId: number,
++  items: PurchaseSelectionItem[],
++  acknowledgeStartedEvent = false,
++): Promise<Order> {
++  return apiRequest<Order>({
++    path: '/orders',
++    method: 'POST',
++    body: JSON.stringify({ event_id: eventId, items, acknowledge_started_event: acknowledgeStartedEvent }),
++  });
+ }
+ 
+ export async function initiateMmgCheckout(orderId: number): Promise<MmgCheckoutResponse> {
+   return apiRequest<MmgCheckoutResponse>({ path: `/orders/${orderId}/payments/mmg/initiate`, method: 'POST' });
+ }
+ 
+ export async function initiateMmgAgentCheckout(orderId: number): Promise<MmgAgentResponse> {
+   return apiRequest<MmgAgentResponse>({ path: `/orders/${orderId}/payments/mmg-agent/initiate`, method: 'POST' });
+ }
+ 
+ export async function completeMmgAgentPayment(orderId: number, submittedReferenceCode: string): Promise<CompleteMmgAgentResponse> {
+   return apiRequest<CompleteMmgAgentResponse>({
+     path: `/orders/${orderId}/payments/mmg-agent/complete`,
+     method: 'POST',
+     body: JSON.stringify({ submitted_reference_code: submittedReferenceCode }),
+   });
+ }
+ 
+ export async function getOrder(orderId: number): Promise<Order> {
+   return apiRequest<Order>({ path: `/orders/${orderId}`, method: 'GET' });
+ }
+ 
+ export async function completeDevTestCheckout(orderId: number): Promise<DevTestCheckoutResponse> {
+   return apiRequest<DevTestCheckoutResponse>({ path: `/orders/${orderId}/payments/dev-test/complete`, method: 'POST' });
+ }
+diff --git a/mobile/src/navigation/screens/TicketSelectionScreen.tsx b/mobile/src/navigation/screens/TicketSelectionScreen.tsx
+index d8ecb25c899b64f57fa60b459b2e8b1e99e20f45..39b6e1457c3d723f7e29d7a0ba9755ef8d1aaa9b 100644
+--- a/mobile/src/navigation/screens/TicketSelectionScreen.tsx
++++ b/mobile/src/navigation/screens/TicketSelectionScreen.tsx
+@@ -1,73 +1,153 @@
+ import { useMemo, useState } from 'react';
+ import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+ 
+ import { ApiError } from '../../api/client';
+ import { EventDiscoveryDetail } from '../../api/events';
+-import { createOrderFromSelection } from '../../api/orders';
++import { createOrderFromSelection, EventEndedDetail, StartedEventConfirmationDetail } from '../../api/orders';
+ import { Screen } from '../../components/Screen';
+ import { ThemedButton } from '../../components/ThemedButton';
+ import { theme } from '../../theme';
+ 
+ type Props = {
+   event: EventDiscoveryDetail;
+   onOrderCreated: (orderId: number) => void;
+ };
+ 
+ export function TicketSelectionScreen({ event, onOrderCreated }: Props) {
+   const [quantities, setQuantities] = useState<Record<number, number>>({});
+   const [submitting, setSubmitting] = useState(false);
+ 
+   const rows = event.ticket_tiers.filter((tier) => tier.is_active && tier.available_quantity > 0);
+ 
+   const subtotal = useMemo(
+     () => rows.reduce((sum, tier) => sum + (quantities[tier.id] ?? 0) * Number(tier.price_amount), 0),
+     [quantities, rows],
+   );
+ 
+   const selectedItems = rows
+     .map((tier) => ({ ticket_tier_id: tier.id, quantity: quantities[tier.id] ?? 0 }))
+     .filter((item) => item.quantity > 0);
+ 
+-  async function handleContinue() {
+-    if (!selectedItems.length) {
+-      Alert.alert('Select tickets', 'Choose at least one ticket before continuing.');
+-      return;
++  function getStartedEventTimeRemaining(): string | null {
++    const now = new Date();
++    const startAt = new Date(event.start_at);
++    const endAt = new Date(event.end_at);
++    if (now >= endAt) {
++      return 'ended';
++    }
++    if (now < startAt) {
++      return null;
++    }
++
++    const remainingSeconds = Math.max(0, Math.floor((endAt.getTime() - now.getTime()) / 1000));
++    const hours = Math.floor(remainingSeconds / 3600);
++    const minutes = Math.floor((remainingSeconds % 3600) / 60);
++    if (hours > 0) {
++      return `${hours} hour${hours === 1 ? '' : 's'}${minutes > 0 ? ` and ${minutes} minute${minutes === 1 ? '' : 's'}` : ''}`;
+     }
++    if (minutes > 0) {
++      return `${minutes} minute${minutes === 1 ? '' : 's'}`;
++    }
++    return 'less than a minute';
++  }
++
++  function isEventEndedDetail(detail: unknown): detail is EventEndedDetail {
++    return Boolean(
++      detail
++        && typeof detail === 'object'
++        && 'code' in detail
++        && (detail as { code?: unknown }).code === 'EVENT_ENDED',
++    );
++  }
++
++  function isStartedConfirmationDetail(detail: unknown): detail is StartedEventConfirmationDetail {
++    return Boolean(
++      detail
++        && typeof detail === 'object'
++        && 'code' in detail
++        && (detail as { code?: unknown }).code === 'EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED',
++    );
++  }
++
++  function confirmStartedEvent(timeRemaining: string, onConfirm: () => void) {
++    Alert.alert(
++      'This event has already started',
++      `This event is already underway and ends in ${timeRemaining}. Do you still want to continue buying tickets?`,
++      [
++        { text: 'Cancel', style: 'cancel' },
++        { text: 'Continue to checkout', onPress: onConfirm },
++      ],
++    );
++  }
+ 
++  async function submitOrder(acknowledgeStartedEvent: boolean) {
+     setSubmitting(true);
+     try {
+-      const order = await createOrderFromSelection(event.id, selectedItems);
++      const order = await createOrderFromSelection(event.id, selectedItems, acknowledgeStartedEvent);
+       onOrderCreated(order.id);
+     } catch (err) {
++      if (err instanceof ApiError) {
++        if (isStartedConfirmationDetail(err.detail)) {
++          confirmStartedEvent(err.detail.human_readable_time_remaining, () => {
++            void submitOrder(true);
++          });
++          return;
++        }
++        if (isEventEndedDetail(err.detail)) {
++          Alert.alert('This event has ended', 'This event has ended and tickets are no longer available.');
++          return;
++        }
++      }
+       const message = err instanceof ApiError ? err.message : 'Could not create order.';
+       Alert.alert('Purchase unavailable', message);
+     } finally {
+       setSubmitting(false);
+     }
+   }
+ 
++  async function handleContinue() {
++    if (!selectedItems.length) {
++      Alert.alert('Select tickets', 'Choose at least one ticket before continuing.');
++      return;
++    }
++
++    const startedTimeRemaining = getStartedEventTimeRemaining();
++    if (startedTimeRemaining === 'ended') {
++      Alert.alert('This event has ended', 'This event has ended and tickets are no longer available.');
++      return;
++    }
++    if (startedTimeRemaining) {
++      confirmStartedEvent(startedTimeRemaining, () => {
++        void submitOrder(true);
++      });
++      return;
++    }
++
++    await submitOrder(false);
++  }
++
+   return (
+     <Screen>
+       <ScrollView contentContainerStyle={styles.content}>
+         <Text style={styles.title}>Select tickets</Text>
+         {rows.map((tier) => {
+           const quantity = quantities[tier.id] ?? 0;
+           return (
+             <View key={tier.id} style={styles.row}>
+               <View style={{ flex: 1 }}>
+                 <Text style={styles.name}>{tier.name}</Text>
+                 <Text style={styles.meta}>{tier.currency} {tier.price_amount}</Text>
+                 <Text style={styles.meta}>{tier.available_quantity} left</Text>
+               </View>
+               <View style={styles.counter}>
+                 <ThemedButton label="-" variant="secondary" onPress={() => setQuantities((q) => ({ ...q, [tier.id]: Math.max(0, quantity - 1) }))} />
+                 <Text style={styles.qty}>{quantity}</Text>
+                 <ThemedButton label="+" variant="secondary" onPress={() => setQuantities((q) => ({ ...q, [tier.id]: Math.min(tier.max_per_order, quantity + 1) }))} />
+               </View>
+             </View>
+           );
+         })}
+ 
+         <View style={styles.summary}>
+           <Text style={styles.meta}>Subtotal</Text>
+           <Text style={styles.total}>{event.price_summary?.currency ?? 'GYD'} {subtotal.toFixed(2)}</Text>
  
 EOF
 )

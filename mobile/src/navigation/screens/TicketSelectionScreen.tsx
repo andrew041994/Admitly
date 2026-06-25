@@ -3,7 +3,7 @@ import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../../api/client';
 import { EventDiscoveryDetail } from '../../api/events';
-import { createOrderFromSelection } from '../../api/orders';
+import { createOrderFromSelection, EventEndedDetail, StartedEventConfirmationDetail } from '../../api/orders';
 import { Screen } from '../../components/Screen';
 import { ThemedButton } from '../../components/ThemedButton';
 import { theme } from '../../theme';
@@ -28,22 +28,102 @@ export function TicketSelectionScreen({ event, onOrderCreated }: Props) {
     .map((tier) => ({ ticket_tier_id: tier.id, quantity: quantities[tier.id] ?? 0 }))
     .filter((item) => item.quantity > 0);
 
+  function getStartedEventTimeRemaining(): string | null {
+    const now = new Date();
+    const startAt = new Date(event.start_at);
+    const endAt = new Date(event.end_at);
+    if (now >= endAt) {
+      return 'ended';
+    }
+    if (now < startAt) {
+      return null;
+    }
+
+    const remainingSeconds = Math.max(0, Math.floor((endAt.getTime() - now.getTime()) / 1000));
+    const hours = Math.floor(remainingSeconds / 3600);
+    const minutes = Math.floor((remainingSeconds % 3600) / 60);
+    if (hours > 0) {
+      return `${hours} hour${hours === 1 ? '' : 's'}${minutes > 0 ? ` and ${minutes} minute${minutes === 1 ? '' : 's'}` : ''}`;
+    }
+    if (minutes > 0) {
+      return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    }
+    return 'less than a minute';
+  }
+
+  function isEventEndedDetail(detail: unknown): detail is EventEndedDetail {
+    return Boolean(
+      detail
+        && typeof detail === 'object'
+        && 'code' in detail
+        && (detail as { code?: unknown }).code === 'EVENT_ENDED',
+    );
+  }
+
+  function isStartedConfirmationDetail(detail: unknown): detail is StartedEventConfirmationDetail {
+    return Boolean(
+      detail
+        && typeof detail === 'object'
+        && 'code' in detail
+        && (detail as { code?: unknown }).code === 'EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED',
+    );
+  }
+
+  function confirmStartedEvent(timeRemaining: string, onConfirm: () => void) {
+    Alert.alert(
+      'This event has already started',
+      `This event is already underway and ends in ${timeRemaining}. Do you still want to continue buying tickets?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Continue to checkout', onPress: onConfirm },
+      ],
+    );
+  }
+
+  async function submitOrder(acknowledgeStartedEvent: boolean) {
+    setSubmitting(true);
+    try {
+      const order = await createOrderFromSelection(event.id, selectedItems, acknowledgeStartedEvent);
+      onOrderCreated(order.id);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (isStartedConfirmationDetail(err.detail)) {
+          confirmStartedEvent(err.detail.human_readable_time_remaining, () => {
+            void submitOrder(true);
+          });
+          return;
+        }
+        if (isEventEndedDetail(err.detail)) {
+          Alert.alert('This event has ended', 'This event has ended and tickets are no longer available.');
+          return;
+        }
+      }
+      const message = err instanceof ApiError ? err.message : 'Could not create order.';
+      Alert.alert('Purchase unavailable', message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleContinue() {
     if (!selectedItems.length) {
       Alert.alert('Select tickets', 'Choose at least one ticket before continuing.');
       return;
     }
 
-    setSubmitting(true);
-    try {
-      const order = await createOrderFromSelection(event.id, selectedItems);
-      onOrderCreated(order.id);
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : 'Could not create order.';
-      Alert.alert('Purchase unavailable', message);
-    } finally {
-      setSubmitting(false);
+    const startedTimeRemaining = getStartedEventTimeRemaining();
+    if (startedTimeRemaining === 'ended') {
+      Alert.alert('This event has ended', 'This event has ended and tickets are no longer available.');
+      return;
     }
+    if (startedTimeRemaining) {
+      confirmStartedEvent(startedTimeRemaining, () => {
+        void submitOrder(true);
+      });
+      return;
+    }
+
+    await submitOrder(false);
   }
 
   return (

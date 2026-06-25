@@ -60,6 +60,7 @@ class TicketSelectionItemRequest(BaseModel):
 class CreateOrderFromSelectionRequest(BaseModel):
     event_id: int
     items: list[TicketSelectionItemRequest] = Field(min_length=1)
+    acknowledge_started_event: bool = False
 
 
 class OrderStatusResponse(OrderResponse):

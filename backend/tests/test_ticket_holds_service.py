@@ -19,7 +19,7 @@ from tests.utils import unique_email
 
 
 
-def _seed_ticket_tier(db: Session, start_at: datetime, quantity_total: int = 100) -> TicketTier:
+def _seed_ticket_tier(db: Session, start_at: datetime, quantity_total: int = 100, end_at: datetime | None = None, status: EventStatus = EventStatus.PUBLISHED) -> TicketTier:
     user = User(email=unique_email("owner"), full_name="Owner")
     db.add(user)
     db.flush()
@@ -38,8 +38,8 @@ def _seed_ticket_tier(db: Session, start_at: datetime, quantity_total: int = 100
         title="Concert",
         slug=f"concert-{int(start_at.timestamp())}",
         start_at=start_at,
-        end_at=start_at + timedelta(hours=4),
-        status=EventStatus.PUBLISHED,
+        end_at=end_at or start_at + timedelta(hours=4),
+        status=status,
         visibility=EventVisibility.PUBLIC,
         approval_status=EventApprovalStatus.APPROVED,
         timezone="America/Guyana",
@@ -77,21 +77,70 @@ def test_hold_expiry_defaults_to_48_hours_when_event_far_away() -> None:
     assert expires == now.astimezone(expires.tzinfo) + timedelta(hours=48)
 
 
-def test_hold_expiry_truncates_to_8_hours_before_event() -> None:
+def test_hold_expiry_truncates_to_event_start_when_event_is_soon() -> None:
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     event_start = now + timedelta(hours=30)
 
     expires = calculate_ticket_hold_expiry(event_start, now=now)
 
-    assert expires == event_start.astimezone(expires.tzinfo) - timedelta(hours=8)
+    assert expires == event_start.astimezone(expires.tzinfo)
 
 
-def test_hold_rejected_when_event_starts_within_8_hours(db_session: Session) -> None:
+def test_hold_allowed_when_event_starts_within_8_hours(db_session: Session) -> None:
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     tier = _seed_ticket_tier(db_session, start_at=now + timedelta(hours=8))
 
+    result = create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+
+    assert result.hold.id is not None
+
+
+def test_hold_allowed_after_event_start_before_event_end(db_session: Session) -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=1), end_at=now + timedelta(hours=3))
+
+    result = create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+
+    assert result.hold.id is not None
+    assert result.hold.expires_at <= (now + timedelta(hours=3)).astimezone(result.hold.expires_at.tzinfo)
+
+
+def test_hold_rejected_after_event_end(db_session: Session) -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=5), end_at=now - timedelta(minutes=1))
+
     with pytest.raises(TicketHoldWindowClosedError):
         create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+
+
+def test_hold_rejected_when_event_cancelled(db_session: Session) -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=1), end_at=now + timedelta(hours=3), status=EventStatus.CANCELLED)
+
+    with pytest.raises(ValueError, match="cancelled"):
+        create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+
+
+def test_hold_rejected_when_event_has_cancelled_at(db_session: Session) -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=1), end_at=now + timedelta(hours=3))
+    event = db_session.get(Event, tier.event_id)
+    assert event is not None
+    event.cancelled_at = now - timedelta(minutes=15)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="cancelled"):
+        create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+
+
+def test_hold_expiry_for_started_event_is_not_after_event_end() -> None:
+    now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
+    event_start = now - timedelta(hours=1)
+    event_end = now + timedelta(minutes=45)
+
+    expires = calculate_ticket_hold_expiry(event_start, now=now, event_ends_at=event_end)
+
+    assert expires <= event_end.astimezone(expires.tzinfo)
 
 
 def test_expired_holds_do_not_count_against_availability(db_session: Session) -> None:

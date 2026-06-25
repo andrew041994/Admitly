@@ -20,6 +20,7 @@ from app.services.reminders import (
 )
 from app.services.ticket_holds import (
     HoldCreationResult,
+    EventEndedError,
     InsufficientAvailabilityError,
     TicketHoldError,
     TicketHoldWindowClosedError,
@@ -37,6 +38,7 @@ __all__ = [
     "dispatch_due_event_reminders",
     "run_event_reminder_dispatch_job",
     "HoldCreationResult",
+    "EventEndedError",
     "InsufficientAvailabilityError",
     "TicketHoldError",
     "TicketHoldWindowClosedError",

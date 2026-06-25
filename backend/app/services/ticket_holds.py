@@ -22,7 +22,11 @@ class TicketHoldError(ValueError):
 
 
 class TicketHoldWindowClosedError(TicketHoldError):
-    """Raised when event start is inside hold restriction window."""
+    """Raised when ticket holds are unavailable for event timing rules."""
+
+
+class EventEndedError(TicketHoldWindowClosedError):
+    """Raised when attempting to hold tickets after an event has ended."""
 
 
 class InsufficientAvailabilityError(TicketHoldError):
@@ -54,17 +58,22 @@ def get_guyana_now() -> datetime:
     return datetime.now(tz=GUYANA_TZ)
 
 
-def calculate_ticket_hold_expiry(event_starts_at: datetime, now: datetime | None = None) -> datetime:
+def calculate_ticket_hold_expiry(
+    event_starts_at: datetime,
+    now: datetime | None = None,
+    event_ends_at: datetime | None = None,
+) -> datetime:
     current = _to_aware(now) if now is not None else get_guyana_now()
     current_guyana = current.astimezone(GUYANA_TZ)
+
+    if event_ends_at is not None:
+        event_end_guyana = _to_aware(event_ends_at).astimezone(GUYANA_TZ)
+        if current_guyana >= event_end_guyana:
+            raise EventEndedError("Ticket holds are not allowed after an event has ended.")
+        return min(current_guyana + timedelta(hours=48), event_end_guyana)
+
     event_start_guyana = _to_aware(event_starts_at).astimezone(GUYANA_TZ)
-
-    if event_start_guyana <= current_guyana + timedelta(hours=8):
-        raise TicketHoldWindowClosedError(
-            "Ticket holds are not allowed within 8 hours of event start."
-        )
-
-    return min(current_guyana + timedelta(hours=48), event_start_guyana - timedelta(hours=8))
+    return current_guyana + timedelta(hours=48) if event_start_guyana <= current_guyana else min(current_guyana + timedelta(hours=48), event_start_guyana)
 
 
 def get_ticket_tier_capacity_summary(
@@ -163,15 +172,19 @@ def create_ticket_hold(
         raise TicketHoldError("Event not found.")
     if not ticket_tier.is_active:
         raise TicketHoldError("Ticket tier is not active.")
+    if event.status == EventStatus.CANCELLED or event.cancelled_at is not None:
+        raise TicketHoldError("Event has been cancelled.")
     if event.status != EventStatus.PUBLISHED or event.approval_status != EventApprovalStatus.APPROVED:
         raise TicketHoldError("Event is not currently sellable.")
+    if reference_now >= _to_aware(event.end_at):
+        raise EventEndedError("Ticket holds are not allowed after an event has ended.")
 
     availability_summary = get_ticket_tier_capacity_summary(db, ticket_tier_id=ticket_tier_id, now=reference_now)
     availability = availability_summary.available_quantity
     if quantity > availability:
         raise InsufficientAvailabilityError("Insufficient availability for requested quantity.")
 
-    expires_at = calculate_ticket_hold_expiry(event.start_at, now=reference_now)
+    expires_at = calculate_ticket_hold_expiry(event.start_at, now=reference_now, event_ends_at=event.end_at)
 
     hold = TicketHold(
         event_id=event.id,

@@ -1,8 +1,16 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.models.user import User
-from app.services.ticket_holds import create_ticket_hold
+from app.services.ticket_holds import (
+    InsufficientAvailabilityError,
+    TicketHoldError,
+    TicketHoldWindowClosedError,
+    create_ticket_hold,
+)
 from app.models.event import Event
+from app.models.enums import EventApprovalStatus, EventStatus
 from app.models.ticket_tier import TicketTier
 from sqlalchemy import select
 
@@ -115,6 +123,61 @@ def _to_order_response(order) -> OrderResponse:
 
 
 
+def _to_aware_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _format_time_remaining(seconds: int) -> str:
+    seconds = max(0, seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, remaining_seconds = divmod(remainder, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    if not parts:
+        parts.append(f"{remaining_seconds} second{'s' if remaining_seconds != 1 else ''}")
+    return " and ".join(parts)
+
+
+def _event_ended_detail(event: Event, now: datetime) -> dict:
+    return {
+        "code": "EVENT_ENDED",
+        "message": "This event has ended and tickets are no longer available.",
+        "event_id": event.id,
+        "event_title": event.title,
+        "event_end_at": _to_aware_datetime(event.end_at).isoformat(),
+        "server_now": now.isoformat(),
+    }
+
+
+def _event_not_sellable_detail(event: Event) -> dict:
+    return {
+        "code": "EVENT_NOT_SELLABLE",
+        "message": "This event is not currently available for ticket purchases.",
+        "event_id": event.id,
+        "event_title": event.title,
+    }
+
+
+def _started_event_confirmation_detail(event: Event, now: datetime) -> dict:
+    seconds_until_end = max(0, int((_to_aware_datetime(event.end_at) - now).total_seconds()))
+    time_remaining = _format_time_remaining(seconds_until_end)
+    return {
+        "code": "EVENT_ALREADY_STARTED_CONFIRMATION_REQUIRED",
+        "event_id": event.id,
+        "event_title": event.title,
+        "event_start_at": _to_aware_datetime(event.start_at).isoformat(),
+        "event_end_at": _to_aware_datetime(event.end_at).isoformat(),
+        "server_now": now.isoformat(),
+        "seconds_until_event_end": seconds_until_end,
+        "human_readable_time_remaining": time_remaining,
+        "message": f"This event has already started and ends in {time_remaining}. Do you want to continue buying tickets?",
+    }
+
 
 @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
 def create_order_from_selection(
@@ -131,9 +194,24 @@ def create_order_from_selection(
     )
 
     hold_ids: list[int] = []
+    reference_now = datetime.now(timezone.utc)
     event = db.execute(select(Event).where(Event.id == payload.event_id)).scalar_one_or_none()
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+
+    if (
+        event.status != EventStatus.PUBLISHED
+        or event.approval_status != EventApprovalStatus.APPROVED
+        or event.cancelled_at is not None
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_event_not_sellable_detail(event))
+    if reference_now >= _to_aware_datetime(event.end_at):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_event_ended_detail(event, reference_now))
+    if _to_aware_datetime(event.start_at) <= reference_now and not payload.acknowledge_started_event:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_started_event_confirmation_detail(event, reference_now),
+        )
 
     for item in payload.items:
         tier = db.execute(select(TicketTier).where(TicketTier.id == item.ticket_tier_id)).scalar_one_or_none()
@@ -142,20 +220,28 @@ def create_order_from_selection(
         if item.quantity < tier.min_per_order or item.quantity > tier.max_per_order:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ticket quantity is outside allowed range.")
 
-        hold_result = create_ticket_hold(
-            db,
-            user_id=current_user.id,
-            ticket_tier_id=item.ticket_tier_id,
-            quantity=item.quantity,
-        )
+        try:
+            hold_result = create_ticket_hold(
+                db,
+                user_id=current_user.id,
+                ticket_tier_id=item.ticket_tier_id,
+                quantity=item.quantity,
+                now=reference_now,
+            )
+        except InsufficientAvailabilityError as exc:
+            db.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except TicketHoldWindowClosedError as exc:
+            db.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except TicketHoldError as exc:
+            db.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         hold_ids.append(hold_result.hold.id)
 
     order = create_pending_order_from_holds(db, user_id=current_user.id, hold_ids=hold_ids)
     db.commit()
     db.refresh(order)
-    print("DATABASE_URL =", settings.database_url)
-
-    print("CREATED ORDER ID =", order.id)
 
     return _to_order_response(order)
 
@@ -197,7 +283,6 @@ def create_order_from_holds(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except HoldEventMismatchError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    print("CREATED ORDER ID =", order.id)
 
     return _to_order_response(order)
 
