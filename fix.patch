@@ -1,604 +1,219 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/api/tickets.ts b/mobile/src/api/tickets.ts
-index 819d1480c36cd686332983324cfaf0379b7214f9..430cd2338569d8235b5feb5204bd2fbb71dce19f 100644
---- a/mobile/src/api/tickets.ts
-+++ b/mobile/src/api/tickets.ts
-@@ -42,41 +42,52 @@ export type WalletTicketDetail = WalletTicketCard & {
-   order_status: string;
-   order_refund_status: string;
- };
+diff --git a/backend/app/api/tickets.py b/backend/app/api/tickets.py
+index 0ed47c07af163cd83d61f9cdbc134e639936efd1..128c1f885c68cba0d5f99734f3fdfcb3b872d177 100644
+--- a/backend/app/api/tickets.py
++++ b/backend/app/api/tickets.py
+@@ -1,27 +1,28 @@
+ import json
+ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
++from sqlalchemy.exc import SQLAlchemyError
+ from sqlalchemy.orm import Session
  
- export async function listMyTickets(): Promise<WalletTicketCard[]> {
-   return apiRequest<WalletTicketCard[]>({ path: '/me/tickets', method: 'GET' });
- }
  
- export async function getMyTicket(ticketId: number): Promise<WalletTicketDetail> {
-   return apiRequest<WalletTicketDetail>({ path: `/me/tickets/${ticketId}`, method: 'GET' });
- }
+ from app.api.ticket_holds import get_current_user_id
+ from app.db.session import get_db
+ from app.schemas.notification import NotificationDispatchResponse
+ from app.schemas.ticket import (
+     TicketCheckInAttemptResponse,
+     TicketCheckInConfirmRequest,
+     TicketCheckInOverrideRequest,
+     TicketCheckInRequest,
+     TicketCheckInResponse,
+     TicketCheckInSummaryResponse,
+     TicketCheckInValidateRequest,
+     TicketCheckInValidateResponse,
+     TicketDetailResponse,
+     TicketResponse,
+     TicketTransferRequest,
+     TicketTransferPendingResponse,
+     TicketVoidRequest,
+     TicketQrResponse,
+     TicketScanRequest,
+     TicketScanResponse,
+ )
+ from app.schemas.ticket_wallet import (
+@@ -404,50 +405,58 @@ def confirm_event_ticket_check_in(
+         db,
+         scanner_user_id=user_id,
+         event_id=event_id,
+         qr_payload=payload.qr_payload,
+         ticket_code=payload.ticket_code,
+         method=method,
+     )
+     return _build_check_in_response(event_id=event_id, result=result)
  
- export type TicketQrResponse = {
-   ticket_public_token: string;
-   qr_payload: string;
-   public_ticket_url: string;
-   qr_image_url: string;
-   qr_data_uri: string;
- };
  
- export async function getMyTicketQr(ticketId: number): Promise<TicketQrResponse> {
-   return apiRequest<TicketQrResponse>({ path: `/tickets/${ticketId}/qr`, method: 'GET' });
- }
+ @router.post("/events/{event_id}/check-in/manual", response_model=TicketCheckInResponse)
+ def manual_event_ticket_check_in(
+     event_id: int,
+     payload: TicketCheckInValidateRequest,
+     db: Session = Depends(get_db),
+     user_id: int = Depends(get_current_user_id),
+ ) -> TicketCheckInResponse:
+     result = check_in_ticket(
+         db,
+         scanner_user_id=user_id,
+         event_id=event_id,
+         qr_payload=payload.qr_payload,
+         ticket_code=payload.ticket_code,
+         method=CHECK_IN_METHOD_MANUAL,
+     )
++    try:
++        db.commit()
++    except SQLAlchemyError as exc:
++        db.rollback()
++        raise HTTPException(
++            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
++            detail="Unable to persist ticket check-in.",
++        ) from exc
+     return _build_check_in_response(event_id=event_id, result=result)
  
- export type TicketScanResponse = {
-+  success?: boolean;
-+  code?: string;
-   state?: 'success' | 'already_used' | 'invalid' | 'wrong_event' | string;
-   status?: string;
-   result?: string;
-   message?: string;
-   attendee_name?: string;
-   ticket_type?: string;
-   checked_in_at?: string;
- };
  
- export async function scanTicket(payload: string, eventId: number): Promise<TicketScanResponse> {
-   return apiRequest<TicketScanResponse>({
-     path: '/tickets/scan',
-     method: 'POST',
-     body: JSON.stringify({ payload, selected_event_id: eventId }),
-   });
- }
+ @router.get("/events/{event_id}/check-in/summary", response_model=TicketCheckInSummaryResponse)
+ def get_event_ticket_check_in_summary(
+     event_id: int,
+     db: Session = Depends(get_db),
+     user_id: int = Depends(get_current_user_id),
+ ) -> TicketCheckInSummaryResponse:
+     try:
+         summary = get_event_check_in_summary(db, actor_user_id=user_id, event_id=event_id)
+     except TicketAuthorizationError as exc:
+         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+ 
+     return TicketCheckInSummaryResponse(
+         event_id=summary.event_id,
+         total_admittable_tickets=summary.total_admittable_tickets,
+         checked_in_tickets=summary.checked_in_tickets,
+         remaining_tickets=summary.remaining_tickets,
+     )
+ 
+ 
+ @router.get("/events/{event_id}/check-in/activity", response_model=list[TicketCheckInAttemptResponse])
+ def get_event_ticket_check_in_activity(
+     event_id: int,
+diff --git a/backend/tests/test_tickets_api.py b/backend/tests/test_tickets_api.py
+index daa9dcbc80bc4d7c4ba7ed318a6294bd6d58ae6e..e1009497f5f03eb092bbacb7c0657966a7c96843 100644
+--- a/backend/tests/test_tickets_api.py
++++ b/backend/tests/test_tickets_api.py
+@@ -1,33 +1,40 @@
+ from datetime import datetime, timezone
+ from types import SimpleNamespace
+ 
+ import pytest
+ from fastapi import HTTPException
++from sqlalchemy import select
++from sqlalchemy.orm import Session
+ 
+-from app.api.tickets import scan_ticket_qr
+-from app.schemas.ticket import TicketScanRequest
++from app.api.tickets import manual_event_ticket_check_in, scan_ticket_qr
++from app.models import Ticket
++from app.models.enums import TicketStatus
++from app.models.ticket_check_in_attempt import TicketCheckInAttempt
++from app.schemas.ticket import TicketCheckInValidateRequest, TicketScanRequest
++from app.services.tickets import CHECK_IN_METHOD_MANUAL, issue_tickets_for_completed_order
++from tests.test_tickets_service import _seed_order
+ 
+ 
+ def test_scan_ticket_qr_commits_successful_scan(monkeypatch) -> None:
+     class _FakeDb:
+         def __init__(self) -> None:
+             self.commit_calls = 0
+ 
+         def commit(self) -> None:
+             self.commit_calls += 1
+ 
+     expected_checked_in_at = datetime.now(timezone.utc)
+ 
+     monkeypatch.setattr(
+         "app.api.tickets.scan_ticket",
+         lambda db, *, payload, user_id: SimpleNamespace(
+             status="SUCCESS",
+             ticket_id=123,
+             checked_in_at=expected_checked_in_at,
+             message="Ticket checked in successfully.",
+         ),
+     )
+ 
+     db = _FakeDb()
+     response = scan_ticket_qr(
+         payload=TicketScanRequest(payload={"ticket_id": 123, "event_id": 99, "hash": "signed"}),
+@@ -48,25 +55,75 @@ def test_scan_ticket_qr_rejects_outside_scan_window_without_commit(monkeypatch)
+ 
+         def commit(self) -> None:
+             self.commit_calls += 1
+ 
+     monkeypatch.setattr(
+         "app.api.tickets.scan_ticket",
+         lambda db, *, payload, user_id: SimpleNamespace(
+             status="INVALID",
+             ticket_id=None,
+             checked_in_at=None,
+             message="Ticket scanning has closed for this event.",
+         ),
+     )
+ 
+     db = _FakeDb()
+     with pytest.raises(HTTPException) as exc:
+         scan_ticket_qr(
+             payload=TicketScanRequest(payload={"ticket_id": 123, "event_id": 99, "hash": "signed"}),
+             db=db,
+             user_id=456,
+         )
+ 
+     assert exc.value.status_code == 403
+     assert exc.value.detail == "Ticket scanning has closed for this event."
+     assert db.commit_calls == 0
 +
 +
-+export async function checkInTicketManually(manualCode: string, eventId: number): Promise<TicketScanResponse> {
-+  return apiRequest<TicketScanResponse>({
-+    path: `/events/${eventId}/check-in/manual`,
-+    method: 'POST',
-+    body: JSON.stringify({ ticket_code: manualCode }),
-+  });
-+}
-diff --git a/mobile/src/features/scanner/scanFeedback.ts b/mobile/src/features/scanner/scanFeedback.ts
-index fd9a918862f7d7bf6acdcedfcf631c8c9306fcb3..23808e72f9b7ec3814c126dfe1247e4a278073cb 100644
---- a/mobile/src/features/scanner/scanFeedback.ts
-+++ b/mobile/src/features/scanner/scanFeedback.ts
-@@ -1,95 +1,97 @@
- import { ApiError } from '../../api/client';
- 
- export type ScanUiState = 'requesting_permission' | 'permission_denied' | 'ready' | 'processing' | 'success' | 'error';
- 
- export type ScanOutcome =
-   | 'success'
-   | 'already_used'
-   | 'invalid'
-   | 'wrong_event'
-   | 'unauthorized'
-   | 'network_error'
-   | 'server_error';
- 
- export type ScanResult = {
-   outcome: ScanOutcome;
-   title: string;
-   message: string;
-   attendeeName?: string;
-   ticketType?: string;
-   checkedInAt?: string;
- };
- 
- export type ScanApiSuccessResponse = {
-+  success?: boolean;
-+  code?: string;
-   state?: string;
-   status?: string;
-   result?: string;
-   attendee_name?: string;
-   ticket_type?: string;
-   checked_in_at?: string;
-   message?: string;
- };
- 
- const DUPLICATE_WINDOW_MS = 2500;
- 
- function normalizeState(value?: string) {
-   return value?.trim().toLowerCase();
- }
- 
- export function shouldIgnoreDuplicateScan(
-   rawValue: string,
-   lastScanRawValue: string | null,
-   lastScanAt: number,
-   now: number,
- ) {
-   if (!rawValue.trim()) {
-     return true;
-   }
- 
-   if (!lastScanRawValue) {
-     return false;
-   }
- 
-   return rawValue === lastScanRawValue && now - lastScanAt < DUPLICATE_WINDOW_MS;
- }
- 
- export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanResult {
--  const state = normalizeState(response.state ?? response.status ?? response.result);
-+  const state = normalizeState(response.state ?? response.status ?? response.result ?? response.code);
- 
--  if (state === 'success') {
-+  if (response.success || state === 'success' || state === 'admitted') {
-     return {
-       outcome: 'success',
-       title: 'Checked In',
-       message: response.message ?? 'Ticket verified successfully.',
-       attendeeName: response.attendee_name,
-       ticketType: response.ticket_type,
-       checkedInAt: response.checked_in_at,
-     };
-   }
- 
--  if (state === 'already_used') {
-+  if (state === 'already_used' || state === 'checked_in' || state === 'already_checked_in') {
-     return {
-       outcome: 'already_used',
-       title: 'Already Used',
-       message: response.message ?? 'This ticket was already checked in.',
-       attendeeName: response.attendee_name,
-       ticketType: response.ticket_type,
-       checkedInAt: response.checked_in_at,
-     };
-   }
- 
-   if (state === 'wrong_event') {
-     return {
-       outcome: 'wrong_event',
-       title: 'Wrong Event',
-       message: response.message ?? 'This ticket belongs to a different event.',
-     };
-   }
- 
-   return {
-     outcome: 'invalid',
-     title: 'Invalid Ticket',
-     message: response.message ?? 'Ticket could not be verified.',
-   };
- }
- 
-diff --git a/mobile/src/navigation/screens/ScannerScreen.tsx b/mobile/src/navigation/screens/ScannerScreen.tsx
-index 5a68bd7ec8e536be5b26afa4bd9bfa8166de79e1..89cbf33e8e7d97a63a1fb0c169e64076528b6c4e 100644
---- a/mobile/src/navigation/screens/ScannerScreen.tsx
-+++ b/mobile/src/navigation/screens/ScannerScreen.tsx
-@@ -1,60 +1,64 @@
- import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
--import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
- import { CameraView, BarcodeScanningResult, useCameraPermissions } from 'expo-camera';
- import * as Haptics from 'expo-haptics';
- import { useIsFocused } from '@react-navigation/native';
- 
--import { scanTicket } from '../../api/tickets';
-+import { checkInTicketManually, scanTicket } from '../../api/tickets';
- import { theme } from '../../theme';
- import {
-   formatCheckedInTime,
-   mapScanErrorToResult,
-   mapScanResponseToResult,
-   ScanResult,
-   ScanUiState,
-   shouldIgnoreDuplicateScan,
- } from '../../features/scanner/scanFeedback';
- 
- type ScannerScreenProps = {
-   canAccessScanner: boolean;
-   eventId: number;
-   eventTitle: string;
-   onBack: () => void;
- };
- 
- const RESULT_COOLDOWN_MS = 1400;
- 
- export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }: ScannerScreenProps) {
-   const isFocused = useIsFocused();
-   const [permission, requestPermission] = useCameraPermissions();
-   const [isProcessingScan, setIsProcessingScan] = useState(false);
-   const [lastResult, setLastResult] = useState<ScanResult | null>(null);
-   const [lastScanRawValue, setLastScanRawValue] = useState<string | null>(null);
-   const [lastScanAt, setLastScanAt] = useState(0);
-   const [torchEnabled, setTorchEnabled] = useState(false);
-   const [feedbackFlash, setFeedbackFlash] = useState<'success' | 'error' | null>(null);
-+  const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
-+  const [manualDigits, setManualDigits] = useState('');
-+  const [isSubmittingManualCode, setIsSubmittingManualCode] = useState(false);
-+  const [manualResult, setManualResult] = useState<ScanResult | null>(null);
-   const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-   const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
- 
-   const screenState: ScanUiState = useMemo(() => {
-     if (!permission) {
-       return 'requesting_permission';
-     }
- 
-     if (!permission.granted) {
-       return 'permission_denied';
-     }
- 
-     if (isProcessingScan) {
-       return 'processing';
-     }
- 
-     if (!lastResult) {
-       return 'ready';
-     }
- 
-     return lastResult.outcome === 'success' ? 'success' : 'error';
-   }, [isProcessingScan, lastResult, permission]);
- 
-   const runFeedbackHaptics = useCallback(async (result: ScanResult) => {
-     try {
-@@ -126,50 +130,91 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
-       setIsProcessingScan(true);
-       setLastScanRawValue(rawPayload);
-       setLastScanAt(now);
- 
-       try {
-         const response = await scanTicket(rawPayload, eventId);
-         const result = mapScanResponseToResult(response);
-         setLastResult(result);
-         runFeedbackHaptics(result);
-       } catch (error) {
-         const result = mapScanErrorToResult(error);
-         setLastResult(result);
-         runFeedbackHaptics(result);
- 
-         if (__DEV__) {
-           // eslint-disable-next-line no-console
-           console.warn('[Scanner] scan error', error);
-         }
-       } finally {
-         releaseScanLock();
-       }
-     },
-     [canAccessScanner, eventId, isFocused, isProcessingScan, lastScanAt, lastScanRawValue, releaseScanLock, runFeedbackHaptics],
-   );
- 
-+  const manualLookupValue = `ADM-${manualDigits}`;
-+  const canSubmitManualCode = manualDigits.length === 6 && !isSubmittingManualCode;
++def test_manual_event_ticket_check_in_commits_successful_admission(db_session: Session) -> None:
++    order, _, _, _, event = _seed_order(db_session, quantity=1)
++    ticket = issue_tickets_for_completed_order(db_session, order)[0]
++    ticket.manual_code = "ADM-123456"
++    db_session.commit()
++    ticket_id = ticket.id
++    scanner_user_id = event.organizer.user_id
++    event_id = event.id
 +
-+  const onManualDigitsChange = useCallback((value: string) => {
-+    setManualDigits(value.replace(/\D/g, '').slice(0, 6));
-+    setManualResult(null);
-+  }, []);
++    response = manual_event_ticket_check_in(
++        event_id=event_id,
++        payload=TicketCheckInValidateRequest(ticket_code="ADM-123456"),
++        db=db_session,
++        user_id=scanner_user_id,
++    )
 +
-+  const onSubmitManualCode = useCallback(async () => {
-+    if (!canSubmitManualCode) {
-+      return;
-+    }
++    assert response.success is True
++    assert response.code == "admitted"
++    assert response.ticket_id == ticket_id
++    assert response.checked_in_by_user_id == scanner_user_id
 +
-+    setIsSubmittingManualCode(true);
++    db_session.expire_all()
++    persisted_ticket = db_session.get(Ticket, ticket_id)
++    assert persisted_ticket is not None
++    assert persisted_ticket.status == TicketStatus.CHECKED_IN
++    assert persisted_ticket.checked_in_at is not None
++    assert persisted_ticket.checked_in_by_user_id == scanner_user_id
++    assert persisted_ticket.check_in_method == CHECK_IN_METHOD_MANUAL
 +
-+    try {
-+      const response = await checkInTicketManually(manualLookupValue, eventId);
-+      const result = mapScanResponseToResult(response);
-+      setLastResult(result);
-+      setManualResult(result);
-+      runFeedbackHaptics(result);
++    attempt = db_session.execute(
++        select(TicketCheckInAttempt).where(
++            TicketCheckInAttempt.ticket_id == ticket_id,
++            TicketCheckInAttempt.event_id == event_id,
++            TicketCheckInAttempt.actor_user_id == scanner_user_id,
++            TicketCheckInAttempt.method == CHECK_IN_METHOD_MANUAL,
++        )
++    ).scalar_one_or_none()
++    assert attempt is not None
 +
-+      if (result.outcome === 'success') {
-+        setManualDigits('');
-+        setIsManualEntryOpen(false);
-+      }
-+    } catch (error) {
-+      const result = mapScanErrorToResult(error);
-+      setLastResult(result);
-+      setManualResult(result);
-+      runFeedbackHaptics(result);
++    duplicate_response = manual_event_ticket_check_in(
++        event_id=event_id,
++        payload=TicketCheckInValidateRequest(ticket_code="ADM-123456"),
++        db=db_session,
++        user_id=scanner_user_id,
++    )
 +
-+      if (__DEV__) {
-+        // eslint-disable-next-line no-console
-+        console.warn('[Scanner] manual check-in error', error);
-+      }
-+    } finally {
-+      setIsSubmittingManualCode(false);
-+    }
-+  }, [canSubmitManualCode, eventId, manualLookupValue, runFeedbackHaptics]);
-+
-   const statusLabel =
-     screenState === 'processing'
-       ? 'Processing…'
-       : screenState === 'success'
-         ? 'Last scan: successful'
-       : screenState === 'error'
-           ? 'Last scan: failed'
-           : 'Ready to scan';
- 
-   if (!canAccessScanner) {
-     return (
-       <View style={styles.deniedWrap}>
-         <Text style={styles.deniedTitle}>Scanner Access Required</Text>
-         <Text style={styles.deniedText}>You do not have access to scanner mode on this account.</Text>
-         <Pressable style={styles.backButton} onPress={onBack}>
-           <Text style={styles.backButtonText}>Go Back</Text>
-         </Pressable>
-       </View>
-     );
-   }
- 
-   if (!permission) {
-     return (
-       <View style={styles.centeredWrap}>
-         <ActivityIndicator color={theme.colors.primary} />
-@@ -261,52 +306,108 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
-           </View>
- 
-           {lastResult ? (
-             <View style={[styles.resultCard, lastResult.outcome === 'success' ? styles.resultSuccess : styles.resultError]}>
-               <Text style={styles.resultTitle}>{lastResult.title}</Text>
-               <Text style={styles.resultMessage}>{lastResult.message}</Text>
-               {lastResult.attendeeName ? <Text style={styles.resultMeta}>Name: {lastResult.attendeeName}</Text> : null}
-               {lastResult.ticketType ? <Text style={styles.resultMeta}>Ticket: {lastResult.ticketType}</Text> : null}
-               {lastResult.checkedInAt ? (
-                 <Text style={styles.resultMeta}>Checked in: {formatCheckedInTime(lastResult.checkedInAt)}</Text>
-               ) : null}
-               <Pressable
-                 onPress={() => {
-                   setLastResult(null);
-                   setIsProcessingScan(false);
-                 }}
-                 style={styles.scanAgainButton}
-               >
-                 <Text style={styles.scanAgainText}>Scan Again</Text>
-               </Pressable>
-             </View>
-           ) : (
-             <Text style={styles.hintText}>Hold the ticket QR code inside the frame.</Text>
-           )}
- 
--          {/* TODO(phase-8): add manual code entry fallback when manual check-in endpoint is finalized. */}
-+          <Pressable style={styles.manualEntryButton} onPress={() => { setManualResult(null); setIsManualEntryOpen(true); }}>
-+            <Text style={styles.manualEntryButtonText}>Enter code manually</Text>
-+          </Pressable>
-         </View>
-+
-+        <Modal visible={isManualEntryOpen} transparent animationType="slide" onRequestClose={() => setIsManualEntryOpen(false)}>
-+          <KeyboardAvoidingView
-+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-+            style={styles.modalBackdrop}
-+          >
-+            <Pressable style={styles.modalScrim} onPress={() => setIsManualEntryOpen(false)} />
-+            <View style={styles.manualSheet}>
-+              <Text style={styles.manualTitle}>Manual check-in code</Text>
-+              <Text style={styles.manualHelper}>Enter the 6-digit code shown on the ticket.</Text>
-+
-+              <View style={styles.manualCodeRow}>
-+                <View style={styles.manualPrefixBox}>
-+                  <Text style={styles.manualPrefixText}>ADM -</Text>
-+                </View>
-+                <TextInput
-+                  accessibilityLabel="6-digit ticket code"
-+                  autoFocus
-+                  keyboardType="number-pad"
-+                  maxLength={6}
-+                  onChangeText={onManualDigitsChange}
-+                  placeholder="123456"
-+                  placeholderTextColor={theme.colors.textSecondary}
-+                  style={styles.manualInput}
-+                  value={manualDigits}
-+                />
-+              </View>
-+
-+              {manualResult && manualResult.outcome !== 'success' ? (
-+                <View style={styles.manualErrorBox}>
-+                  <Text style={styles.manualErrorTitle}>{manualResult.title}</Text>
-+                  <Text style={styles.manualErrorText}>{manualResult.message}</Text>
-+                </View>
-+              ) : null}
-+
-+              <View style={styles.manualActions}>
-+                <Pressable
-+                  style={[styles.manualActionButton, styles.manualCancelButton]}
-+                  onPress={() => setIsManualEntryOpen(false)}
-+                  disabled={isSubmittingManualCode}
-+                >
-+                  <Text style={styles.manualCancelText}>Cancel</Text>
-+                </Pressable>
-+                <Pressable
-+                  style={[styles.manualActionButton, styles.manualSubmitButton, !canSubmitManualCode && styles.manualSubmitDisabled]}
-+                  onPress={onSubmitManualCode}
-+                  disabled={!canSubmitManualCode}
-+                >
-+                  <Text style={styles.manualSubmitText}>{isSubmittingManualCode ? 'Checking in…' : 'Check in'}</Text>
-+                </Pressable>
-+              </View>
-+            </View>
-+          </KeyboardAvoidingView>
-+        </Modal>
-       </View>
-     </View>
-   );
- }
- 
- const styles = StyleSheet.create({
-   container: {
-     flex: 1,
-     backgroundColor: theme.colors.background,
-   },
-   overlay: {
-     flex: 1,
-     justifyContent: 'space-between',
-   },
-   feedbackFlash: {
-     ...StyleSheet.absoluteFillObject,
-     zIndex: 2,
-   },
-   flashSuccess: {
-     backgroundColor: 'rgba(47,168,106,0.16)',
-   },
-   flashError: {
-     backgroundColor: 'rgba(214,69,69,0.18)',
-   },
-   topBar: {
-@@ -457,50 +558,164 @@ const styles = StyleSheet.create({
-   resultMessage: {
-     color: theme.colors.textPrimary,
-     fontWeight: '600',
-   },
-   resultMeta: {
-     color: '#EFE3B2',
-     fontSize: theme.typography.label,
-   },
-   hintText: {
-     color: theme.colors.textSecondary,
-   },
-   scanAgainButton: {
-     alignSelf: 'flex-start',
-     marginTop: theme.spacing.xs,
-     borderColor: theme.colors.primary,
-     borderWidth: 1,
-     borderRadius: theme.radius.md,
-     paddingHorizontal: theme.spacing.md,
-     paddingVertical: theme.spacing.xs,
-     backgroundColor: '#1A1609',
-   },
-   scanAgainText: {
-     color: theme.colors.primary,
-     fontWeight: '700',
-   },
-+
-+  manualEntryButton: {
-+    alignSelf: 'stretch',
-+    borderColor: theme.colors.primary,
-+    borderWidth: 1,
-+    borderRadius: theme.radius.md,
-+    paddingHorizontal: theme.spacing.md,
-+    paddingVertical: theme.spacing.sm,
-+    backgroundColor: '#1A1609',
-+    alignItems: 'center',
-+  },
-+  manualEntryButtonText: {
-+    color: theme.colors.primary,
-+    fontWeight: '800',
-+  },
-+  modalBackdrop: {
-+    flex: 1,
-+    justifyContent: 'flex-end',
-+  },
-+  modalScrim: {
-+    ...StyleSheet.absoluteFillObject,
-+    backgroundColor: 'rgba(0,0,0,0.58)',
-+  },
-+  manualSheet: {
-+    backgroundColor: theme.colors.surface,
-+    borderTopLeftRadius: theme.radius.lg,
-+    borderTopRightRadius: theme.radius.lg,
-+    borderColor: theme.colors.border,
-+    borderWidth: 1,
-+    padding: theme.spacing.lg,
-+    gap: theme.spacing.md,
-+  },
-+  manualTitle: {
-+    color: theme.colors.textPrimary,
-+    fontSize: theme.typography.heading,
-+    fontWeight: '800',
-+  },
-+  manualHelper: {
-+    color: theme.colors.textSecondary,
-+  },
-+  manualCodeRow: {
-+    flexDirection: 'row',
-+    alignItems: 'stretch',
-+    borderColor: theme.colors.border,
-+    borderWidth: 1,
-+    borderRadius: theme.radius.md,
-+    overflow: 'hidden',
-+    backgroundColor: theme.colors.background,
-+  },
-+  manualPrefixBox: {
-+    justifyContent: 'center',
-+    paddingHorizontal: theme.spacing.md,
-+    backgroundColor: '#171717',
-+    borderRightColor: theme.colors.border,
-+    borderRightWidth: 1,
-+  },
-+  manualPrefixText: {
-+    color: theme.colors.textPrimary,
-+    fontWeight: '800',
-+    fontSize: 20,
-+  },
-+  manualInput: {
-+    flex: 1,
-+    color: theme.colors.textPrimary,
-+    fontSize: 24,
-+    fontWeight: '800',
-+    letterSpacing: 3,
-+    paddingHorizontal: theme.spacing.md,
-+    paddingVertical: theme.spacing.sm,
-+  },
-+  manualErrorBox: {
-+    borderColor: '#D64545',
-+    borderWidth: 1,
-+    borderRadius: theme.radius.md,
-+    backgroundColor: 'rgba(214,69,69,0.14)',
-+    padding: theme.spacing.md,
-+    gap: theme.spacing.xs,
-+  },
-+  manualErrorTitle: {
-+    color: theme.colors.textPrimary,
-+    fontWeight: '800',
-+  },
-+  manualErrorText: {
-+    color: theme.colors.textPrimary,
-+  },
-+  manualActions: {
-+    flexDirection: 'row',
-+    gap: theme.spacing.sm,
-+  },
-+  manualActionButton: {
-+    flex: 1,
-+    alignItems: 'center',
-+    borderRadius: theme.radius.md,
-+    paddingVertical: theme.spacing.sm,
-+  },
-+  manualCancelButton: {
-+    borderColor: theme.colors.border,
-+    borderWidth: 1,
-+    backgroundColor: theme.colors.background,
-+  },
-+  manualCancelText: {
-+    color: theme.colors.textPrimary,
-+    fontWeight: '700',
-+  },
-+  manualSubmitButton: {
-+    backgroundColor: theme.colors.primary,
-+  },
-+  manualSubmitDisabled: {
-+    opacity: 0.45,
-+  },
-+  manualSubmitText: {
-+    color: '#141108',
-+    fontWeight: '800',
-+  },
-   deniedWrap: {
-     flex: 1,
-     backgroundColor: theme.colors.background,
-     justifyContent: 'center',
-     alignItems: 'center',
-     paddingHorizontal: theme.spacing.xl,
-     gap: theme.spacing.sm,
-   },
-   deniedTitle: {
-     color: theme.colors.textPrimary,
-     fontWeight: '700',
-     fontSize: theme.typography.heading,
-     textAlign: 'center',
-   },
-   deniedText: {
-     color: theme.colors.textSecondary,
-     textAlign: 'center',
-   },
-   centeredWrap: {
-     flex: 1,
-     backgroundColor: theme.colors.background,
-     alignItems: 'center',
-     justifyContent: 'center',
-     gap: theme.spacing.sm,
-   },
++    assert duplicate_response.success is False
++    assert duplicate_response.code == "already_used"
  
 EOF
 )

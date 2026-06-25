@@ -1,5 +1,6 @@
 import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 
@@ -426,6 +427,14 @@ def manual_event_ticket_check_in(
         ticket_code=payload.ticket_code,
         method=CHECK_IN_METHOD_MANUAL,
     )
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to persist ticket check-in.",
+        ) from exc
     return _build_check_in_response(event_id=event_id, result=result)
 
 
