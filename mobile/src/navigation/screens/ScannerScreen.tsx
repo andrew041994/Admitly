@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CameraView, BarcodeScanningResult, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import { useIsFocused } from '@react-navigation/native';
 
-import { scanTicket } from '../../api/tickets';
+import { checkInTicketManually, scanTicket } from '../../api/tickets';
 import { theme } from '../../theme';
 import {
   formatCheckedInTime,
@@ -33,6 +33,10 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
   const [lastScanAt, setLastScanAt] = useState(0);
   const [torchEnabled, setTorchEnabled] = useState(false);
   const [feedbackFlash, setFeedbackFlash] = useState<'success' | 'error' | null>(null);
+  const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
+  const [manualDigits, setManualDigits] = useState('');
+  const [isSubmittingManualCode, setIsSubmittingManualCode] = useState(false);
+  const [manualResult, setManualResult] = useState<ScanResult | null>(null);
   const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -147,6 +151,47 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
     },
     [canAccessScanner, eventId, isFocused, isProcessingScan, lastScanAt, lastScanRawValue, releaseScanLock, runFeedbackHaptics],
   );
+
+  const manualLookupValue = `ADM-${manualDigits}`;
+  const canSubmitManualCode = manualDigits.length === 6 && !isSubmittingManualCode;
+
+  const onManualDigitsChange = useCallback((value: string) => {
+    setManualDigits(value.replace(/\D/g, '').slice(0, 6));
+    setManualResult(null);
+  }, []);
+
+  const onSubmitManualCode = useCallback(async () => {
+    if (!canSubmitManualCode) {
+      return;
+    }
+
+    setIsSubmittingManualCode(true);
+
+    try {
+      const response = await checkInTicketManually(manualLookupValue, eventId);
+      const result = mapScanResponseToResult(response);
+      setLastResult(result);
+      setManualResult(result);
+      runFeedbackHaptics(result);
+
+      if (result.outcome === 'success') {
+        setManualDigits('');
+        setIsManualEntryOpen(false);
+      }
+    } catch (error) {
+      const result = mapScanErrorToResult(error);
+      setLastResult(result);
+      setManualResult(result);
+      runFeedbackHaptics(result);
+
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.warn('[Scanner] manual check-in error', error);
+      }
+    } finally {
+      setIsSubmittingManualCode(false);
+    }
+  }, [canSubmitManualCode, eventId, manualLookupValue, runFeedbackHaptics]);
 
   const statusLabel =
     screenState === 'processing'
@@ -283,8 +328,64 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
             <Text style={styles.hintText}>Hold the ticket QR code inside the frame.</Text>
           )}
 
-          {/* TODO(phase-8): add manual code entry fallback when manual check-in endpoint is finalized. */}
+          <Pressable style={styles.manualEntryButton} onPress={() => { setManualResult(null); setIsManualEntryOpen(true); }}>
+            <Text style={styles.manualEntryButtonText}>Enter code manually</Text>
+          </Pressable>
         </View>
+
+        <Modal visible={isManualEntryOpen} transparent animationType="slide" onRequestClose={() => setIsManualEntryOpen(false)}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalBackdrop}
+          >
+            <Pressable style={styles.modalScrim} onPress={() => setIsManualEntryOpen(false)} />
+            <View style={styles.manualSheet}>
+              <Text style={styles.manualTitle}>Manual check-in code</Text>
+              <Text style={styles.manualHelper}>Enter the 6-digit code shown on the ticket.</Text>
+
+              <View style={styles.manualCodeRow}>
+                <View style={styles.manualPrefixBox}>
+                  <Text style={styles.manualPrefixText}>ADM -</Text>
+                </View>
+                <TextInput
+                  accessibilityLabel="6-digit ticket code"
+                  autoFocus
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  onChangeText={onManualDigitsChange}
+                  placeholder="123456"
+                  placeholderTextColor={theme.colors.textSecondary}
+                  style={styles.manualInput}
+                  value={manualDigits}
+                />
+              </View>
+
+              {manualResult && manualResult.outcome !== 'success' ? (
+                <View style={styles.manualErrorBox}>
+                  <Text style={styles.manualErrorTitle}>{manualResult.title}</Text>
+                  <Text style={styles.manualErrorText}>{manualResult.message}</Text>
+                </View>
+              ) : null}
+
+              <View style={styles.manualActions}>
+                <Pressable
+                  style={[styles.manualActionButton, styles.manualCancelButton]}
+                  onPress={() => setIsManualEntryOpen(false)}
+                  disabled={isSubmittingManualCode}
+                >
+                  <Text style={styles.manualCancelText}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.manualActionButton, styles.manualSubmitButton, !canSubmitManualCode && styles.manualSubmitDisabled]}
+                  onPress={onSubmitManualCode}
+                  disabled={!canSubmitManualCode}
+                >
+                  <Text style={styles.manualSubmitText}>{isSubmittingManualCode ? 'Checking in…' : 'Check in'}</Text>
+                </Pressable>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
       </View>
     </View>
   );
@@ -478,6 +579,120 @@ const styles = StyleSheet.create({
   scanAgainText: {
     color: theme.colors.primary,
     fontWeight: '700',
+  },
+
+  manualEntryButton: {
+    alignSelf: 'stretch',
+    borderColor: theme.colors.primary,
+    borderWidth: 1,
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    backgroundColor: '#1A1609',
+    alignItems: 'center',
+  },
+  manualEntryButtonText: {
+    color: theme.colors.primary,
+    fontWeight: '800',
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.58)',
+  },
+  manualSheet: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: theme.radius.lg,
+    borderTopRightRadius: theme.radius.lg,
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.md,
+  },
+  manualTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.heading,
+    fontWeight: '800',
+  },
+  manualHelper: {
+    color: theme.colors.textSecondary,
+  },
+  manualCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+    borderRadius: theme.radius.md,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.background,
+  },
+  manualPrefixBox: {
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.md,
+    backgroundColor: '#171717',
+    borderRightColor: theme.colors.border,
+    borderRightWidth: 1,
+  },
+  manualPrefixText: {
+    color: theme.colors.textPrimary,
+    fontWeight: '800',
+    fontSize: 20,
+  },
+  manualInput: {
+    flex: 1,
+    color: theme.colors.textPrimary,
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: 3,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  manualErrorBox: {
+    borderColor: '#D64545',
+    borderWidth: 1,
+    borderRadius: theme.radius.md,
+    backgroundColor: 'rgba(214,69,69,0.14)',
+    padding: theme.spacing.md,
+    gap: theme.spacing.xs,
+  },
+  manualErrorTitle: {
+    color: theme.colors.textPrimary,
+    fontWeight: '800',
+  },
+  manualErrorText: {
+    color: theme.colors.textPrimary,
+  },
+  manualActions: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  manualActionButton: {
+    flex: 1,
+    alignItems: 'center',
+    borderRadius: theme.radius.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  manualCancelButton: {
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+    backgroundColor: theme.colors.background,
+  },
+  manualCancelText: {
+    color: theme.colors.textPrimary,
+    fontWeight: '700',
+  },
+  manualSubmitButton: {
+    backgroundColor: theme.colors.primary,
+  },
+  manualSubmitDisabled: {
+    opacity: 0.45,
+  },
+  manualSubmitText: {
+    color: '#141108',
+    fontWeight: '800',
   },
   deniedWrap: {
     flex: 1,

@@ -21,6 +21,8 @@ export type ScanResult = {
 };
 
 export type ScanApiSuccessResponse = {
+  success?: boolean;
+  code?: string;
   state?: string;
   status?: string;
   result?: string;
@@ -54,9 +56,9 @@ export function shouldIgnoreDuplicateScan(
 }
 
 export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanResult {
-  const state = normalizeState(response.state ?? response.status ?? response.result);
+  const state = normalizeState(response.state ?? response.status ?? response.result ?? response.code);
 
-  if (state === 'success') {
+  if (response.success || state === 'success' || state === 'admitted') {
     return {
       outcome: 'success',
       title: 'Checked In',
@@ -67,7 +69,7 @@ export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanR
     };
   }
 
-  if (state === 'already_used') {
+  if (state === 'already_used' || state === 'checked_in' || state === 'already_checked_in') {
     return {
       outcome: 'already_used',
       title: 'Already Used',

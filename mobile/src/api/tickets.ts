@@ -64,6 +64,8 @@ export async function getMyTicketQr(ticketId: number): Promise<TicketQrResponse>
 }
 
 export type TicketScanResponse = {
+  success?: boolean;
+  code?: string;
   state?: 'success' | 'already_used' | 'invalid' | 'wrong_event' | string;
   status?: string;
   result?: string;
@@ -78,5 +80,14 @@ export async function scanTicket(payload: string, eventId: number): Promise<Tick
     path: '/tickets/scan',
     method: 'POST',
     body: JSON.stringify({ payload, selected_event_id: eventId }),
+  });
+}
+
+
+export async function checkInTicketManually(manualCode: string, eventId: number): Promise<TicketScanResponse> {
+  return apiRequest<TicketScanResponse>({
+    path: `/events/${eventId}/check-in/manual`,
+    method: 'POST',
+    body: JSON.stringify({ ticket_code: manualCode }),
   });
 }
