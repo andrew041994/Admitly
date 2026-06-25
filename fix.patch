@@ -1,97 +1,88 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/services/venues.py b/backend/app/services/venues.py
-index 83d7fa895620310297ac5aa69b168388f3d791a0..ec43fae95a4ea8db30efcc3cdee97653926092f6 100644
---- a/backend/app/services/venues.py
-+++ b/backend/app/services/venues.py
-@@ -1,63 +1,75 @@
+diff --git a/backend/tests/test_admin_event_approvals.py b/backend/tests/test_admin_event_approvals.py
+index 795b6fa82d29177892cd75e1a81538ca6d19df83..d9ce431437c26dfcb1090c8e55ecddf1d4f3c5de 100644
+--- a/backend/tests/test_admin_event_approvals.py
++++ b/backend/tests/test_admin_event_approvals.py
+@@ -1,79 +1,83 @@
  from __future__ import annotations
  
- import re
+-from datetime import datetime, timedelta, timezone
++from datetime import datetime, timedelta
++from zoneinfo import ZoneInfo
  
--from sqlalchemy import func, select
-+from sqlalchemy import select
+ from sqlalchemy import select
  from sqlalchemy.orm import Session
  
+ from app.api.events import approve_event_for_discovery, discover_events, list_pending_event_approvals
+ from app.models.event import Event
+ from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility
+ from app.models.organizer_profile import OrganizerProfile
+ from app.models.user import User
  from app.models.venue import Venue
  
  
-+def _collapse_whitespace(value: str) -> str:
-+    return re.sub(r"\s+", " ", value.strip())
++GUYANA_TZ = ZoneInfo("America/Guyana")
 +
 +
- def normalize_venue_name(value: str) -> str:
--    return re.sub(r"\s+", " ", value.strip()).lower()
-+    return _collapse_whitespace(value).lower()
- 
- 
- def normalize_address_text(value: str) -> str:
--    return re.sub(r"\s+", " ", value.strip()).lower()
-+    return _collapse_whitespace(value).lower()
- 
- 
- def get_venue_address_text(venue: Venue) -> str | None:
-     parts = [venue.address_line1, venue.address_line2, venue.city, venue.country]
--    cleaned = [part.strip() for part in parts if part and part.strip()]
-+    cleaned = [_collapse_whitespace(part) for part in parts if part and part.strip()]
-     if not cleaned:
-         return None
-     return ", ".join(cleaned)
- 
- 
- def find_venue_by_name_and_address(
+ def _seed_event(
      db: Session,
      *,
-+    organizer_id: int,
-     venue_name: str,
-     address_text: str,
- ) -> Venue | None:
-     normalized_name = normalize_venue_name(venue_name)
-     normalized_address = normalize_address_text(address_text)
-     candidates = db.execute(
--        select(Venue).where(func.lower(Venue.name) == normalized_name).order_by(Venue.id.asc())
-+        select(Venue).where(Venue.organizer_id == organizer_id).order_by(Venue.id.asc())
-     ).scalars().all()
-     for venue in candidates:
-+        if normalize_venue_name(venue.name or "") != normalized_name:
-+            continue
-         existing_address = get_venue_address_text(venue)
-         if existing_address and normalize_address_text(existing_address) == normalized_address:
-             return venue
-     return None
+     slug: str,
+     title: str,
+     approval_status: EventApprovalStatus,
+     status: EventStatus = EventStatus.PUBLISHED,
+     cancelled_at: datetime | None = None,
+ ) -> Event:
+-    now = datetime(2026, 4, 10, tzinfo=timezone.utc)
++    now = datetime.now(GUYANA_TZ).replace(microsecond=0)
+     organizer_user = User(email=f"org-{slug}@test.local", full_name="Organizer")
+     db.add(organizer_user)
+     db.flush()
  
- 
- def resolve_or_create_venue(
-     db: Session,
-     *,
-     organizer_id: int,
-     venue_name: str,
-     address_text: str,
- ) -> Venue:
--    existing = find_venue_by_name_and_address(db, venue_name=venue_name, address_text=address_text)
-+    existing = find_venue_by_name_and_address(
-+        db,
-+        organizer_id=organizer_id,
-+        venue_name=venue_name,
-+        address_text=address_text,
-+    )
-     if existing is not None:
-         return existing
- 
-     venue = Venue(
-         organizer_id=organizer_id,
--        name=re.sub(r"\s+", " ", venue_name.strip()),
--        address_line1=re.sub(r"\s+", " ", address_text.strip()),
-+        name=_collapse_whitespace(venue_name),
-+        address_line1=_collapse_whitespace(address_text),
+     organizer = OrganizerProfile(
+         user_id=organizer_user.id,
+         business_name="Organizer Biz",
+         display_name="Organizer Biz",
      )
+     db.add(organizer)
+     db.flush()
+ 
+     venue = Venue(organizer_id=organizer.id, name="Main Hall")
      db.add(venue)
      db.flush()
-     return venue
-diff --git a/backend/tests/test_admin_event_approvals.py b/backend/tests/test_admin_event_approvals.py
-index 0a50e734a7ae42665b206b30720024cfde27c3bb..795b6fa82d29177892cd75e1a81538ca6d19df83 100644
---- a/backend/tests/test_admin_event_approvals.py
-+++ b/backend/tests/test_admin_event_approvals.py
-@@ -71,56 +71,72 @@ def test_pending_approval_list_and_approve_updates_state(db_session: Session) ->
+ 
+     event = Event(
+         organizer_id=organizer.id,
+         venue_id=venue.id,
+         title=title,
+         slug=slug,
+-        start_at=now + timedelta(days=4),
+-        end_at=now + timedelta(days=4, hours=2),
++        start_at=now + timedelta(days=1),
++        end_at=now + timedelta(days=1, hours=3),
+         status=status,
+         visibility=EventVisibility.PUBLIC,
+         approval_status=approval_status,
+         timezone="America/Guyana",
+         is_location_pinned=False,
+-        published_at=now,
++        published_at=now - timedelta(minutes=5),
+         cancelled_at=cancelled_at,
+     )
+     db.add(event)
+     db.commit()
+     db.refresh(event)
+     return event
+ 
+ 
+ def test_pending_approval_list_and_approve_updates_state(db_session: Session) -> None:
+     admin = User(email="admin-event-approve@test.local", full_name="Admin", is_admin=True)
+     db_session.add(admin)
+     db_session.commit()
+     db_session.refresh(admin)
+ 
+     pending = _seed_event(db_session, slug="pending-review-event", title="Pending Review", approval_status=EventApprovalStatus.PENDING)
+ 
      rows = list_pending_event_approvals(db=db_session, user_id=admin.id)
      assert [row.id for row in rows] == [pending.id]
      assert rows[0].approval_status == EventApprovalStatus.PENDING.value
@@ -101,48 +92,7 @@ index 0a50e734a7ae42665b206b30720024cfde27c3bb..795b6fa82d29177892cd75e1a81538ca
      assert updated.approval_status == EventApprovalStatus.APPROVED.value
  
      refreshed = db_session.execute(select(Event).where(Event.id == pending.id)).scalar_one()
-     assert refreshed.approval_status == EventApprovalStatus.APPROVED
- 
-     remaining = list_pending_event_approvals(db=db_session, user_id=admin.id)
-     assert remaining == []
- 
- 
- def test_discovery_excludes_pending_and_includes_after_admin_approval(db_session: Session) -> None:
-     admin = User(email="admin-event-discover@test.local", full_name="Admin", is_admin=True)
-     viewer = User(email="viewer-event-discover@test.local", full_name="Viewer")
-     db_session.add_all([admin, viewer])
-     db_session.commit()
-     db_session.refresh(admin)
-     db_session.refresh(viewer)
- 
-     pending = _seed_event(db_session, slug="discover-pending-event", title="Needs Approval", approval_status=EventApprovalStatus.PENDING)
- 
--    before = discover_events(db=db_session, _user_id=viewer.id)
-+    before = discover_events(
-+        q=None,
-+        category=None,
-+        city=None,
-+        date_bucket=None,
-+        is_free=None,
-+        db=db_session,
-+        _user_id=viewer.id,
-+    )
-     assert all(item.id != pending.id for item in before)
- 
-     approve_event_for_discovery(event_id=pending.id, db=db_session, user_id=admin.id)
- 
--    after = discover_events(db=db_session, _user_id=viewer.id)
-+    after = discover_events(
-+        q=None,
-+        category=None,
-+        city=None,
-+        date_bucket=None,
-+        is_free=None,
-+        db=db_session,
-+        _user_id=viewer.id,
-+    )
-     assert any(item.id == pending.id for item in after)
- 
+@@ -120,30 +124,30 @@ def test_discovery_excludes_pending_and_includes_after_admin_approval(db_session
  
  def test_pending_approval_list_excludes_cancelled_events(db_session: Session) -> None:
      admin = User(email="admin-event-cancelled@test.local", full_name="Admin", is_admin=True)
@@ -166,140 +116,14 @@ index 0a50e734a7ae42665b206b30720024cfde27c3bb..795b6fa82d29177892cd75e1a81538ca
      _seed_event(
          db_session,
          slug="cancelled-at-pending-event",
-diff --git a/backend/tests/test_orders_api.py b/backend/tests/test_orders_api.py
-index 343a66856d679ab321ea923160a5b0a971d9ea3d..9ced20760e4a16528e5c5b52350d05e28f9597da 100644
---- a/backend/tests/test_orders_api.py
-+++ b/backend/tests/test_orders_api.py
-@@ -24,61 +24,71 @@ def test_dev_test_checkout_route_is_post_and_defaults_to_http_200() -> None:
+         title="Cancelled By Timestamp",
+         approval_status=EventApprovalStatus.PENDING,
+-        cancelled_at=datetime(2026, 4, 11, tzinfo=timezone.utc),
++        cancelled_at=datetime.now(GUYANA_TZ).replace(microsecond=0),
+     )
  
- def test_dev_test_checkout_handler_returns_payload_when_enabled(monkeypatch) -> None:
-     previous_enabled = settings.enable_dev_test_checkout
-     previous_env = settings.env
- 
-     settings.enable_dev_test_checkout = True
-     settings.env = "development"
- 
-     def _fake_complete_checkout(db, *, order_id: int, user_id: int):
-         assert order_id == 77
-         assert user_id == 123
-         return SimpleNamespace(
-             order_id=order_id,
-             order_reference="ORD-77",
-             provider="dev_test",
-             payment_method="dev_test",
-             payment_reference="pay-ref-77",
-             status="completed",
-             payment_verification_status="verified",
-             message="Dev test checkout completed.",
-         )
- 
-     monkeypatch.setattr("app.api.orders.apply_rate_limit", lambda **_: None)
-     monkeypatch.setattr("app.api.orders.complete_dev_test_checkout_for_order", _fake_complete_checkout)
- 
-+    class _FakeDb:
-+        def __init__(self) -> None:
-+            self.commit_calls = 0
-+
-+        def commit(self) -> None:
-+            self.commit_calls += 1
-+
-+    db = _FakeDb()
-+
-     try:
-         response = complete_dev_test_checkout(
-             order_id=77,
--            db=object(),
-+            db=db,
-             current_user=SimpleNamespace(id=123),
-             client_ip="127.0.0.1",
-         )
-     finally:
-         settings.enable_dev_test_checkout = previous_enabled
-         settings.env = previous_env
- 
-+    assert db.commit_calls == 1
-     assert response.order_id == 77
-     assert response.provider == "dev_test"
-     assert response.payment_reference == "pay-ref-77"
- 
- 
- def test_dev_test_checkout_handler_commits_after_success(monkeypatch) -> None:
-     previous_enabled = settings.enable_dev_test_checkout
-     previous_env = settings.env
- 
-     settings.enable_dev_test_checkout = True
-     settings.env = "development"
- 
-     class _FakeDb:
-         def __init__(self) -> None:
-             self.commit_calls = 0
- 
-         def commit(self) -> None:
-             self.commit_calls += 1
- 
-     def _fake_complete_checkout(db, *, order_id: int, user_id: int):
-         assert order_id == 88
-         assert user_id == 456
-         return SimpleNamespace(
-             order_id=order_id,
-             order_reference="ORD-88",
-diff --git a/backend/tests/test_reporting_api.py b/backend/tests/test_reporting_api.py
-index 60220975960bdcbfeba3fba5ddae75ab8d616883..c796b4ae11573183f3666c44e70429a867f70f7d 100644
---- a/backend/tests/test_reporting_api.py
-+++ b/backend/tests/test_reporting_api.py
-@@ -4,51 +4,51 @@ import os
- 
- import pytest
- from sqlalchemy import create_engine, select
- from sqlalchemy.orm import Session, sessionmaker
- 
- from app.main import app
- from app.db.base import Base
- from app.models import Event, OrganizerProfile, Order, OrderItem, TicketHold, TicketTier, Ticket, User, Venue
- from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus, TicketStatus
- from app.services.reporting import (
-     get_event_checkin_summary,
-     get_event_reporting_summary,
-     get_event_tier_summary,
-     list_event_checkins,
-     list_event_orders_for_organizer,
-     list_event_tickets_for_organizer,
-     validate_event_reporting_access,
-     EventReportingAuthorizationError,
- )
- from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user, void_ticket, check_in_ticket_for_event
- from tests.utils import unique_email
- 
- 
- 
- def _seed_reporting_data(db: Session):
--    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
-+    now = datetime.now(timezone.utc).replace(microsecond=0)
- 
-     organizer_user = User(email=unique_email("organizer"), full_name="Organizer")
-     unrelated_user = User(email=unique_email("viewer"), full_name="Viewer")
-     admin_user = User(email=unique_email("admin"), full_name="Admin", is_admin=True)
-     buyer = User(email=unique_email("buyer"), full_name="Buyer")
-     recipient = User(email=unique_email("recipient"), full_name="Recipient")
-     scanner = User(email=unique_email("scanner"), full_name="Scanner")
-     db.add_all([organizer_user, unrelated_user, admin_user, buyer, recipient, scanner])
-     db.flush()
- 
-     organizer = OrganizerProfile(user_id=organizer_user.id, business_name="Org", display_name="Org")
-     db.add(organizer)
-     db.flush()
- 
-     venue = Venue(organizer_id=organizer.id, name="Venue")
-     db.add(venue)
-     db.flush()
- 
-     event = Event(
-         organizer_id=organizer.id,
-         venue_id=venue.id,
-         title="Reporting Event",
-         slug="reporting-event",
-         start_at=now + timedelta(days=1),
-         end_at=now + timedelta(days=1, hours=4),
+     rows = list_pending_event_approvals(db=db_session, user_id=admin.id)
+     assert [row.id for row in rows] == [active_pending.id]
  
 EOF
 )

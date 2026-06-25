@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +14,9 @@ from app.models.user import User
 from app.models.venue import Venue
 
 
+GUYANA_TZ = ZoneInfo("America/Guyana")
+
+
 def _seed_event(
     db: Session,
     *,
@@ -22,7 +26,7 @@ def _seed_event(
     status: EventStatus = EventStatus.PUBLISHED,
     cancelled_at: datetime | None = None,
 ) -> Event:
-    now = datetime(2026, 4, 10, tzinfo=timezone.utc)
+    now = datetime.now(GUYANA_TZ).replace(microsecond=0)
     organizer_user = User(email=f"org-{slug}@test.local", full_name="Organizer")
     db.add(organizer_user)
     db.flush()
@@ -44,14 +48,14 @@ def _seed_event(
         venue_id=venue.id,
         title=title,
         slug=slug,
-        start_at=now + timedelta(days=4),
-        end_at=now + timedelta(days=4, hours=2),
+        start_at=now + timedelta(days=1),
+        end_at=now + timedelta(days=1, hours=3),
         status=status,
         visibility=EventVisibility.PUBLIC,
         approval_status=approval_status,
         timezone="America/Guyana",
         is_location_pinned=False,
-        published_at=now,
+        published_at=now - timedelta(minutes=5),
         cancelled_at=cancelled_at,
     )
     db.add(event)
@@ -142,7 +146,7 @@ def test_pending_approval_list_excludes_cancelled_events(db_session: Session) ->
         slug="cancelled-at-pending-event",
         title="Cancelled By Timestamp",
         approval_status=EventApprovalStatus.PENDING,
-        cancelled_at=datetime(2026, 4, 11, tzinfo=timezone.utc),
+        cancelled_at=datetime.now(GUYANA_TZ).replace(microsecond=0),
     )
 
     rows = list_pending_event_approvals(db=db_session, user_id=admin.id)
