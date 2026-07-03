@@ -1,138 +1,151 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/screens/CreateEventScreen.tsx b/mobile/src/navigation/screens/CreateEventScreen.tsx
-index 3b5a3db8703d649d669f139b4c4ced2d840e251c..b93d137c66121c2bbcd42dd1b4075a9597afdb4d 100644
---- a/mobile/src/navigation/screens/CreateEventScreen.tsx
-+++ b/mobile/src/navigation/screens/CreateEventScreen.tsx
-@@ -500,65 +500,67 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
-           contentContainerStyle={[styles.container, { paddingBottom: theme.spacing.xl + insets.bottom + theme.spacing.lg }]}
-           keyboardShouldPersistTaps="handled"
-           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-           showsVerticalScrollIndicator={false}
-         >
-           <Text style={styles.title}>Create Event</Text>
+diff --git a/backend/.env.example b/backend/.env.example
+index c3dcc2de1be6582bdf678c119a447b28ae4c5b68..71c33ecbd11f151c69161f6313e48850e620a82f 100644
+--- a/backend/.env.example
++++ b/backend/.env.example
+@@ -1,27 +1,28 @@
+ APP_NAME=Admitly API
+ ENV=development
++ALLOW_DEV_HEADER_AUTH=false
+ DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/admitly
  
-         <Text style={styles.sectionTitle}>Basic Info</Text>
-         <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Event title" placeholderTextColor={theme.colors.textSecondary} />
-         <TextInput style={styles.input} value={shortDescription} onChangeText={setShortDescription} placeholder="Short description" placeholderTextColor={theme.colors.textSecondary} />
-         <TextInput
-           style={[styles.input, styles.multiline]}
-           multiline
-           numberOfLines={4}
-           value={longDescription}
-           onChangeText={setLongDescription}
-           placeholder="Long description"
-           placeholderTextColor={theme.colors.textSecondary}
-         />
-         <Pressable style={styles.input} onPress={openCategoryPicker}>
-           <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
-         </Pressable>
-         <View style={styles.coverImageSection}>
-           {coverImagePreviewUri || coverImageUrl ? (
-             <>
--              <Image source={{ uri: coverImagePreviewUri || coverImageUrl }} style={styles.coverPreview} resizeMode="cover" />
-+              <View style={styles.coverPreview}>
-+                <Image source={{ uri: coverImagePreviewUri || coverImageUrl }} style={styles.coverPreviewImage} resizeMode="contain" />
-+              </View>
-               {coverImageUploading ? <Text style={styles.hintText}>Uploading cover image…</Text> : null}
-               <View style={styles.coverImageActions}>
-                 <Pressable onPress={pickCoverImage} style={styles.coverImageAction} disabled={coverImageUploading}>
-                   <Text style={styles.coverImageActionText}>Replace image</Text>
-                 </Pressable>
-                 <Pressable onPress={removeCoverImage} style={[styles.coverImageAction, styles.coverImageRemoveAction]} disabled={coverImageUploading}>
-                   <Text style={styles.coverImageRemoveText}>Remove</Text>
-                 </Pressable>
-               </View>
-             </>
-           ) : (
-             <Pressable style={styles.coverImageUploadArea} onPress={pickCoverImage} disabled={coverImageUploading}>
-               <Text style={styles.coverImageUploadTitle}>Add event cover image</Text>
--              <Text style={styles.hintText}>Recommended: event flyer or clear promo image</Text>
-+              <Text style={styles.hintText}>Recommended: 1080 × 1350. Other image sizes will show fully with padding.</Text>
-             </Pressable>
-           )}
-           {coverImageError ? <Text style={styles.error}>{coverImageError}</Text> : null}
-         </View>
+ MMG_ENABLED=false
+ MMG_PROVIDER_MODE=mock
+ MMG_BASE_URL=
+ MMG_MERCHANT_ID=
+ MMG_API_KEY=
+ MMG_API_SECRET=
+ MMG_CALLBACK_URL=
+ MMG_RETURN_URL_SUCCESS=
+ MMG_RETURN_URL_CANCEL=
+ MMG_REQUEST_TIMEOUT_SECONDS=10
+ MMG_AGENT_AUTO_VERIFY_ENABLED=true
+ MMG_AGENT_MANUAL_FALLBACK_ENABLED=true
+ ENABLE_DEV_TEST_CHECKOUT=true
  
-         <Text style={styles.sectionTitle}>Timing</Text>
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Start</Text>
-           <Pressable style={styles.input} onPress={() => startDateTimeFlow('start_at')}>
-             <Text style={styles.pickerValue}>{formatDateTimeValue(startAt)}</Text>
-           </Pressable>
-         </View>
+ EMAIL_NOTIFICATIONS_ENABLED=false
+ EMAIL_PROVIDER=noop
+ EMAIL_FROM_ADDRESS=
+ PUSH_NOTIFICATIONS_ENABLED=false
+ PUSH_PROVIDER=noop
+ TICKET_PUBLIC_BASE_URL=https://admitly.app
  
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>End</Text>
-           <Pressable style={styles.input} onPress={() => startDateTimeFlow('end_at')}>
-             <Text style={styles.pickerValue}>{formatDateTimeValue(endAt)}</Text>
-           </Pressable>
-         </View>
+ AWS_ACCESS_KEY_ID=
+ AWS_SECRET_ACCESS_KEY=
+diff --git a/backend/app/api/ticket_holds.py b/backend/app/api/ticket_holds.py
+index 1c8cbd2a4c5075764a67d6c5d06b1b4588ceca78..a26dddd58b0d93d8efb26fc397af0438248b3d26 100644
+--- a/backend/app/api/ticket_holds.py
++++ b/backend/app/api/ticket_holds.py
+@@ -1,58 +1,61 @@
+ from fastapi import APIRouter, Depends, Header, HTTPException, status
+ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+ from sqlalchemy.orm import Session
  
-         <View style={styles.timingCard}>
-           <Text style={styles.timingLabel}>Doors open (optional)</Text>
-           <Pressable style={styles.input} onPress={() => openPicker({ field: 'doors_open_time', mode: 'time', value: doorsOpenAt ?? startAt.time ?? new Date() })}>
-             <Text style={styles.pickerValue}>{doorsOpenAt ? formatTime(doorsOpenAt) : 'Pick time'}</Text>
-           </Pressable>
-@@ -763,53 +765,57 @@ const styles = StyleSheet.create({
-   row: { flexDirection: 'row', gap: theme.spacing.sm },
-   half: { flex: 1 },
-   tierCard: {
-     borderWidth: 1,
-     borderColor: theme.colors.border,
-     borderRadius: theme.radius.md,
-     padding: theme.spacing.md,
-     backgroundColor: theme.colors.surfaceElevated,
-     gap: theme.spacing.sm,
-   },
-   tierTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
-   timingCard: {
-     borderWidth: 1,
-     borderColor: theme.colors.border,
-     borderRadius: theme.radius.md,
-     padding: theme.spacing.md,
-     gap: theme.spacing.sm,
-     backgroundColor: theme.colors.surfaceElevated,
-   },
-   timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
-   pickerValue: { color: theme.colors.textPrimary },
-   placeholderValue: { color: theme.colors.textSecondary },
-   hintText: { color: theme.colors.textSecondary, fontSize: 12 },
-   coverPreview: {
-     width: '100%',
--    height: 160,
--    borderRadius: theme.radius.md,
-+    aspectRatio: 4 / 5,
-     backgroundColor: theme.colors.surfaceElevated,
-+    borderRadius: theme.radius.md,
-+  },
-+  coverPreviewImage: {
-+    width: '100%',
-+    height: '100%',
-   },
-   coverImageSection: {
-     gap: theme.spacing.sm,
-   },
-   coverImageUploadArea: {
-     borderWidth: 1,
-     borderColor: theme.colors.border,
-     borderRadius: theme.radius.md,
-     borderStyle: 'dashed',
-     padding: theme.spacing.lg,
-     backgroundColor: theme.colors.surfaceElevated,
-     alignItems: 'center',
-     gap: theme.spacing.xs,
-   },
-   coverImageUploadTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
-   coverImageActions: { flexDirection: 'row', gap: theme.spacing.sm },
-   coverImageAction: {
-     flex: 1,
-     borderWidth: 1,
-     borderColor: theme.colors.primary,
-     borderRadius: theme.radius.md,
-     padding: theme.spacing.sm,
-     alignItems: 'center',
-   },
-   coverImageActionText: { color: theme.colors.primary, fontWeight: '700' },
++from app.core.config import settings
+ from app.db.session import get_db
+ from app.services.auth import resolve_user_from_access_token
+ from app.schemas.ticket_hold import CreateTicketHoldRequest, TicketHoldResponse
+ from app.services.ticket_holds import (
+     InsufficientAvailabilityError,
+     TicketHoldError,
+     TicketHoldWindowClosedError,
+     create_ticket_hold,
+ )
+ 
+ router = APIRouter(prefix="/ticket-holds", tags=["ticket-holds"])
+ 
+ bearer_scheme = HTTPBearer(auto_error=False)
+ 
+ 
+ def get_current_user_id(
+     db: Session = Depends(get_db),
+     x_user_id: int | None = Header(default=None),
+     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+ ) -> int:
+-    if x_user_id is None:
+-        if credentials is None:
+-            raise HTTPException(
+-                status_code=status.HTTP_401_UNAUTHORIZED,
+-                detail="Authentication required.",
+-            )
++    if credentials is not None:
+         user = resolve_user_from_access_token(db, token=credentials.credentials)
+         return user.id
+-    return int(x_user_id)
++
++    if settings.env == "development" and settings.allow_dev_header_auth and x_user_id is not None:
++        return int(x_user_id)
++
++    raise HTTPException(
++        status_code=status.HTTP_401_UNAUTHORIZED,
++        detail="Authentication required.",
++    )
+ 
+ 
+ @router.post("", response_model=TicketHoldResponse, status_code=status.HTTP_201_CREATED)
+ def create_hold(
+     payload: CreateTicketHoldRequest,
+     db: Session = Depends(get_db),
+     user_id: int = Depends(get_current_user_id),
+ ) -> TicketHoldResponse:
+     try:
+         result = create_ticket_hold(
+             db,
+             user_id=user_id,
+             ticket_tier_id=payload.ticket_tier_id,
+             quantity=payload.quantity,
+         )
+     except InsufficientAvailabilityError as exc:
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+     except TicketHoldWindowClosedError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+     except TicketHoldError as exc:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+ 
+     hold = result.hold
+     return TicketHoldResponse(
+         id=hold.id,
+diff --git a/backend/app/core/config.py b/backend/app/core/config.py
+index ea340e969c976cddad59acfebc5abeb43f26401b..6c6285742830af7347a2a455754deadb8e6abed1 100644
+--- a/backend/app/core/config.py
++++ b/backend/app/core/config.py
+@@ -1,35 +1,36 @@
+ from functools import lru_cache
+ 
+ from pydantic import Field
+ from pydantic_settings import BaseSettings, SettingsConfigDict
+ 
+ 
+ class Settings(BaseSettings):
+ 
+     app_name: str = Field(default="Admitly API", alias="APP_NAME")
+     env: str = Field(default="development", alias="ENV")
++    allow_dev_header_auth: bool = Field(default=False, alias="ALLOW_DEV_HEADER_AUTH")
+     database_url: str = Field(alias="DATABASE_URL")
+ 
+     mmg_enabled: bool = Field(default=False, alias="MMG_ENABLED")
+     mmg_provider_mode: str = Field(default="mock", alias="MMG_PROVIDER_MODE")
+     mmg_base_url: str | None = Field(default=None, alias="MMG_BASE_URL")
+     mmg_merchant_id: str | None = Field(default=None, alias="MMG_MERCHANT_ID")
+     mmg_api_key: str | None = Field(default=None, alias="MMG_API_KEY")
+     mmg_api_secret: str | None = Field(default=None, alias="MMG_API_SECRET")
+     mmg_callback_url: str | None = Field(default=None, alias="MMG_CALLBACK_URL")
+     mmg_return_url_success: str | None = Field(default=None, alias="MMG_RETURN_URL_SUCCESS")
+     mmg_return_url_cancel: str | None = Field(default=None, alias="MMG_RETURN_URL_CANCEL")
+     mmg_request_timeout_seconds: int = Field(default=10, alias="MMG_REQUEST_TIMEOUT_SECONDS")
+     mmg_agent_auto_verify_enabled: bool = Field(default=True, alias="MMG_AGENT_AUTO_VERIFY_ENABLED")
+     mmg_agent_manual_fallback_enabled: bool = Field(
+         default=True, alias="MMG_AGENT_MANUAL_FALLBACK_ENABLED"
+     )
+     enable_dev_test_checkout: bool = Field(default=True, alias="ENABLE_DEV_TEST_CHECKOUT")
+ 
+     email_notifications_enabled: bool = Field(default=False, alias="EMAIL_NOTIFICATIONS_ENABLED")
+     email_provider: str = Field(default="noop", alias="EMAIL_PROVIDER")
+     email_from_address: str | None = Field(default=None, alias="EMAIL_FROM_ADDRESS")
+ 
+     push_notifications_enabled: bool = Field(default=False, alias="PUSH_NOTIFICATIONS_ENABLED")
+     push_provider: str = Field(default="noop", alias="PUSH_PROVIDER")
+ 
  
 EOF
 )

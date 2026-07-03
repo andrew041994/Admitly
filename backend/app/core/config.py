@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="Admitly API", alias="APP_NAME")
     env: str = Field(default="development", alias="ENV")
+    allow_dev_header_auth: bool = Field(default=False, alias="ALLOW_DEV_HEADER_AUTH")
     database_url: str = Field(alias="DATABASE_URL")
 
     mmg_enabled: bool = Field(default=False, alias="MMG_ENABLED")

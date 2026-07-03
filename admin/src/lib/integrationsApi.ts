@@ -38,44 +38,41 @@ export type DeliveryRecord = {
   redelivery_of_delivery_id: number | null;
 };
 
-export async function listApiKeys(userId: number) {
-  const res = await apiRequest('/admin/integrations/api-keys', { headers: { 'X-User-Id': String(userId) } });
+export async function listApiKeys() {
+  const res = await apiRequest('/admin/integrations/api-keys');
   return (await res.json()) as ApiKeyRecord[];
 }
 
-export async function createApiKey(userId: number, payload: { name: string; scopes: string[] }) {
+export async function createApiKey(payload: { name: string; scopes: string[] }) {
   const res = await apiRequest('/admin/integrations/api-keys', {
     method: 'POST',
-    headers: { 'X-User-Id': String(userId) },
     body: JSON.stringify(payload),
   });
   return (await res.json()) as ApiKeyRecord & { raw_key: string };
 }
 
-export async function listWebhooks(userId: number) {
-  const res = await apiRequest('/admin/integrations/webhooks', { headers: { 'X-User-Id': String(userId) } });
+export async function listWebhooks() {
+  const res = await apiRequest('/admin/integrations/webhooks');
   return (await res.json()) as WebhookEndpointRecord[];
 }
 
-export async function createWebhook(userId: number, payload: { name: string; target_url: string; subscribed_events: string[] }) {
+export async function createWebhook(payload: { name: string; target_url: string; subscribed_events: string[] }) {
   const res = await apiRequest('/admin/integrations/webhooks', {
     method: 'POST',
-    headers: { 'X-User-Id': String(userId) },
     body: JSON.stringify(payload),
   });
   return (await res.json()) as WebhookEndpointRecord & { signing_secret: string };
 }
 
-export async function listDeliveries(userId: number) {
-  const res = await apiRequest('/admin/integrations/deliveries', { headers: { 'X-User-Id': String(userId) } });
+export async function listDeliveries() {
+  const res = await apiRequest('/admin/integrations/deliveries');
   return (await res.json()) as DeliveryRecord[];
 }
 
 
-export async function redeliverDelivery(userId: number, deliveryId: number) {
+export async function redeliverDelivery(deliveryId: number) {
   const res = await apiRequest(`/admin/integrations/deliveries/${deliveryId}/redeliver`, {
     method: 'POST',
-    headers: { 'X-User-Id': String(userId) },
   });
   return (await res.json()) as DeliveryRecord;
 }

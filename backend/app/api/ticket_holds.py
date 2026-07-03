@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.services.auth import resolve_user_from_access_token
 from app.schemas.ticket_hold import CreateTicketHoldRequest, TicketHoldResponse
@@ -22,15 +23,23 @@ def get_current_user_id(
     x_user_id: int | None = Header(default=None),
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> int:
-    if x_user_id is None:
-        if credentials is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required.",
-            )
+    if credentials is not None:
         user = resolve_user_from_access_token(db, token=credentials.credentials)
         return user.id
-    return int(x_user_id)
+
+<<<<<<< ours
+    # Development-only escape hatch for local testing. Production must never
+    # trust caller-provided user ids because that permits impersonation.
+    if settings.env == "development" and x_user_id is not None:
+=======
+    if settings.env == "development" and settings.allow_dev_header_auth and x_user_id is not None:
+>>>>>>> theirs
+        return int(x_user_id)
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required.",
+    )
 
 
 @router.post("", response_model=TicketHoldResponse, status_code=status.HTTP_201_CREATED)

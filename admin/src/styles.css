@@ -277,3 +277,46 @@ button:disabled {
 .timeline-list li { border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 0.6rem; }
 .simple-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
 .simple-table th, .simple-table td { border-bottom: 1px solid #e5e7eb; padding: 0.4rem; text-align: left; }
+
+.login-page {
+  align-items: center;
+  display: flex;
+  min-height: 100vh;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.login-card {
+  background: #fff;
+  border: 1px solid #dbe3ef;
+  border-radius: 16px;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.12);
+  display: grid;
+  gap: 1rem;
+  max-width: 420px;
+  padding: 2rem;
+  width: 100%;
+}
+
+.login-card label {
+  display: grid;
+  gap: 0.4rem;
+  font-weight: 700;
+}
+
+.login-card input {
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.error-text {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.admin-user-controls {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+}

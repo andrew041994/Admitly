@@ -1,7 +1,9 @@
+import { clearAdminSession, getAdminSession } from './authSession';
 import { apiBaseUrl } from './config';
 
 type RequestOptions = Omit<RequestInit, 'headers'> & {
   headers?: HeadersInit;
+  skipAuth?: boolean;
 };
 
 export class ApiError extends Error {
@@ -16,23 +18,31 @@ export class ApiError extends Error {
 }
 
 export async function apiRequest(path: string, options: RequestOptions = {}) {
+  const { skipAuth = false, ...requestOptions } = options;
+  const headers = new Headers(requestOptions.headers);
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+
+  const session = getAdminSession();
+  if (!skipAuth && session?.accessToken) {
+    headers.set('Authorization', `Bearer ${session.accessToken}`);
+  }
+
   const response = await fetch(`${apiBaseUrl}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    ...requestOptions,
+    headers,
   });
 
   if (!response.ok) {
     let detail = `API request failed (${response.status})`;
     try {
       const payload = (await response.json()) as { detail?: string };
-      if (payload?.detail) {
-        detail = payload.detail;
-      }
+      if (payload?.detail) detail = payload.detail;
     } catch {
       // Keep generic message when response body is not JSON.
+    }
+    if (!skipAuth && (response.status === 401 || response.status === 403)) {
+      clearAdminSession();
+      window.dispatchEvent(new CustomEvent('admin-auth-required', { detail }));
     }
     throw new ApiError(response.status, detail);
   }

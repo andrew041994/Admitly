@@ -14,21 +14,14 @@ export type AdminPendingEvent = {
   published_at: string | null;
 };
 
-function adminHeaders(userId: number) {
-  return { 'X-User-Id': String(userId) };
-}
-
-export async function listPendingEventsForApproval(userId: number): Promise<AdminPendingEvent[]> {
-  const response = await apiRequest('/events/admin/pending-approval', {
-    headers: adminHeaders(userId),
-  });
+export async function listPendingEventsForApproval(): Promise<AdminPendingEvent[]> {
+  const response = await apiRequest('/events/admin/pending-approval');
   return (await response.json()) as AdminPendingEvent[];
 }
 
-export async function approveEvent(userId: number, eventId: number): Promise<AdminPendingEvent> {
+export async function approveEvent(eventId: number): Promise<AdminPendingEvent> {
   const response = await apiRequest(`/events/admin/${eventId}/approve`, {
     method: 'POST',
-    headers: adminHeaders(userId),
   });
   return (await response.json()) as AdminPendingEvent;
 }

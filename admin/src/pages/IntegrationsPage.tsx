@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createApiKey, createWebhook, listApiKeys, listDeliveries, listWebhooks, redeliverDelivery } from '../lib/integrationsApi';
 
-const adminUserId = 1;
-
 function statusLabel(item: any) {
   const retryInfo = item.next_retry_at ? ` • retry at ${new Date(item.next_retry_at).toLocaleString()}` : '';
   const failure = item.failure_reason ? ` • ${item.failure_reason}` : '';
@@ -17,9 +15,9 @@ export function IntegrationsPage() {
   const [rawSecret, setRawSecret] = useState<string | null>(null);
 
   async function load() {
-    setKeys(await listApiKeys(adminUserId));
-    setWebhooks(await listWebhooks(adminUserId));
-    setDeliveries(await listDeliveries(adminUserId));
+    setKeys(await listApiKeys());
+    setWebhooks(await listWebhooks());
+    setDeliveries(await listDeliveries());
   }
 
   useEffect(() => {
@@ -34,7 +32,7 @@ export function IntegrationsPage() {
         <article className="finance-card">
           <h3>Create API key</h3>
           <button onClick={async () => {
-            const created = await createApiKey(adminUserId, { name: `Key ${Date.now()}`, scopes: ['integrations:read', 'integrations:write'] });
+            const created = await createApiKey({ name: `Key ${Date.now()}`, scopes: ['integrations:read', 'integrations:write'] });
             setRawKey(created.raw_key);
             await load();
           }}>Generate key</button>
@@ -44,7 +42,7 @@ export function IntegrationsPage() {
         <article className="finance-card">
           <h3>Create webhook</h3>
           <button onClick={async () => {
-            const created = await createWebhook(adminUserId, { name: `Endpoint ${Date.now()}`, target_url: 'https://example.com/webhooks/admitly', subscribed_events: ['order.paid', 'refund.processed'] });
+            const created = await createWebhook({ name: `Endpoint ${Date.now()}`, target_url: 'https://example.com/webhooks/admitly', subscribed_events: ['order.paid', 'refund.processed'] });
             setRawSecret(created.signing_secret);
             await load();
           }}>Add webhook</button>
@@ -59,7 +57,7 @@ export function IntegrationsPage() {
             <li key={item.id}>
               {item.event_type} ({item.event_id}) #{item.attempt_number} — {item.delivery_kind} — {statusLabel(item)}
               {' '}
-              <button onClick={async () => { await redeliverDelivery(adminUserId, item.id); await load(); }}>Redeliver</button>
+              <button onClick={async () => { await redeliverDelivery(item.id); await load(); }}>Redeliver</button>
             </li>
           ))}
         </ul>

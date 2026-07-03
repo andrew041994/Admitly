@@ -2,8 +2,6 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ApiError } from '../lib/apiClient';
 import { AdminPendingEvent, approveEvent, listPendingEventsForApproval } from '../lib/eventApprovalsApi';
 
-const adminUserId = 1;
-
 function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : '—';
 }
@@ -20,7 +18,7 @@ export function EventApprovalsPage() {
     setLoading(true);
     setError(null);
     try {
-      setEvents(await listPendingEventsForApproval(adminUserId));
+      setEvents(await listPendingEventsForApproval());
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Failed to load pending event approvals.');
     } finally {
@@ -37,7 +35,7 @@ export function EventApprovalsPage() {
     setError(null);
     setSuccess(null);
     try {
-      const approved = await approveEvent(adminUserId, eventId);
+      const approved = await approveEvent(eventId);
       setSuccess(`Approved \"${approved.title}\".`);
       await load();
     } catch (err) {
