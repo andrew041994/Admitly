@@ -171,10 +171,9 @@ export function TicketSelectionScreen({ event, onOrderCreated }: Props) {
           const quantity = quantities[tier.id] ?? 0;
           return (
             <View key={tier.id} style={styles.row}>
-              <View style={{ flex: 1 }}>
+              <View style={styles.tierDetails}>
                 <Text style={styles.name}>{tier.name}</Text>
                 <Text style={styles.meta}>{tier.currency} {tier.price_amount}</Text>
-                <Text style={styles.meta}>{tier.available_quantity} left</Text>
               </View>
               <View style={styles.counter}>
                 <StepperButton
@@ -210,6 +209,7 @@ const styles = StyleSheet.create({
   content: { gap: theme.spacing.md, paddingBottom: theme.spacing.xl },
   title: { color: theme.colors.textPrimary, fontWeight: '700', fontSize: theme.typography.heading },
   row: { alignItems: 'center', borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: theme.spacing.md, flexDirection: 'row', gap: theme.spacing.sm },
+  tierDetails: { flex: 1, gap: 2 },
   name: { color: theme.colors.textPrimary, fontWeight: '700' },
   meta: { color: theme.colors.textSecondary },
   counter: { alignItems: 'center', flexDirection: 'row', gap: theme.spacing.xs, justifyContent: 'flex-end', minWidth: 132 },
