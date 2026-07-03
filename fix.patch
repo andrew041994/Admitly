@@ -1,373 +1,863 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/screens/HomeScreen.tsx b/mobile/src/navigation/screens/HomeScreen.tsx
-index b94119ac1ae9547a038b4cbf93c5e84ddd75209b..fd153876420d18456d33bce83c683fe36ddd636b 100644
---- a/mobile/src/navigation/screens/HomeScreen.tsx
-+++ b/mobile/src/navigation/screens/HomeScreen.tsx
-@@ -77,171 +77,190 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
-       }
- 
-       try {
-         const [discoveredEvents, discoveryFeed] = await Promise.all([
-           listDiscoverableEvents(requestFilters),
-           listDiscoverableEvents({ dateBucket: 'upcoming' }),
-         ]);
-         setEvents(discoveredEvents);
-         setFeaturedEvents(discoveryFeed);
-         setError(null);
-       } catch (err) {
-         const message = err instanceof ApiError ? err.message : 'Unable to load events right now.';
-         setError(message);
-       } finally {
-         setLoading(false);
-         setRefreshing(false);
-       }
-     },
-     [requestFilters],
-   );
- 
-   useEffect(() => {
-     loadEvents();
-   }, [loadEvents]);
- 
--  return (
--    <Screen padded={false}>
--      <View style={styles.container}>
--        <View style={styles.header}>
--          <View>
--            <Text style={styles.kicker}>DISCOVER</Text>
--            <Text style={styles.title}>Admitly</Text>
--          </View>
--          <View style={styles.headerLinks}>
--            <Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable>
--            <Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable>
--          </View>
-+  const listHeader = (
-+    <>
-+      <View style={styles.header}>
-+        <View>
-+          <Text style={styles.kicker}>DISCOVER</Text>
-+          <Text style={styles.title}>Admitly</Text>
-         </View>
--
--        <View style={styles.searchWrap}>
--          <TextInput
--            value={searchInput}
--            onChangeText={setSearchInput}
--            placeholder="Search events, venues, vibes"
--            placeholderTextColor={theme.colors.textSecondary}
--            style={styles.searchInput}
--            returnKeyType="search"
--          />
-+        <View style={styles.headerLinks}>
-+          <Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable>
-+          <Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable>
-         </View>
-+      </View>
- 
--        <View style={styles.filtersRow}>
--          {CATEGORY_FILTERS.map((item) => (
--            <Pressable
--              key={item}
--              style={[styles.chip, selectedCategory === item && styles.chipActive]}
--              onPress={() => setSelectedCategory(item)}
--            >
--              <Text style={[styles.chipText, selectedCategory === item && styles.chipTextActive]}>{item}</Text>
--            </Pressable>
--          ))}
--        </View>
-+      <View style={styles.searchWrap}>
-+        <TextInput
-+          value={searchInput}
-+          onChangeText={setSearchInput}
-+          placeholder="Search events, venues, vibes"
-+          placeholderTextColor={theme.colors.textSecondary}
-+          style={styles.searchInput}
-+          returnKeyType="search"
-+        />
-+      </View>
- 
--        <View style={styles.filtersRow}>
--          {[
--            { key: 'today', label: 'Today' },
--            { key: 'this_week', label: 'This Week' },
--            { key: 'upcoming', label: 'Upcoming' },
--          ].map((item) => (
--            <Pressable
--              key={item.key}
--              style={[styles.chip, dateFilter === item.key && styles.chipActive]}
--              onPress={() => setDateFilter(item.key as DateFilter)}
--            >
--              <Text style={[styles.chipText, dateFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
--            </Pressable>
--          ))}
--          {[
--            { key: 'all', label: 'All' },
--            { key: 'free', label: 'Free' },
--            { key: 'paid', label: 'Paid' },
--          ].map((item) => (
--            <Pressable
--              key={item.key}
--              style={[styles.chip, priceFilter === item.key && styles.chipActive]}
--              onPress={() => setPriceFilter(item.key as 'all' | 'free' | 'paid')}
--            >
--              <Text style={[styles.chipText, priceFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
--            </Pressable>
--          ))}
--        </View>
-+      <View style={styles.filtersRow}>
-+        {CATEGORY_FILTERS.map((item) => (
-+          <Pressable
-+            key={item}
-+            style={[styles.chip, selectedCategory === item && styles.chipActive]}
-+            onPress={() => setSelectedCategory(item)}
-+          >
-+            <Text style={[styles.chipText, selectedCategory === item && styles.chipTextActive]}>{item}</Text>
-+          </Pressable>
-+        ))}
-+      </View>
- 
--        {featuredSubset.length > 0 ? (
--          <View style={styles.featuredSection}>
--            <Text style={styles.featuredTitle}>Featured Events</Text>
--            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.featuredRow}>
--              {featuredSubset.map((item) => (
--                <View key={item.id} style={styles.featuredCardWrap}>
--                  <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
--                </View>
--              ))}
--            </ScrollView>
--          </View>
--        ) : null}
-+      <View style={styles.filtersRow}>
-+        {[
-+          { key: 'today', label: 'Today' },
-+          { key: 'this_week', label: 'This Week' },
-+          { key: 'upcoming', label: 'Upcoming' },
-+        ].map((item) => (
-+          <Pressable
-+            key={item.key}
-+            style={[styles.chip, dateFilter === item.key && styles.chipActive]}
-+            onPress={() => setDateFilter(item.key as DateFilter)}
-+          >
-+            <Text style={[styles.chipText, dateFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
-+          </Pressable>
-+        ))}
-+        {[
-+          { key: 'all', label: 'All' },
-+          { key: 'free', label: 'Free' },
-+          { key: 'paid', label: 'Paid' },
-+        ].map((item) => (
-+          <Pressable
-+            key={item.key}
-+            style={[styles.chip, priceFilter === item.key && styles.chipActive]}
-+            onPress={() => setPriceFilter(item.key as 'all' | 'free' | 'paid')}
-+          >
-+            <Text style={[styles.chipText, priceFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
-+          </Pressable>
-+        ))}
-+      </View>
- 
--        {loading ? (
--          <View style={styles.stateWrap}>
--            <ActivityIndicator color={theme.colors.primary} />
--            <Text style={styles.stateText}>Loading events...</Text>
--          </View>
--        ) : error ? (
--          <View style={styles.stateWrap}>
--            <Text style={styles.errorText}>{error}</Text>
--            <ThemedButton label="Try Again" onPress={() => loadEvents()} variant="secondary" />
--          </View>
--        ) : events.length === 0 ? (
--          <View style={styles.stateWrap}>
--            <Text style={styles.stateText}>No events match your filters.</Text>
--            <ThemedButton label="Reset Filters" onPress={resetFilters} />
--            {hasActiveFilters && featuredSubset.length > 0 ? (
--              <View style={styles.emptyDiscovery}>
--                <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
--                {featuredSubset.slice(0, 2).map((item) => (
--                  <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
--                ))}
-+      {featuredSubset.length > 0 ? (
-+        <View style={styles.featuredSection}>
-+          <Text style={styles.featuredTitle}>Featured Events</Text>
-+          <ScrollView
-+            horizontal
-+            nestedScrollEnabled
-+            showsHorizontalScrollIndicator={false}
-+            contentContainerStyle={styles.featuredRow}
-+          >
-+            {featuredSubset.map((item) => (
-+              <View key={item.id} style={styles.featuredCardWrap}>
-+                <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
-               </View>
--            ) : null}
--          </View>
--        ) : (
--          <FlatList
--            data={events}
--            keyExtractor={(item) => String(item.id)}
--            contentContainerStyle={styles.listContent}
--            renderItem={({ item }) => <EventCard event={item} onPress={() => onOpenEvent(item.id)} />}
--            refreshControl={
--              <RefreshControl
--                refreshing={refreshing}
--                onRefresh={() => loadEvents(true)}
--                tintColor={theme.colors.primary}
--              />
--            }
--          />
--        )}
-+            ))}
-+          </ScrollView>
-+        </View>
-+      ) : null}
-+    </>
-+  );
- 
--        <Pressable onPress={onSignOut} style={styles.signOutArea}>
--          <Text style={styles.signOutText}>Sign out</Text>
--        </Pressable>
-+  const listFooter = (
-+    <Pressable onPress={onSignOut} style={styles.signOutArea}>
-+      <Text style={styles.signOutText}>Sign out</Text>
-+    </Pressable>
-+  );
+diff --git a/mobile/src/features/scanner/ScanResultModal.tsx b/mobile/src/features/scanner/ScanResultModal.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..6d7faddff132009076e95c718f6e715dc10362f1
+--- /dev/null
++++ b/mobile/src/features/scanner/ScanResultModal.tsx
+@@ -0,0 +1,154 @@
++import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
++import { useSafeAreaInsets } from 'react-native-safe-area-context';
 +
-+  const listEmpty = loading ? (
-+    <View style={styles.stateWrap}>
-+      <ActivityIndicator color={theme.colors.primary} />
-+      <Text style={styles.stateText}>Loading events...</Text>
-+    </View>
-+  ) : error ? (
-+    <View style={styles.stateWrap}>
-+      <Text style={styles.errorText}>{error}</Text>
-+      <ThemedButton label="Try Again" onPress={() => loadEvents()} variant="secondary" />
-+    </View>
-+  ) : (
-+    <View style={styles.stateWrap}>
-+      <Text style={styles.stateText}>No events match your filters.</Text>
-+      <ThemedButton label="Reset Filters" onPress={resetFilters} />
-+      {hasActiveFilters && featuredSubset.length > 0 ? (
-+        <View style={styles.emptyDiscovery}>
-+          <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
-+          {featuredSubset.slice(0, 2).map((item) => (
-+            <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
-+          ))}
-+        </View>
-+      ) : null}
-+    </View>
-+  );
++import { theme } from '../../theme';
++import { formatCheckedInTime, getScanResultTone, ScanResult } from './scanFeedback';
++
++type ScanResultModalProps = {
++  visible: boolean;
++  result: ScanResult | null;
++  onScanNext: () => void;
++  onSecondaryAction?: () => void;
++  secondaryActionLabel?: string;
++};
++
++export function ScanResultModal({
++  visible,
++  result,
++  onScanNext,
++  onSecondaryAction,
++  secondaryActionLabel,
++}: ScanResultModalProps) {
++  const insets = useSafeAreaInsets();
++
++  if (!result) {
++    return null;
++  }
++
++  const tone = getScanResultTone(result);
++  const toneStyle = tone === 'success' ? styles.success : tone === 'warning' ? styles.warning : tone === 'unable' ? styles.unable : styles.error;
++  const statusLabel = tone === 'success' ? 'Success' : tone === 'warning' ? 'Warning' : tone === 'unable' ? 'Unable to Scan' : 'Failed';
 +
 +  return (
-+    <Screen padded={false}>
-+      <View style={styles.container}>
-+        <FlatList
-+          data={loading || error ? [] : events}
-+          keyExtractor={(item) => String(item.id)}
-+          contentContainerStyle={styles.homeListContent}
-+          renderItem={({ item, index }) => (
-+            <View style={[styles.eventListItem, index === 0 && styles.firstEventListItem]}>
-+              <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
++    <Modal visible={visible} transparent animationType="fade" onRequestClose={onScanNext}>
++      <View style={[styles.backdrop, { paddingTop: insets.top + theme.spacing.md, paddingBottom: insets.bottom + theme.spacing.md }]}>
++        <View style={[styles.card, toneStyle]}>
++          <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} bounces={false}>
++            <View style={[styles.statusPill, toneStyle]}>
++              <Text style={styles.statusText}>{statusLabel}</Text>
 +            </View>
-+          )}
-+          ListHeaderComponent={listHeader}
-+          ListEmptyComponent={listEmpty}
-+          ListFooterComponent={listFooter}
-+          keyboardShouldPersistTaps="handled"
-+          refreshControl={
-+            <RefreshControl
-+              refreshing={refreshing}
-+              onRefresh={() => loadEvents(true)}
-+              tintColor={theme.colors.primary}
-+            />
-+          }
-+        />
-       </View>
-     </Screen>
-   );
++            <Text style={styles.title}>{result.title}</Text>
++            <Text style={styles.message}>{result.message}</Text>
++
++            <View style={styles.detailsBox}>
++              <Text style={styles.detailsTitle}>Scan outcome</Text>
++              <Text style={styles.detailText}>{result.outcome.replace(/_/g, ' ')}</Text>
++              {result.eventTitle ? <Text style={styles.detailText}>Event: {result.eventTitle}</Text> : null}
++              {result.attendeeName ? <Text style={styles.detailText}>Name: {result.attendeeName}</Text> : null}
++              {result.ticketType ? <Text style={styles.detailText}>Ticket: {result.ticketType}</Text> : null}
++              {result.checkedInAt ? <Text style={styles.detailText}>Checked in: {formatCheckedInTime(result.checkedInAt)}</Text> : null}
++            </View>
++          </ScrollView>
++
++          <View style={styles.actions}>
++            {secondaryActionLabel && onSecondaryAction ? (
++              <Pressable style={[styles.actionButton, styles.secondaryButton]} onPress={onSecondaryAction}>
++                <Text style={styles.secondaryText}>{secondaryActionLabel}</Text>
++              </Pressable>
++            ) : null}
++            <Pressable style={[styles.actionButton, styles.primaryButton]} onPress={onScanNext}>
++              <Text style={styles.primaryText}>Scan Next</Text>
++            </Pressable>
++          </View>
++        </View>
++      </View>
++    </Modal>
++  );
++}
++
++const styles = StyleSheet.create({
++  backdrop: {
++    flex: 1,
++    justifyContent: 'center',
++    paddingHorizontal: theme.spacing.md,
++    backgroundColor: 'rgba(0,0,0,0.72)',
++  },
++  card: {
++    maxHeight: '88%',
++    borderRadius: theme.radius.lg,
++    borderWidth: 1,
++    backgroundColor: theme.colors.surface,
++    overflow: 'hidden',
++  },
++  content: {
++    padding: theme.spacing.lg,
++    gap: theme.spacing.sm,
++  },
++  success: { borderColor: theme.colors.success },
++  warning: { borderColor: '#F4D03F' },
++  error: { borderColor: theme.colors.error },
++  unable: { borderColor: theme.colors.primary },
++  statusPill: {
++    alignSelf: 'flex-start',
++    borderWidth: 1,
++    borderRadius: 999,
++    paddingHorizontal: theme.spacing.md,
++    paddingVertical: theme.spacing.xs,
++    backgroundColor: theme.colors.surfaceElevated,
++  },
++  statusText: {
++    color: theme.colors.textPrimary,
++    fontWeight: '800',
++    textTransform: 'uppercase',
++    fontSize: theme.typography.caption,
++    letterSpacing: 0.8,
++  },
++  title: {
++    color: theme.colors.textPrimary,
++    fontSize: theme.typography.heading,
++    fontWeight: '800',
++  },
++  message: {
++    color: theme.colors.textPrimary,
++    fontSize: theme.typography.body,
++    lineHeight: 23,
++  },
++  detailsBox: {
++    marginTop: theme.spacing.xs,
++    borderColor: theme.colors.border,
++    borderWidth: 1,
++    borderRadius: theme.radius.md,
++    padding: theme.spacing.md,
++    gap: theme.spacing.xs,
++    backgroundColor: theme.colors.background,
++  },
++  detailsTitle: {
++    color: theme.colors.textSecondary,
++    fontWeight: '800',
++    textTransform: 'uppercase',
++    fontSize: theme.typography.caption,
++  },
++  detailText: {
++    color: '#EFE3B2',
++    fontSize: theme.typography.label,
++    textTransform: 'capitalize',
++  },
++  actions: {
++    padding: theme.spacing.lg,
++    paddingTop: 0,
++    gap: theme.spacing.sm,
++  },
++  actionButton: {
++    alignItems: 'center',
++    borderRadius: theme.radius.md,
++    paddingVertical: theme.spacing.sm,
++  },
++  primaryButton: { backgroundColor: theme.colors.primary },
++  primaryText: { color: '#141108', fontWeight: '900' },
++  secondaryButton: {
++    borderColor: theme.colors.border,
++    borderWidth: 1,
++    backgroundColor: theme.colors.background,
++  },
++  secondaryText: { color: theme.colors.textPrimary, fontWeight: '800' },
++});
+diff --git a/mobile/src/features/scanner/scanFeedback.ts b/mobile/src/features/scanner/scanFeedback.ts
+index 23808e72f9b7ec3814c126dfe1247e4a278073cb..e9f89246036a566be9aac3f71006f3de5084ffff 100644
+--- a/mobile/src/features/scanner/scanFeedback.ts
++++ b/mobile/src/features/scanner/scanFeedback.ts
+@@ -1,160 +1,234 @@
+ import { ApiError } from '../../api/client';
+ 
+ export type ScanUiState = 'requesting_permission' | 'permission_denied' | 'ready' | 'processing' | 'success' | 'error';
+ 
+ export type ScanOutcome =
+   | 'success'
+   | 'already_used'
+   | 'invalid'
++  | 'ticket_not_found'
+   | 'wrong_event'
++  | 'expired'
++  | 'validation_failed'
+   | 'unauthorized'
++  | 'unable_to_scan'
++  | 'camera_error'
+   | 'network_error'
+-  | 'server_error';
++  | 'server_error'
++  | 'unexpected_error';
++
++export type ScanResultTone = 'success' | 'warning' | 'error' | 'unable';
+ 
+ export type ScanResult = {
+   outcome: ScanOutcome;
+   title: string;
+   message: string;
+   attendeeName?: string;
+   ticketType?: string;
+   checkedInAt?: string;
++  eventTitle?: string;
+ };
+ 
+ export type ScanApiSuccessResponse = {
+   success?: boolean;
+   code?: string;
+   state?: string;
+   status?: string;
+   result?: string;
+   attendee_name?: string;
+   ticket_type?: string;
+   checked_in_at?: string;
+   message?: string;
+ };
+ 
+ const DUPLICATE_WINDOW_MS = 2500;
+ 
+ function normalizeState(value?: string) {
+   return value?.trim().toLowerCase();
  }
  
- const styles = StyleSheet.create({
-   container: {
-     flex: 1,
-     paddingTop: theme.spacing.md,
-   },
-   header: {
-     paddingHorizontal: theme.spacing.lg,
-     marginBottom: theme.spacing.md,
-     flexDirection: 'row',
-     justifyContent: 'space-between',
-     alignItems: 'center',
-   },
-   kicker: {
-     color: theme.colors.primary,
-     fontSize: theme.typography.caption,
-     letterSpacing: 2,
-   },
-   title: {
-     color: theme.colors.textPrimary,
-     fontSize: theme.typography.heading,
-@@ -273,50 +292,60 @@ const styles = StyleSheet.create({
-     borderRadius: 999,
-     borderWidth: 1,
-     borderColor: theme.colors.border,
-     backgroundColor: theme.colors.surface,
-     paddingHorizontal: theme.spacing.md,
-     paddingVertical: theme.spacing.xs,
-   },
-   chipActive: {
-     borderColor: theme.colors.primary,
-     backgroundColor: '#221b08',
-   },
-   chipText: {
-     color: theme.colors.textSecondary,
-     fontSize: theme.typography.caption,
-   },
-   chipTextActive: {
-     color: theme.colors.primary,
-     fontWeight: '700',
-   },
-   listContent: {
-     gap: theme.spacing.md,
-     paddingHorizontal: theme.spacing.lg,
-     paddingVertical: theme.spacing.sm,
-     paddingBottom: theme.spacing.xl,
-   },
-+  homeListContent: {
-+    paddingBottom: theme.spacing.xl,
-+  },
-+  eventListItem: {
-+    paddingHorizontal: theme.spacing.lg,
-+    marginBottom: theme.spacing.md,
-+  },
-+  firstEventListItem: {
-+    marginTop: theme.spacing.sm,
-+  },
-   stateWrap: {
-     paddingHorizontal: theme.spacing.lg,
-     alignItems: 'center',
-     gap: theme.spacing.md,
-     marginTop: theme.spacing.xl,
-   },
-   featuredSection: {
-     marginTop: theme.spacing.xs,
-     marginBottom: theme.spacing.sm,
-   },
-   featuredTitle: {
-     color: theme.colors.textPrimary,
-     fontSize: theme.typography.body,
-     fontWeight: '700',
-     paddingHorizontal: theme.spacing.lg,
-     marginBottom: theme.spacing.sm,
-   },
-   featuredRow: {
-     gap: theme.spacing.md,
-     paddingHorizontal: theme.spacing.lg,
-     paddingRight: theme.spacing.xl,
-   },
-   featuredCardWrap: {
-     width: 290,
-   },
+ export function shouldIgnoreDuplicateScan(
+   rawValue: string,
+   lastScanRawValue: string | null,
+   lastScanAt: number,
+   now: number,
+ ) {
+   if (!rawValue.trim()) {
+     return true;
+   }
+ 
+   if (!lastScanRawValue) {
+     return false;
+   }
+ 
+   return rawValue === lastScanRawValue && now - lastScanAt < DUPLICATE_WINDOW_MS;
+ }
+ 
+-export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanResult {
++export function buildScanResultFromSuccessResponse(response: ScanApiSuccessResponse, eventTitle?: string): ScanResult {
+   const state = normalizeState(response.state ?? response.status ?? response.result ?? response.code);
+ 
+   if (response.success || state === 'success' || state === 'admitted') {
+     return {
+       outcome: 'success',
+       title: 'Checked In',
+       message: response.message ?? 'Ticket verified successfully.',
+       attendeeName: response.attendee_name,
+       ticketType: response.ticket_type,
+       checkedInAt: response.checked_in_at,
++      eventTitle,
+     };
+   }
+ 
+   if (state === 'already_used' || state === 'checked_in' || state === 'already_checked_in') {
+     return {
+       outcome: 'already_used',
+       title: 'Already Used',
+       message: response.message ?? 'This ticket was already checked in.',
+       attendeeName: response.attendee_name,
+       ticketType: response.ticket_type,
+       checkedInAt: response.checked_in_at,
++      eventTitle,
+     };
+   }
+ 
+   if (state === 'wrong_event') {
+     return {
+       outcome: 'wrong_event',
+       title: 'Wrong Event',
+       message: response.message ?? 'This ticket belongs to a different event.',
++      eventTitle,
++    };
++  }
++
++  if (state === 'expired' || state === 'ticket_expired') {
++    return {
++      outcome: 'expired',
++      title: 'Expired Ticket',
++      message: response.message ?? 'This ticket is expired and cannot be checked in.',
++      eventTitle,
++    };
++  }
++
++  if (state === 'not_found' || state === 'ticket_not_found') {
++    return {
++      outcome: 'ticket_not_found',
++      title: 'Ticket Not Found',
++      message: response.message ?? 'We could not find a ticket for this QR code.',
++      eventTitle,
++    };
++  }
++
++  if (state === 'validation_failed' || state === 'failed_validation') {
++    return {
++      outcome: 'validation_failed',
++      title: 'Validation Failed',
++      message: response.message ?? 'This ticket could not be validated for entry.',
++      eventTitle,
+     };
+   }
+ 
+   return {
+     outcome: 'invalid',
+     title: 'Invalid Ticket',
+     message: response.message ?? 'Ticket could not be verified.',
++    eventTitle,
+   };
+ }
+ 
+-export function mapScanErrorToResult(error: unknown): ScanResult {
++export const mapScanResponseToResult = buildScanResultFromSuccessResponse;
++
++export function buildScanResultFromApiError(error: unknown, eventTitle?: string): ScanResult {
+   if (error instanceof ApiError) {
+     if (error.status === 401 || error.status === 403) {
+       return {
+         outcome: 'unauthorized',
+         title: 'Not Authorized',
+         message: error.message || 'You do not have access to scanner mode for this event.',
++        eventTitle,
+       };
+     }
+ 
+     if (error.status === 409) {
+       return {
+         outcome: 'already_used',
+         title: 'Already Used',
+         message: error.message || 'This ticket has already been used.',
++        eventTitle,
+       };
+     }
+ 
+-    if (error.status === 404 || error.status === 422) {
++    if (error.status === 404) {
+       return {
+-        outcome: 'invalid',
+-        title: 'Invalid Ticket',
++        outcome: 'ticket_not_found',
++        title: 'Ticket Not Found',
++        message: error.message || 'We could not find a ticket for this QR code.',
++        eventTitle,
++      };
++    }
++
++    if (error.status === 422) {
++      return {
++        outcome: 'validation_failed',
++        title: 'Validation Failed',
+         message: error.message || 'Ticket could not be validated.',
++        eventTitle,
+       };
+     }
+ 
+     return {
+       outcome: 'server_error',
+       title: 'Scan Failed',
+       message: error.message || 'Server error while checking in this ticket.',
++      eventTitle,
+     };
+   }
+ 
+   if (error instanceof TypeError) {
+     return {
+       outcome: 'network_error',
+       title: 'Network Error',
+       message: 'Unable to reach server. Check your connection and try again.',
++      eventTitle,
+     };
+   }
+ 
+   return {
+     outcome: 'server_error',
+     title: 'Scan Failed',
+     message: 'Something went wrong while processing this scan.',
+   };
+ }
+ 
++export const mapScanErrorToResult = buildScanResultFromApiError;
++
++export function buildScanResultFromUnexpectedError(message = 'Something went wrong while processing this scan.', eventTitle?: string): ScanResult {
++  return {
++    outcome: 'unexpected_error',
++    title: 'Scan Failed',
++    message,
++    eventTitle,
++  };
++}
++
++export function getScanResultTone(result: ScanResult): ScanResultTone {
++  if (result.outcome === 'success') return 'success';
++  if (result.outcome === 'already_used' || result.outcome === 'wrong_event' || result.outcome === 'expired') return 'warning';
++  if (result.outcome === 'unable_to_scan' || result.outcome === 'camera_error' || result.outcome === 'network_error') return 'unable';
++  return 'error';
++}
++
+ export function formatCheckedInTime(value?: string) {
+   if (!value) {
+     return null;
+   }
+ 
+   const parsedDate = new Date(value);
+   if (Number.isNaN(parsedDate.getTime())) {
+     return value;
+   }
+ 
+   return parsedDate.toLocaleTimeString([], {
+     hour: '2-digit',
+     minute: '2-digit',
+   });
+ }
+diff --git a/mobile/src/navigation/screens/ScannerScreen.tsx b/mobile/src/navigation/screens/ScannerScreen.tsx
+index 89cbf33e8e7d97a63a1fb0c169e64076528b6c4e..85fb47bc3c8a1ac9f1cf724c82d8f5cc5818fb0d 100644
+--- a/mobile/src/navigation/screens/ScannerScreen.tsx
++++ b/mobile/src/navigation/screens/ScannerScreen.tsx
+@@ -1,219 +1,253 @@
+ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+ import { CameraView, BarcodeScanningResult, useCameraPermissions } from 'expo-camera';
+ import * as Haptics from 'expo-haptics';
+ import { useIsFocused } from '@react-navigation/native';
+ 
++import { ApiError } from '../../api/client';
+ import { checkInTicketManually, scanTicket } from '../../api/tickets';
+ import { theme } from '../../theme';
++import { ScanResultModal } from '../../features/scanner/ScanResultModal';
+ import {
+-  formatCheckedInTime,
+-  mapScanErrorToResult,
+-  mapScanResponseToResult,
++  buildScanResultFromApiError,
++  buildScanResultFromSuccessResponse,
++  buildScanResultFromUnexpectedError,
++  getScanResultTone,
+   ScanResult,
+   ScanUiState,
+   shouldIgnoreDuplicateScan,
+ } from '../../features/scanner/scanFeedback';
+ 
+ type ScannerScreenProps = {
+   canAccessScanner: boolean;
+   eventId: number;
+   eventTitle: string;
+   onBack: () => void;
+ };
+ 
+-const RESULT_COOLDOWN_MS = 1400;
+-
+ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }: ScannerScreenProps) {
+   const isFocused = useIsFocused();
+   const [permission, requestPermission] = useCameraPermissions();
+-  const [isProcessingScan, setIsProcessingScan] = useState(false);
+-  const [lastResult, setLastResult] = useState<ScanResult | null>(null);
++  const [scanLocked, setScanLocked] = useState(false);
++  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
++  const [scanError, setScanError] = useState<ScanResult | null>(null);
++  const [isResultModalVisible, setIsResultModalVisible] = useState(false);
+   const [lastScanRawValue, setLastScanRawValue] = useState<string | null>(null);
+   const [lastScanAt, setLastScanAt] = useState(0);
+   const [torchEnabled, setTorchEnabled] = useState(false);
+   const [feedbackFlash, setFeedbackFlash] = useState<'success' | 'error' | null>(null);
+   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
+   const [manualDigits, setManualDigits] = useState('');
+   const [isSubmittingManualCode, setIsSubmittingManualCode] = useState(false);
+   const [manualResult, setManualResult] = useState<ScanResult | null>(null);
+-  const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const scanLockedRef = useRef(false);
+   const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+ 
+   const screenState: ScanUiState = useMemo(() => {
+     if (!permission) {
+       return 'requesting_permission';
+     }
+ 
+     if (!permission.granted) {
+       return 'permission_denied';
+     }
+ 
+-    if (isProcessingScan) {
+-      return 'processing';
++    if (scanResult) {
++      return scanResult.outcome === 'success' ? 'success' : 'error';
+     }
+ 
+-    if (!lastResult) {
+-      return 'ready';
++    if (scanLocked) {
++      return 'processing';
+     }
+ 
+-    return lastResult.outcome === 'success' ? 'success' : 'error';
+-  }, [isProcessingScan, lastResult, permission]);
++    return 'ready';
++  }, [scanLocked, scanResult, permission]);
+ 
+   const runFeedbackHaptics = useCallback(async (result: ScanResult) => {
+     try {
+-      if (result.outcome === 'success') {
++      const tone = getScanResultTone(result);
++      if (tone === 'success') {
+         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+-      } else if (result.outcome === 'already_used' || result.outcome === 'wrong_event') {
++      } else if (tone === 'warning') {
+         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+       } else {
+         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+       }
+     } catch {
+       // haptics is optional; scanner should still work without it
+     }
+   }, []);
+ 
+ 
+   useEffect(() => {
+     return () => {
+-      if (cooldownTimeoutRef.current) {
+-        clearTimeout(cooldownTimeoutRef.current);
+-      }
+       if (flashTimeoutRef.current) {
+         clearTimeout(flashTimeoutRef.current);
+       }
+     };
+   }, []);
+ 
+   useEffect(() => {
+-    if (!lastResult) {
++    if (!scanResult) {
+       return;
+     }
+ 
+-    const flashType = lastResult.outcome === 'success' ? 'success' : 'error';
++    const flashType = scanResult.outcome === 'success' ? 'success' : 'error';
+     setFeedbackFlash(flashType);
+ 
+     if (flashTimeoutRef.current) {
+       clearTimeout(flashTimeoutRef.current);
+     }
+ 
+     flashTimeoutRef.current = setTimeout(() => {
+       setFeedbackFlash(null);
+     }, 360);
+-  }, [lastResult]);
+-
+-  const releaseScanLock = useCallback(() => {
+-    if (cooldownTimeoutRef.current) {
+-      clearTimeout(cooldownTimeoutRef.current);
+-      cooldownTimeoutRef.current = null;
+-    }
+-
+-    cooldownTimeoutRef.current = setTimeout(() => {
+-      setIsProcessingScan(false);
+-    }, RESULT_COOLDOWN_MS);
++  }, [scanResult]);
++
++  const showScanResult = useCallback((result: ScanResult) => {
++    setScanResult(result);
++    setScanError(result.outcome === 'success' ? null : result);
++    setIsResultModalVisible(true);
++    runFeedbackHaptics(result);
++  }, [runFeedbackHaptics]);
++
++  const resetScannerForNextScan = useCallback(() => {
++    setIsResultModalVisible(false);
++    setScanResult(null);
++    setScanError(null);
++    setScanLocked(false);
++    scanLockedRef.current = false;
++    setLastScanRawValue(null);
++    setLastScanAt(0);
+   }, []);
+ 
+   const onBarcodeScanned = useCallback(
+     async ({ data }: BarcodeScanningResult) => {
+-      if (!isFocused || !canAccessScanner || isProcessingScan) {
++      if (!isFocused || !canAccessScanner || scanLockedRef.current || scanLocked || isResultModalVisible) {
+         return;
+       }
+ 
+       const rawPayload = data?.trim();
+       const now = Date.now();
+ 
+-      if (!rawPayload || shouldIgnoreDuplicateScan(rawPayload, lastScanRawValue, lastScanAt, now)) {
++      if (!rawPayload) {
++        scanLockedRef.current = true;
++        setScanLocked(true);
++        showScanResult({
++          outcome: 'unable_to_scan',
++          title: 'Unable to Read Code',
++          message: 'The scanner could not read this QR code. Hold the code inside the frame and try again.',
++          eventTitle,
++        });
+         return;
+       }
+ 
+-      setIsProcessingScan(true);
++      if (shouldIgnoreDuplicateScan(rawPayload, lastScanRawValue, lastScanAt, now)) {
++        return;
++      }
++
++      scanLockedRef.current = true;
++      setScanLocked(true);
+       setLastScanRawValue(rawPayload);
+       setLastScanAt(now);
+ 
+       try {
+         const response = await scanTicket(rawPayload, eventId);
+-        const result = mapScanResponseToResult(response);
+-        setLastResult(result);
+-        runFeedbackHaptics(result);
++        const result = buildScanResultFromSuccessResponse(response, eventTitle);
++        showScanResult(result);
+       } catch (error) {
+-        const result = mapScanErrorToResult(error);
+-        setLastResult(result);
+-        runFeedbackHaptics(result);
++        const result = error instanceof ApiError || error instanceof TypeError
++          ? buildScanResultFromApiError(error, eventTitle)
++          : buildScanResultFromUnexpectedError(undefined, eventTitle);
++        showScanResult(result);
+ 
+         if (__DEV__) {
+           // eslint-disable-next-line no-console
+           console.warn('[Scanner] scan error', error);
+         }
+-      } finally {
+-        releaseScanLock();
+       }
+     },
+-    [canAccessScanner, eventId, isFocused, isProcessingScan, lastScanAt, lastScanRawValue, releaseScanLock, runFeedbackHaptics],
++    [canAccessScanner, eventId, eventTitle, isFocused, isResultModalVisible, lastScanAt, lastScanRawValue, scanLocked, showScanResult],
+   );
+ 
+   const manualLookupValue = `ADM-${manualDigits}`;
+   const canSubmitManualCode = manualDigits.length === 6 && !isSubmittingManualCode;
+ 
+   const onManualDigitsChange = useCallback((value: string) => {
+     setManualDigits(value.replace(/\D/g, '').slice(0, 6));
+     setManualResult(null);
++    setScanError(null);
+   }, []);
+ 
+   const onSubmitManualCode = useCallback(async () => {
+     if (!canSubmitManualCode) {
+       return;
+     }
+ 
+     setIsSubmittingManualCode(true);
+ 
+     try {
+       const response = await checkInTicketManually(manualLookupValue, eventId);
+-      const result = mapScanResponseToResult(response);
+-      setLastResult(result);
++      const result = buildScanResultFromSuccessResponse(response, eventTitle);
+       setManualResult(result);
+-      runFeedbackHaptics(result);
++      setIsManualEntryOpen(false);
++      showScanResult(result);
+ 
+-      if (result.outcome === 'success') {
++      const tone = getScanResultTone(result);
++      if (tone === 'success') {
+         setManualDigits('');
+         setIsManualEntryOpen(false);
+       }
+     } catch (error) {
+-      const result = mapScanErrorToResult(error);
+-      setLastResult(result);
++      const result = error instanceof ApiError || error instanceof TypeError
++        ? buildScanResultFromApiError(error, eventTitle)
++        : buildScanResultFromUnexpectedError(undefined, eventTitle);
+       setManualResult(result);
+-      runFeedbackHaptics(result);
++      setIsManualEntryOpen(false);
++      showScanResult(result);
+ 
+       if (__DEV__) {
+         // eslint-disable-next-line no-console
+         console.warn('[Scanner] manual check-in error', error);
+       }
+     } finally {
+       setIsSubmittingManualCode(false);
+     }
+-  }, [canSubmitManualCode, eventId, manualLookupValue, runFeedbackHaptics]);
++  }, [canSubmitManualCode, eventId, eventTitle, manualLookupValue, showScanResult]);
++
++  const onCameraMountError = useCallback((error: { message?: string }) => {
++    if (isResultModalVisible) return;
++    scanLockedRef.current = true;
++    setScanLocked(true);
++    showScanResult({
++      outcome: 'camera_error',
++      title: 'Camera Error',
++      message: error?.message || 'The camera could not be started. Try again or check device settings.',
++      eventTitle,
++    });
++  }, [eventTitle, isResultModalVisible, showScanResult]);
+ 
+   const statusLabel =
+     screenState === 'processing'
+       ? 'Processing…'
+       : screenState === 'success'
+         ? 'Last scan: successful'
+       : screenState === 'error'
+           ? 'Last scan: failed'
+           : 'Ready to scan';
+ 
+   if (!canAccessScanner) {
+     return (
+       <View style={styles.deniedWrap}>
+         <Text style={styles.deniedTitle}>Scanner Access Required</Text>
+         <Text style={styles.deniedText}>You do not have access to scanner mode on this account.</Text>
+         <Pressable style={styles.backButton} onPress={onBack}>
+           <Text style={styles.backButtonText}>Go Back</Text>
+         </Pressable>
+       </View>
+     );
+   }
+ 
+   if (!permission) {
+     return (
+       <View style={styles.centeredWrap}>
+@@ -223,51 +257,52 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
+     );
+   }
+ 
+   if (!permission.granted) {
+     return (
+       <View style={styles.deniedWrap}>
+         <Text style={styles.deniedTitle}>Camera Access Needed</Text>
+         <Text style={styles.deniedText}>Scanner mode needs camera access to read ticket QR codes.</Text>
+         <Pressable style={styles.backButton} onPress={requestPermission}>
+           <Text style={styles.backButtonText}>Grant Camera Access</Text>
+         </Pressable>
+         <Pressable onPress={onBack}>
+           <Text style={styles.secondaryActionText}>Back</Text>
+         </Pressable>
+       </View>
+     );
+   }
+ 
+   return (
+     <View style={styles.container}>
+       {isFocused ? (
+         <CameraView
+           style={StyleSheet.absoluteFillObject}
+           facing="back"
+           barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+-          onBarcodeScanned={onBarcodeScanned}
++          onBarcodeScanned={scanLocked || isResultModalVisible ? undefined : onBarcodeScanned}
++          onMountError={onCameraMountError}
+           enableTorch={torchEnabled}
+         />
+       ) : null}
+ 
+       <View style={styles.overlay}>
+         {feedbackFlash ? (
+           <View
+             pointerEvents="none"
+             style={[styles.feedbackFlash, feedbackFlash === 'success' ? styles.flashSuccess : styles.flashError]}
+           />
+         ) : null}
+ 
+         <View style={styles.topBar}>
+           <Pressable onPress={onBack} style={styles.topActionButton}>
+             <Text style={styles.topActionText}>Back</Text>
+           </Pressable>
+           <View>
+             <Text style={styles.title}>Scan Tickets</Text>
+             <Text style={styles.subtitle}>{eventTitle}</Text>
+           </View>
+           <Pressable onPress={() => setTorchEnabled((prev) => !prev)} style={styles.topActionButton}>
+             <Text style={styles.topActionText}>{torchEnabled ? 'Turn Torch Off' : 'Turn Torch On'}</Text>
+           </Pressable>
+         </View>
+ 
+@@ -283,78 +318,69 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
+                 <View style={[styles.corner, styles.bottomRight]} />
+               </View>
+               <View style={styles.maskSide} />
+             </View>
+             <View style={styles.maskBottom} />
+           </View>
+         </View>
+ 
+         <View style={styles.bottomPanel}>
+           <View style={styles.statusPill}>
+             <View
+               style={[
+                 styles.statusDot,
+                 screenState === 'processing'
+                   ? styles.dotProcessing
+                   : screenState === 'success'
+                     ? styles.dotSuccess
+                     : screenState === 'error'
+                       ? styles.dotError
+                       : styles.dotReady,
+               ]}
+             />
+             <Text style={styles.statusLabel}>{statusLabel}</Text>
+           </View>
+ 
+-          {lastResult ? (
+-            <View style={[styles.resultCard, lastResult.outcome === 'success' ? styles.resultSuccess : styles.resultError]}>
+-              <Text style={styles.resultTitle}>{lastResult.title}</Text>
+-              <Text style={styles.resultMessage}>{lastResult.message}</Text>
+-              {lastResult.attendeeName ? <Text style={styles.resultMeta}>Name: {lastResult.attendeeName}</Text> : null}
+-              {lastResult.ticketType ? <Text style={styles.resultMeta}>Ticket: {lastResult.ticketType}</Text> : null}
+-              {lastResult.checkedInAt ? (
+-                <Text style={styles.resultMeta}>Checked in: {formatCheckedInTime(lastResult.checkedInAt)}</Text>
+-              ) : null}
+-              <Pressable
+-                onPress={() => {
+-                  setLastResult(null);
+-                  setIsProcessingScan(false);
+-                }}
+-                style={styles.scanAgainButton}
+-              >
+-                <Text style={styles.scanAgainText}>Scan Again</Text>
+-              </Pressable>
+-            </View>
++          {scanResult ? (
++            <Text style={styles.hintText}>Review the scan acknowledgement, then tap Scan Next.</Text>
+           ) : (
+             <Text style={styles.hintText}>Hold the ticket QR code inside the frame.</Text>
+           )}
+ 
+-          <Pressable style={styles.manualEntryButton} onPress={() => { setManualResult(null); setIsManualEntryOpen(true); }}>
++          <Pressable style={styles.manualEntryButton} onPress={() => { setManualResult(null); setScanError(null); setIsManualEntryOpen(true); }}>
+             <Text style={styles.manualEntryButtonText}>Enter code manually</Text>
+           </Pressable>
+         </View>
+ 
++        <ScanResultModal
++          visible={isResultModalVisible}
++          result={scanResult}
++          onScanNext={resetScannerForNextScan}
++          secondaryActionLabel={scanError?.outcome === 'unable_to_scan' || scanError?.outcome === 'camera_error' ? 'Try Again' : undefined}
++          onSecondaryAction={scanError?.outcome === 'unable_to_scan' || scanError?.outcome === 'camera_error' ? resetScannerForNextScan : undefined}
++        />
++
+         <Modal visible={isManualEntryOpen} transparent animationType="slide" onRequestClose={() => setIsManualEntryOpen(false)}>
+           <KeyboardAvoidingView
+             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+             style={styles.modalBackdrop}
+           >
+             <Pressable style={styles.modalScrim} onPress={() => setIsManualEntryOpen(false)} />
+             <View style={styles.manualSheet}>
+               <Text style={styles.manualTitle}>Manual check-in code</Text>
+               <Text style={styles.manualHelper}>Enter the 6-digit code shown on the ticket.</Text>
+ 
+               <View style={styles.manualCodeRow}>
+                 <View style={styles.manualPrefixBox}>
+                   <Text style={styles.manualPrefixText}>ADM -</Text>
+                 </View>
+                 <TextInput
+                   accessibilityLabel="6-digit ticket code"
+                   autoFocus
+                   keyboardType="number-pad"
+                   maxLength={6}
+                   onChangeText={onManualDigitsChange}
+                   placeholder="123456"
+                   placeholderTextColor={theme.colors.textSecondary}
+                   style={styles.manualInput}
+                   value={manualDigits}
+                 />
  
 EOF
 )

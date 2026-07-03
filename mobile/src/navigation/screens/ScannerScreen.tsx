@@ -4,12 +4,15 @@ import { CameraView, BarcodeScanningResult, useCameraPermissions } from 'expo-ca
 import * as Haptics from 'expo-haptics';
 import { useIsFocused } from '@react-navigation/native';
 
+import { ApiError } from '../../api/client';
 import { checkInTicketManually, scanTicket } from '../../api/tickets';
 import { theme } from '../../theme';
+import { ScanResultModal } from '../../features/scanner/ScanResultModal';
 import {
-  formatCheckedInTime,
-  mapScanErrorToResult,
-  mapScanResponseToResult,
+  buildScanResultFromApiError,
+  buildScanResultFromSuccessResponse,
+  buildScanResultFromUnexpectedError,
+  getScanResultTone,
   ScanResult,
   ScanUiState,
   shouldIgnoreDuplicateScan,
@@ -22,13 +25,13 @@ type ScannerScreenProps = {
   onBack: () => void;
 };
 
-const RESULT_COOLDOWN_MS = 1400;
-
 export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }: ScannerScreenProps) {
   const isFocused = useIsFocused();
   const [permission, requestPermission] = useCameraPermissions();
-  const [isProcessingScan, setIsProcessingScan] = useState(false);
-  const [lastResult, setLastResult] = useState<ScanResult | null>(null);
+  const [scanLocked, setScanLocked] = useState(false);
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [scanError, setScanError] = useState<ScanResult | null>(null);
+  const [isResultModalVisible, setIsResultModalVisible] = useState(false);
   const [lastScanRawValue, setLastScanRawValue] = useState<string | null>(null);
   const [lastScanAt, setLastScanAt] = useState(0);
   const [torchEnabled, setTorchEnabled] = useState(false);
@@ -37,7 +40,7 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
   const [manualDigits, setManualDigits] = useState('');
   const [isSubmittingManualCode, setIsSubmittingManualCode] = useState(false);
   const [manualResult, setManualResult] = useState<ScanResult | null>(null);
-  const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scanLockedRef = useRef(false);
   const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const screenState: ScanUiState = useMemo(() => {
@@ -49,22 +52,23 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
       return 'permission_denied';
     }
 
-    if (isProcessingScan) {
+    if (scanResult) {
+      return scanResult.outcome === 'success' ? 'success' : 'error';
+    }
+
+    if (scanLocked) {
       return 'processing';
     }
 
-    if (!lastResult) {
-      return 'ready';
-    }
-
-    return lastResult.outcome === 'success' ? 'success' : 'error';
-  }, [isProcessingScan, lastResult, permission]);
+    return 'ready';
+  }, [scanLocked, scanResult, permission]);
 
   const runFeedbackHaptics = useCallback(async (result: ScanResult) => {
     try {
-      if (result.outcome === 'success') {
+      const tone = getScanResultTone(result);
+      if (tone === 'success') {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } else if (result.outcome === 'already_used' || result.outcome === 'wrong_event') {
+      } else if (tone === 'warning') {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       } else {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -77,9 +81,6 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
 
   useEffect(() => {
     return () => {
-      if (cooldownTimeoutRef.current) {
-        clearTimeout(cooldownTimeoutRef.current);
-      }
       if (flashTimeoutRef.current) {
         clearTimeout(flashTimeoutRef.current);
       }
@@ -87,11 +88,11 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
   }, []);
 
   useEffect(() => {
-    if (!lastResult) {
+    if (!scanResult) {
       return;
     }
 
-    const flashType = lastResult.outcome === 'success' ? 'success' : 'error';
+    const flashType = scanResult.outcome === 'success' ? 'success' : 'error';
     setFeedbackFlash(flashType);
 
     if (flashTimeoutRef.current) {
@@ -101,55 +102,72 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
     flashTimeoutRef.current = setTimeout(() => {
       setFeedbackFlash(null);
     }, 360);
-  }, [lastResult]);
+  }, [scanResult]);
 
-  const releaseScanLock = useCallback(() => {
-    if (cooldownTimeoutRef.current) {
-      clearTimeout(cooldownTimeoutRef.current);
-      cooldownTimeoutRef.current = null;
-    }
+  const showScanResult = useCallback((result: ScanResult) => {
+    setScanResult(result);
+    setScanError(result.outcome === 'success' ? null : result);
+    setIsResultModalVisible(true);
+    runFeedbackHaptics(result);
+  }, [runFeedbackHaptics]);
 
-    cooldownTimeoutRef.current = setTimeout(() => {
-      setIsProcessingScan(false);
-    }, RESULT_COOLDOWN_MS);
+  const resetScannerForNextScan = useCallback(() => {
+    setIsResultModalVisible(false);
+    setScanResult(null);
+    setScanError(null);
+    setScanLocked(false);
+    scanLockedRef.current = false;
+    setLastScanRawValue(null);
+    setLastScanAt(0);
   }, []);
 
   const onBarcodeScanned = useCallback(
     async ({ data }: BarcodeScanningResult) => {
-      if (!isFocused || !canAccessScanner || isProcessingScan) {
+      if (!isFocused || !canAccessScanner || scanLockedRef.current || scanLocked || isResultModalVisible) {
         return;
       }
 
       const rawPayload = data?.trim();
       const now = Date.now();
 
-      if (!rawPayload || shouldIgnoreDuplicateScan(rawPayload, lastScanRawValue, lastScanAt, now)) {
+      if (!rawPayload) {
+        scanLockedRef.current = true;
+        setScanLocked(true);
+        showScanResult({
+          outcome: 'unable_to_scan',
+          title: 'Unable to Read Code',
+          message: 'The scanner could not read this QR code. Hold the code inside the frame and try again.',
+          eventTitle,
+        });
         return;
       }
 
-      setIsProcessingScan(true);
+      if (shouldIgnoreDuplicateScan(rawPayload, lastScanRawValue, lastScanAt, now)) {
+        return;
+      }
+
+      scanLockedRef.current = true;
+      setScanLocked(true);
       setLastScanRawValue(rawPayload);
       setLastScanAt(now);
 
       try {
         const response = await scanTicket(rawPayload, eventId);
-        const result = mapScanResponseToResult(response);
-        setLastResult(result);
-        runFeedbackHaptics(result);
+        const result = buildScanResultFromSuccessResponse(response, eventTitle);
+        showScanResult(result);
       } catch (error) {
-        const result = mapScanErrorToResult(error);
-        setLastResult(result);
-        runFeedbackHaptics(result);
+        const result = error instanceof ApiError || error instanceof TypeError
+          ? buildScanResultFromApiError(error, eventTitle)
+          : buildScanResultFromUnexpectedError(undefined, eventTitle);
+        showScanResult(result);
 
         if (__DEV__) {
           // eslint-disable-next-line no-console
           console.warn('[Scanner] scan error', error);
         }
-      } finally {
-        releaseScanLock();
       }
     },
-    [canAccessScanner, eventId, isFocused, isProcessingScan, lastScanAt, lastScanRawValue, releaseScanLock, runFeedbackHaptics],
+    [canAccessScanner, eventId, eventTitle, isFocused, isResultModalVisible, lastScanAt, lastScanRawValue, scanLocked, showScanResult],
   );
 
   const manualLookupValue = `ADM-${manualDigits}`;
@@ -158,6 +176,7 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
   const onManualDigitsChange = useCallback((value: string) => {
     setManualDigits(value.replace(/\D/g, '').slice(0, 6));
     setManualResult(null);
+    setScanError(null);
   }, []);
 
   const onSubmitManualCode = useCallback(async () => {
@@ -169,20 +188,23 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
 
     try {
       const response = await checkInTicketManually(manualLookupValue, eventId);
-      const result = mapScanResponseToResult(response);
-      setLastResult(result);
+      const result = buildScanResultFromSuccessResponse(response, eventTitle);
       setManualResult(result);
-      runFeedbackHaptics(result);
+      setIsManualEntryOpen(false);
+      showScanResult(result);
 
-      if (result.outcome === 'success') {
+      const tone = getScanResultTone(result);
+      if (tone === 'success') {
         setManualDigits('');
         setIsManualEntryOpen(false);
       }
     } catch (error) {
-      const result = mapScanErrorToResult(error);
-      setLastResult(result);
+      const result = error instanceof ApiError || error instanceof TypeError
+        ? buildScanResultFromApiError(error, eventTitle)
+        : buildScanResultFromUnexpectedError(undefined, eventTitle);
       setManualResult(result);
-      runFeedbackHaptics(result);
+      setIsManualEntryOpen(false);
+      showScanResult(result);
 
       if (__DEV__) {
         // eslint-disable-next-line no-console
@@ -191,7 +213,19 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
     } finally {
       setIsSubmittingManualCode(false);
     }
-  }, [canSubmitManualCode, eventId, manualLookupValue, runFeedbackHaptics]);
+  }, [canSubmitManualCode, eventId, eventTitle, manualLookupValue, showScanResult]);
+
+  const onCameraMountError = useCallback((error: { message?: string }) => {
+    if (isResultModalVisible) return;
+    scanLockedRef.current = true;
+    setScanLocked(true);
+    showScanResult({
+      outcome: 'camera_error',
+      title: 'Camera Error',
+      message: error?.message || 'The camera could not be started. Try again or check device settings.',
+      eventTitle,
+    });
+  }, [eventTitle, isResultModalVisible, showScanResult]);
 
   const statusLabel =
     screenState === 'processing'
@@ -245,7 +279,8 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
           style={StyleSheet.absoluteFillObject}
           facing="back"
           barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-          onBarcodeScanned={onBarcodeScanned}
+          onBarcodeScanned={scanLocked || isResultModalVisible ? undefined : onBarcodeScanned}
+          onMountError={onCameraMountError}
           enableTorch={torchEnabled}
         />
       ) : null}
@@ -305,33 +340,24 @@ export function ScannerScreen({ canAccessScanner, eventId, eventTitle, onBack }:
             <Text style={styles.statusLabel}>{statusLabel}</Text>
           </View>
 
-          {lastResult ? (
-            <View style={[styles.resultCard, lastResult.outcome === 'success' ? styles.resultSuccess : styles.resultError]}>
-              <Text style={styles.resultTitle}>{lastResult.title}</Text>
-              <Text style={styles.resultMessage}>{lastResult.message}</Text>
-              {lastResult.attendeeName ? <Text style={styles.resultMeta}>Name: {lastResult.attendeeName}</Text> : null}
-              {lastResult.ticketType ? <Text style={styles.resultMeta}>Ticket: {lastResult.ticketType}</Text> : null}
-              {lastResult.checkedInAt ? (
-                <Text style={styles.resultMeta}>Checked in: {formatCheckedInTime(lastResult.checkedInAt)}</Text>
-              ) : null}
-              <Pressable
-                onPress={() => {
-                  setLastResult(null);
-                  setIsProcessingScan(false);
-                }}
-                style={styles.scanAgainButton}
-              >
-                <Text style={styles.scanAgainText}>Scan Again</Text>
-              </Pressable>
-            </View>
+          {scanResult ? (
+            <Text style={styles.hintText}>Review the scan acknowledgement, then tap Scan Next.</Text>
           ) : (
             <Text style={styles.hintText}>Hold the ticket QR code inside the frame.</Text>
           )}
 
-          <Pressable style={styles.manualEntryButton} onPress={() => { setManualResult(null); setIsManualEntryOpen(true); }}>
+          <Pressable style={styles.manualEntryButton} onPress={() => { setManualResult(null); setScanError(null); setIsManualEntryOpen(true); }}>
             <Text style={styles.manualEntryButtonText}>Enter code manually</Text>
           </Pressable>
         </View>
+
+        <ScanResultModal
+          visible={isResultModalVisible}
+          result={scanResult}
+          onScanNext={resetScannerForNextScan}
+          secondaryActionLabel={scanError?.outcome === 'unable_to_scan' || scanError?.outcome === 'camera_error' ? 'Try Again' : undefined}
+          onSecondaryAction={scanError?.outcome === 'unable_to_scan' || scanError?.outcome === 'camera_error' ? resetScannerForNextScan : undefined}
+        />
 
         <Modal visible={isManualEntryOpen} transparent animationType="slide" onRequestClose={() => setIsManualEntryOpen(false)}>
           <KeyboardAvoidingView

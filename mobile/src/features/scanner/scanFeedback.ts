@@ -6,10 +6,18 @@ export type ScanOutcome =
   | 'success'
   | 'already_used'
   | 'invalid'
+  | 'ticket_not_found'
   | 'wrong_event'
+  | 'expired'
+  | 'validation_failed'
   | 'unauthorized'
+  | 'unable_to_scan'
+  | 'camera_error'
   | 'network_error'
-  | 'server_error';
+  | 'server_error'
+  | 'unexpected_error';
+
+export type ScanResultTone = 'success' | 'warning' | 'error' | 'unable';
 
 export type ScanResult = {
   outcome: ScanOutcome;
@@ -18,6 +26,7 @@ export type ScanResult = {
   attendeeName?: string;
   ticketType?: string;
   checkedInAt?: string;
+  eventTitle?: string;
 };
 
 export type ScanApiSuccessResponse = {
@@ -55,7 +64,7 @@ export function shouldIgnoreDuplicateScan(
   return rawValue === lastScanRawValue && now - lastScanAt < DUPLICATE_WINDOW_MS;
 }
 
-export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanResult {
+export function buildScanResultFromSuccessResponse(response: ScanApiSuccessResponse, eventTitle?: string): ScanResult {
   const state = normalizeState(response.state ?? response.status ?? response.result ?? response.code);
 
   if (response.success || state === 'success' || state === 'admitted') {
@@ -66,6 +75,7 @@ export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanR
       attendeeName: response.attendee_name,
       ticketType: response.ticket_type,
       checkedInAt: response.checked_in_at,
+      eventTitle,
     };
   }
 
@@ -77,6 +87,7 @@ export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanR
       attendeeName: response.attendee_name,
       ticketType: response.ticket_type,
       checkedInAt: response.checked_in_at,
+      eventTitle,
     };
   }
 
@@ -85,6 +96,34 @@ export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanR
       outcome: 'wrong_event',
       title: 'Wrong Event',
       message: response.message ?? 'This ticket belongs to a different event.',
+      eventTitle,
+    };
+  }
+
+  if (state === 'expired' || state === 'ticket_expired') {
+    return {
+      outcome: 'expired',
+      title: 'Expired Ticket',
+      message: response.message ?? 'This ticket is expired and cannot be checked in.',
+      eventTitle,
+    };
+  }
+
+  if (state === 'not_found' || state === 'ticket_not_found') {
+    return {
+      outcome: 'ticket_not_found',
+      title: 'Ticket Not Found',
+      message: response.message ?? 'We could not find a ticket for this QR code.',
+      eventTitle,
+    };
+  }
+
+  if (state === 'validation_failed' || state === 'failed_validation') {
+    return {
+      outcome: 'validation_failed',
+      title: 'Validation Failed',
+      message: response.message ?? 'This ticket could not be validated for entry.',
+      eventTitle,
     };
   }
 
@@ -92,16 +131,20 @@ export function mapScanResponseToResult(response: ScanApiSuccessResponse): ScanR
     outcome: 'invalid',
     title: 'Invalid Ticket',
     message: response.message ?? 'Ticket could not be verified.',
+    eventTitle,
   };
 }
 
-export function mapScanErrorToResult(error: unknown): ScanResult {
+export const mapScanResponseToResult = buildScanResultFromSuccessResponse;
+
+export function buildScanResultFromApiError(error: unknown, eventTitle?: string): ScanResult {
   if (error instanceof ApiError) {
     if (error.status === 401 || error.status === 403) {
       return {
         outcome: 'unauthorized',
         title: 'Not Authorized',
         message: error.message || 'You do not have access to scanner mode for this event.',
+        eventTitle,
       };
     }
 
@@ -110,14 +153,25 @@ export function mapScanErrorToResult(error: unknown): ScanResult {
         outcome: 'already_used',
         title: 'Already Used',
         message: error.message || 'This ticket has already been used.',
+        eventTitle,
       };
     }
 
-    if (error.status === 404 || error.status === 422) {
+    if (error.status === 404) {
       return {
-        outcome: 'invalid',
-        title: 'Invalid Ticket',
+        outcome: 'ticket_not_found',
+        title: 'Ticket Not Found',
+        message: error.message || 'We could not find a ticket for this QR code.',
+        eventTitle,
+      };
+    }
+
+    if (error.status === 422) {
+      return {
+        outcome: 'validation_failed',
+        title: 'Validation Failed',
         message: error.message || 'Ticket could not be validated.',
+        eventTitle,
       };
     }
 
@@ -125,6 +179,7 @@ export function mapScanErrorToResult(error: unknown): ScanResult {
       outcome: 'server_error',
       title: 'Scan Failed',
       message: error.message || 'Server error while checking in this ticket.',
+      eventTitle,
     };
   }
 
@@ -133,6 +188,7 @@ export function mapScanErrorToResult(error: unknown): ScanResult {
       outcome: 'network_error',
       title: 'Network Error',
       message: 'Unable to reach server. Check your connection and try again.',
+      eventTitle,
     };
   }
 
@@ -141,6 +197,24 @@ export function mapScanErrorToResult(error: unknown): ScanResult {
     title: 'Scan Failed',
     message: 'Something went wrong while processing this scan.',
   };
+}
+
+export const mapScanErrorToResult = buildScanResultFromApiError;
+
+export function buildScanResultFromUnexpectedError(message = 'Something went wrong while processing this scan.', eventTitle?: string): ScanResult {
+  return {
+    outcome: 'unexpected_error',
+    title: 'Scan Failed',
+    message,
+    eventTitle,
+  };
+}
+
+export function getScanResultTone(result: ScanResult): ScanResultTone {
+  if (result.outcome === 'success') return 'success';
+  if (result.outcome === 'already_used' || result.outcome === 'wrong_event' || result.outcome === 'expired') return 'warning';
+  if (result.outcome === 'unable_to_scan' || result.outcome === 'camera_error' || result.outcome === 'network_error') return 'unable';
+  return 'error';
 }
 
 export function formatCheckedInTime(value?: string) {
