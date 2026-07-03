@@ -27,13 +27,7 @@ def get_current_user_id(
         user = resolve_user_from_access_token(db, token=credentials.credentials)
         return user.id
 
-<<<<<<< ours
-    # Development-only escape hatch for local testing. Production must never
-    # trust caller-provided user ids because that permits impersonation.
-    if settings.env == "development" and x_user_id is not None:
-=======
     if settings.env == "development" and settings.allow_dev_header_auth and x_user_id is not None:
->>>>>>> theirs
         return int(x_user_id)
 
     raise HTTPException(
