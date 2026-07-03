@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -133,6 +133,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const [shortDescription, setShortDescription] = useState('');
   const [longDescription, setLongDescription] = useState('');
   const [category, setCategory] = useState('');
+  const [coverImageUrl, setCoverImageUrl] = useState('');
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
   const [categorySearch, setCategorySearch] = useState('');
   const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
@@ -390,6 +391,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         short_description: shortDescription.trim() || null,
         long_description: longDescription.trim() || null,
         category: category.trim() || null,
+        cover_image_url: coverImageUrl.trim() || null,
         start_at: startAtIso,
         end_at: endAtIso,
         doors_open_at: doorsOpenAtIso,
@@ -450,6 +452,23 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         <Pressable style={styles.input} onPress={openCategoryPicker}>
           <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
         </Pressable>
+        <TextInput
+          style={styles.input}
+          value={coverImageUrl}
+          onChangeText={setCoverImageUrl}
+          placeholder="Cover image URL"
+          placeholderTextColor={theme.colors.textSecondary}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
+        {coverImageUrl.trim() ? (
+          <Image source={{ uri: coverImageUrl.trim() }} style={styles.coverPreview} resizeMode="cover" />
+        ) : (
+          <View style={styles.coverImageHint}>
+            <Text style={styles.hintText}>Add a cover image URL to make this event stand out in discovery.</Text>
+          </View>
+        )}
 
         <Text style={styles.sectionTitle}>Timing</Text>
         <View style={styles.timingCard}>
@@ -692,6 +711,19 @@ const styles = StyleSheet.create({
   pickerValue: { color: theme.colors.textPrimary },
   placeholderValue: { color: theme.colors.textSecondary },
   hintText: { color: theme.colors.textSecondary, fontSize: 12 },
+  coverPreview: {
+    width: '100%',
+    height: 160,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  coverImageHint: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    backgroundColor: theme.colors.surfaceElevated,
+  },
   suggestionsCard: {
     borderWidth: 1,
     borderColor: theme.colors.border,

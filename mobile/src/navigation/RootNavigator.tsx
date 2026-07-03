@@ -112,6 +112,7 @@ function SignedInNavigator() {
             onOpenMyTickets={() => navigation.navigate('MyTickets')}
             onSignOut={signOut}
             onOpenEvent={(eventId) => navigation.navigate('EventDetail', { eventId })}
+            onGetTickets={(eventId) => navigation.navigate('TicketSelection', { eventId })}
           />
         )}
       </AppStack.Screen>

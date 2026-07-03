@@ -1,90 +1,893 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/screens/TicketSelectionScreen.tsx b/mobile/src/navigation/screens/TicketSelectionScreen.tsx
-index 4f9382e9c6d80ab3dc71c09070c3c207e0fccf59..02481027b53d6d623e077a5ec06c1875b26b652f 100644
---- a/mobile/src/navigation/screens/TicketSelectionScreen.tsx
-+++ b/mobile/src/navigation/screens/TicketSelectionScreen.tsx
-@@ -149,79 +149,79 @@ export function TicketSelectionScreen({ event, onOrderCreated }: Props) {
-     }
+diff --git a/mobile/src/navigation/RootNavigator.tsx b/mobile/src/navigation/RootNavigator.tsx
+index 212b2106457fa9dfdc943cbc73685e12f702b131..0746c7dc7f7d2a728fc19460f5757ef225862e7e 100644
+--- a/mobile/src/navigation/RootNavigator.tsx
++++ b/mobile/src/navigation/RootNavigator.tsx
+@@ -90,50 +90,51 @@ function TicketSelectionRoute({ eventId, onOrderCreated }: { eventId: number; on
+   }, [eventId]);
  
-     const startedTimeRemaining = getStartedEventTimeRemaining();
-     if (startedTimeRemaining === 'ended') {
-       Alert.alert('This event has ended', 'This event has ended and tickets are no longer available.');
-       return;
-     }
-     if (startedTimeRemaining) {
-       confirmStartedEvent(startedTimeRemaining, () => {
-         void submitOrder(true);
-       });
-       return;
-     }
+   if (!event) return <BootScreen />;
+   return <TicketSelectionScreen event={event} onOrderCreated={onOrderCreated} />;
+ }
  
-     await submitOrder(false);
-   }
+ function SignedInNavigator() {
+   const { signOut, user } = useSession();
+   const canAccessScanner = Boolean(user);
  
    return (
-     <Screen>
-       <ScrollView contentContainerStyle={styles.content}>
-         <Text style={styles.title}>Select tickets</Text>
-         {rows.map((tier) => {
-           const quantity = quantities[tier.id] ?? 0;
-           return (
-             <View key={tier.id} style={styles.row}>
--              <View style={{ flex: 1 }}>
-+              <View style={styles.tierDetails}>
-                 <Text style={styles.name}>{tier.name}</Text>
-                 <Text style={styles.meta}>{tier.currency} {tier.price_amount}</Text>
--                <Text style={styles.meta}>{tier.available_quantity} left</Text>
-               </View>
-               <View style={styles.counter}>
-                 <StepperButton
-                   accessibilityLabel={`Decrease ${tier.name} quantity`}
-                   disabled={quantity === 0}
-                   label="−"
-                   onPress={() => setQuantities((q) => ({ ...q, [tier.id]: Math.max(0, quantity - 1) }))}
-                 />
-                 <Text accessibilityLabel={`${quantity} ${tier.name} selected`} style={styles.qty}>{quantity}</Text>
-                 <StepperButton
-                   accessibilityLabel={`Increase ${tier.name} quantity`}
-                   disabled={quantity >= tier.max_per_order}
-                   label="+"
-                   onPress={() => setQuantities((q) => ({ ...q, [tier.id]: Math.min(tier.max_per_order, quantity + 1) }))}
-                   tone="filled"
-                 />
-               </View>
-             </View>
-           );
-         })}
+     <AppStack.Navigator
+       screenOptions={{
+         headerStyle: { backgroundColor: theme.colors.surface },
+         headerTintColor: theme.colors.primary,
+         contentStyle: { backgroundColor: theme.colors.background },
+       }}
+     >
+       <AppStack.Screen name="Home">
+         {({ navigation }) => (
+           <HomeScreen
+             onOpenProfile={() => navigation.navigate('Profile')}
+             onOpenMyTickets={() => navigation.navigate('MyTickets')}
+             onSignOut={signOut}
+             onOpenEvent={(eventId) => navigation.navigate('EventDetail', { eventId })}
++            onGetTickets={(eventId) => navigation.navigate('TicketSelection', { eventId })}
+           />
+         )}
+       </AppStack.Screen>
+       <AppStack.Screen name="EventDetail">
+         {({ route, navigation }) => (
+           <EventDetailScreen
+             eventId={route.params.eventId}
+             onGetTickets={(event) => navigation.navigate('TicketSelection', { eventId: event.id })}
+           />
+         )}
+       </AppStack.Screen>
+       <AppStack.Screen name="TicketSelection" options={{ title: 'Select tickets' }}>
+         {({ route, navigation }) => (
+           <TicketSelectionRoute
+             eventId={route.params.eventId}
+             onOrderCreated={(orderId) => navigation.navigate('CheckoutMethod', { eventId: route.params.eventId, orderId })}
+           />
+         )}
+       </AppStack.Screen>
+       <AppStack.Screen name="CheckoutMethod" options={{ title: 'Checkout' }}>
+         {({ route, navigation }) => (
+           <CheckoutMethodScreen
+             orderId={route.params.orderId}
+             onOpenAgent={(referenceCode) =>
+               navigation.navigate('MmgAgentCheckout', { eventId: route.params.eventId, orderId: route.params.orderId, referenceCode })
+diff --git a/mobile/src/navigation/components/EventCard.tsx b/mobile/src/navigation/components/EventCard.tsx
+index 04bef634d516a60ce994f6e536557c1696a96a90..57bad3dd405a41f69dba16e6cbc53bf56d195326 100644
+--- a/mobile/src/navigation/components/EventCard.tsx
++++ b/mobile/src/navigation/components/EventCard.tsx
+@@ -1,84 +1,148 @@
+ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
  
-         <View style={styles.summary}>
-           <Text style={styles.meta}>Subtotal</Text>
-           <Text style={styles.total}>{event.price_summary?.currency ?? 'GYD'} {subtotal.toFixed(2)}</Text>
+-import { EventDiscoveryItem } from '../../api/events';
++import { EventDiscoveryDetail, EventDiscoveryItem } from '../../api/events';
++import { ThemedButton } from '../../components/ThemedButton';
+ import { textStyles, theme } from '../../theme';
+ import { formatEventDateRange, formatPriceLabel, formatVenueLabel } from '../../features/events/formatters';
+ 
+ type EventCardProps = {
+   event: EventDiscoveryItem;
+   onPress: () => void;
++  expanded?: boolean;
++  detail?: EventDiscoveryDetail | null;
++  detailLoading?: boolean;
++  detailError?: string | null;
++  onGetTickets?: () => void;
++  onCollapse?: () => void;
+ };
+ 
+-export function EventCard({ event, onPress }: EventCardProps) {
+-  const dateLabel = formatEventDateRange(event.start_at, event.end_at);
++export function EventCard({
++  event,
++  onPress,
++  expanded = false,
++  detail,
++  detailLoading = false,
++  detailError = null,
++  onGetTickets,
++  onCollapse,
++}: EventCardProps) {
++  const displayEvent = detail ?? event;
++  const dateLabel = formatEventDateRange(displayEvent.start_at, displayEvent.end_at);
+   const venueLabel = formatVenueLabel({
+-    venueName: event.venue_name,
+-    venueCity: event.venue_city,
+-    venueCountry: event.venue_country,
+-    customVenueName: event.custom_venue_name,
+-    customAddressText: event.custom_address_text,
++    venueName: displayEvent.venue_name,
++    venueCity: displayEvent.venue_city,
++    venueCountry: displayEvent.venue_country,
++    customVenueName: displayEvent.custom_venue_name,
++    customAddressText: displayEvent.custom_address_text,
+   });
+-  const priceLabel = formatPriceLabel(event.price_summary);
++  const priceLabel = formatPriceLabel(displayEvent.price_summary) ?? 'Price details coming soon';
++  const description = detail?.long_description ?? displayEvent.short_description ?? 'Details coming soon.';
++  const ticketsAvailable = detail?.ticket_tiers?.some((tier) => tier.is_active && tier.available_quantity > 0) ?? true;
+ 
+   return (
+-    <Pressable style={({ pressed }) => [styles.card, pressed && styles.pressed]} onPress={onPress}>
+-      {event.cover_image_url ? <Image source={{ uri: event.cover_image_url }} style={styles.image} /> : <View style={styles.imageFallback} />}
+-      <View style={styles.body}>
+-        {event.category ? <Text style={styles.category}>{event.category.toUpperCase()}</Text> : null}
+-        <Text style={textStyles.label}>{event.title}</Text>
+-        {!!event.short_description ? (
+-          <Text numberOfLines={2} style={styles.description}>
+-            {event.short_description}
+-          </Text>
+-        ) : null}
+-        <Text style={styles.meta}>{dateLabel}</Text>
+-        <Text style={styles.meta}>{venueLabel}</Text>
+-        {priceLabel ? <Text style={styles.price}>{priceLabel}</Text> : null}
+-      </View>
+-    </Pressable>
++    <View style={styles.card}>
++      <Pressable style={({ pressed }) => [styles.heroButton, pressed && styles.pressed]} onPress={onPress}>
++        <View style={styles.imageWrap}>
++          {event.cover_image_url ? (
++            <Image source={{ uri: event.cover_image_url }} style={styles.image} resizeMode="cover" />
++          ) : (
++            <View style={styles.imageFallback}>
++              <View style={styles.fallbackOrbLarge} />
++              <View style={styles.fallbackOrbSmall} />
++              <Text style={styles.fallbackBrand}>ADMITLY</Text>
++            </View>
++          )}
++          <View style={styles.topScrim} />
++          <View style={styles.bottomScrim} />
++          {event.category ? <Text style={styles.categoryBadge}>{event.category.toUpperCase()}</Text> : null}
++          <View style={styles.heroText}>
++            <Text numberOfLines={2} style={styles.heroTitle}>{event.title}</Text>
++            <Text numberOfLines={1} style={styles.heroDate}>{formatEventDateRange(event.start_at, event.end_at)}</Text>
++          </View>
++        </View>
++      </Pressable>
++
++      {expanded ? (
++        <View style={styles.expandedBody}>
++          {detailLoading ? <Text style={styles.meta}>Loading event details...</Text> : null}
++          {detailError ? <Text style={styles.errorText}>{detailError}</Text> : null}
++
++          <View style={styles.detailHeader}>
++            <View style={styles.detailTitleWrap}>
++              {displayEvent.category ? <Text style={styles.category}>{displayEvent.category.toUpperCase()}</Text> : null}
++              <Text style={textStyles.heading}>{displayEvent.title}</Text>
++            </View>
++            {onCollapse ? (
++              <Pressable onPress={onCollapse} hitSlop={10}>
++                <Text style={styles.collapseText}>Collapse</Text>
++              </Pressable>
++            ) : null}
++          </View>
++
++          <Text style={styles.description}>{description}</Text>
++
++          <View style={styles.detailsGrid}>
++            <DetailRow label="Date & time" value={dateLabel} />
++            <DetailRow label="Venue" value={venueLabel} />
++            {detail?.organizer_name ? <DetailRow label="Organizer" value={detail.organizer_name} /> : null}
++            <DetailRow label="Tickets" value={priceLabel} highlight />
++          </View>
++
++          <ThemedButton
++            label="Get Tickets"
++            onPress={onGetTickets ?? onPress}
++            disabled={!ticketsAvailable || detailLoading || Boolean(detailError)}
++          />
++          {!ticketsAvailable && detail ? <Text style={styles.unavailableText}>Tickets are currently unavailable.</Text> : null}
++        </View>
++      ) : null}
++    </View>
++  );
++}
++
++function DetailRow({ label, value, highlight = false }: { label: string; value: string; highlight?: boolean }) {
++  return (
++    <View style={styles.detailRow}>
++      <Text style={styles.detailLabel}>{label}</Text>
++      <Text style={[styles.detailValue, highlight && styles.detailValueHighlight]}>{value}</Text>
++    </View>
+   );
+ }
+ 
+ const styles = StyleSheet.create({
+   card: {
+     borderRadius: theme.radius.lg,
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     backgroundColor: theme.colors.surface,
+     overflow: 'hidden',
+   },
+-  pressed: {
+-    opacity: 0.9,
+-  },
+-  image: {
+-    width: '100%',
+-    height: 180,
+-  },
+-  imageFallback: {
+-    height: 120,
+-    backgroundColor: theme.colors.surfaceElevated,
+-  },
+-  body: {
+-    padding: theme.spacing.md,
+-    gap: theme.spacing.xs,
+-  },
+-  category: {
+-    color: theme.colors.primary,
+-    fontSize: theme.typography.caption,
+-    letterSpacing: 1.2,
+-    fontWeight: '700',
+-  },
+-  description: {
+-    color: theme.colors.textSecondary,
+-    fontSize: theme.typography.label,
+-  },
+-  meta: {
+-    color: theme.colors.textSecondary,
+-    fontSize: theme.typography.caption,
+-  },
+-  price: {
+-    color: theme.colors.primary,
+-    marginTop: theme.spacing.xs,
+-    fontWeight: '600',
+-  },
++  heroButton: { overflow: 'hidden' },
++  pressed: { opacity: 0.92 },
++  imageWrap: { height: 260, overflow: 'hidden', backgroundColor: theme.colors.surfaceElevated },
++  image: { width: '100%', height: '100%' },
++  imageFallback: { flex: 1, backgroundColor: '#120F05', justifyContent: 'center', alignItems: 'center' },
++  fallbackOrbLarge: { position: 'absolute', width: 220, height: 220, borderRadius: 110, backgroundColor: '#3B2E0B', right: -50, top: -40, opacity: 0.75 },
++  fallbackOrbSmall: { position: 'absolute', width: 150, height: 150, borderRadius: 75, backgroundColor: theme.colors.primaryMuted, left: -35, bottom: -45, opacity: 0.35 },
++  fallbackBrand: { color: theme.colors.primary, fontWeight: '800', letterSpacing: 4 },
++  topScrim: { position: 'absolute', top: 0, left: 0, right: 0, height: 82, backgroundColor: 'rgba(0,0,0,0.24)' },
++  bottomScrim: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 150, backgroundColor: 'rgba(0,0,0,0.58)' },
++  categoryBadge: { position: 'absolute', top: theme.spacing.md, left: theme.spacing.md, color: theme.colors.primary, backgroundColor: 'rgba(5,5,5,0.72)', borderColor: 'rgba(212,175,55,0.55)', borderWidth: 1, borderRadius: 999, overflow: 'hidden', paddingHorizontal: theme.spacing.sm, paddingVertical: theme.spacing.xs, fontSize: theme.typography.caption, letterSpacing: 1.1, fontWeight: '800' },
++  heroText: { position: 'absolute', left: theme.spacing.md, right: theme.spacing.md, bottom: theme.spacing.md, gap: theme.spacing.xs },
++  heroTitle: { color: theme.colors.textPrimary, fontSize: 24, lineHeight: 30, fontWeight: '800' },
++  heroDate: { color: theme.colors.textPrimary, fontSize: theme.typography.label, fontWeight: '600' },
++  expandedBody: { padding: theme.spacing.md, gap: theme.spacing.md },
++  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: theme.spacing.md, alignItems: 'flex-start' },
++  detailTitleWrap: { flex: 1, gap: theme.spacing.xs },
++  category: { color: theme.colors.primary, fontSize: theme.typography.caption, letterSpacing: 1.2, fontWeight: '700' },
++  collapseText: { color: theme.colors.primary, fontWeight: '700' },
++  description: { color: theme.colors.textSecondary, fontSize: theme.typography.body, lineHeight: 24 },
++  meta: { color: theme.colors.textSecondary, fontSize: theme.typography.label },
++  errorText: { color: theme.colors.error },
++  detailsGrid: { borderTopWidth: 1, borderTopColor: theme.colors.border },
++  detailRow: { paddingVertical: theme.spacing.sm, borderBottomWidth: 1, borderBottomColor: theme.colors.border, gap: theme.spacing.xs },
++  detailLabel: { color: theme.colors.textSecondary, fontSize: theme.typography.caption, textTransform: 'uppercase', letterSpacing: 0.8 },
++  detailValue: { color: theme.colors.textPrimary, fontSize: theme.typography.label, lineHeight: 20 },
++  detailValueHighlight: { color: theme.colors.primary, fontWeight: '700' },
++  unavailableText: { color: theme.colors.textSecondary, textAlign: 'center', fontSize: theme.typography.caption },
+ });
+diff --git a/mobile/src/navigation/screens/CreateEventScreen.tsx b/mobile/src/navigation/screens/CreateEventScreen.tsx
+index 3def2bdb9c4c17efde17a7dfca448a8dc55995c8..ddd9d185d62042ad6a76ee0c556f160963d77048 100644
+--- a/mobile/src/navigation/screens/CreateEventScreen.tsx
++++ b/mobile/src/navigation/screens/CreateEventScreen.tsx
+@@ -1,27 +1,27 @@
+ import { useEffect, useMemo, useState } from 'react';
+-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
++import { Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+ import DateTimePicker from '@react-native-community/datetimepicker';
+ import { useSafeAreaInsets } from 'react-native-safe-area-context';
+ 
+ import { ApiError } from '../../api/client';
+ import { createEvent, searchVenues, VenueSearchItem } from '../../api/organizer';
+ import { theme } from '../../theme';
+ 
+ type TierFormState = {
+   name: string;
+   description: string;
+   priceAmount: string;
+   currency: string;
+   quantityTotal: string;
+   minPerOrder: string;
+   maxPerOrder: string;
+ };
+ 
+ const defaultTier = (): TierFormState => ({
+   name: '',
+   description: '',
+   priceAmount: '0.00',
+   currency: 'GYD',
+   quantityTotal: '',
+   minPerOrder: '',
+   maxPerOrder: '',
+@@ -111,50 +111,51 @@ const getPickerTitle = (field: PickerField) => {
+   if (field.startsWith('sales_start_')) return 'Sales start';
+   return 'Sales end';
+ };
+ 
+ const getPickerStepLabel = (session: Exclude<PickerSession, null>) => {
+   if (session.field === 'doors_open_time') return 'Select time';
+   return session.mode === 'date' ? 'Step 1 of 2 • Select date' : 'Step 2 of 2 • Select time';
+ };
+ 
+ const buildGuyanaIso = (date: Date, time: Date) => {
+   const year = date.getFullYear();
+   const month = date.getMonth();
+   const day = date.getDate();
+   const hour = time.getHours();
+   const minute = time.getMinutes();
+   const utcMillis = Date.UTC(year, month, day, hour + 4, minute, 0, 0);
+   return new Date(utcMillis).toISOString();
+ };
+ 
+ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) => void }) {
+   const insets = useSafeAreaInsets();
+   const [title, setTitle] = useState('');
+   const [shortDescription, setShortDescription] = useState('');
+   const [longDescription, setLongDescription] = useState('');
+   const [category, setCategory] = useState('');
++  const [coverImageUrl, setCoverImageUrl] = useState('');
+   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
+   const [categorySearch, setCategorySearch] = useState('');
+   const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
+   const [endAt, setEndAt] = useState<DateTimeField>({ date: null, time: null });
+   const [doorsOpenAt, setDoorsOpenAt] = useState<Date | null>(null);
+   const [salesStartAt, setSalesStartAt] = useState<DateTimeField>({ date: null, time: null });
+   const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
+   const [pickerSession, setPickerSession] = useState<PickerSession>(null);
+   const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
+   const [venueName, setVenueName] = useState('');
+   const [addressText, setAddressText] = useState('');
+   const [selectedVenueId, setSelectedVenueId] = useState<number | null>(null);
+   const [venueSuggestions, setVenueSuggestions] = useState<VenueSearchItem[]>([]);
+   const [loadingVenueSuggestions, setLoadingVenueSuggestions] = useState(false);
+   const [refundPolicyText, setRefundPolicyText] = useState('');
+   const [termsText, setTermsText] = useState('');
+   const [tiers, setTiers] = useState<TierFormState[]>([defaultTier()]);
+ 
+   const [loading, setLoading] = useState(false);
+   const [error, setError] = useState<string | null>(null);
+ 
+   const normalizedCategoryOptions = useMemo(() => {
+     const seen = new Set<string>();
+     return CATEGORY_OPTIONS.filter((option) => {
+       const normalized = option.trim().toLowerCase();
+@@ -368,50 +369,51 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
+     }
+ 
+     return null;
+   }, [title, startAt, endAt, venueName, tiers]);
+ 
+   const submit = async () => {
+     if (submitValidationError) {
+       setError(submitValidationError);
+       return;
+     }
+ 
+     setLoading(true);
+     setError(null);
+     try {
+       const startAtIso = buildGuyanaIso(startAt.date as Date, startAt.time as Date);
+       const endAtIso = buildGuyanaIso(endAt.date as Date, endAt.time as Date);
+       const salesStartAtIso = salesStartAt.date && salesStartAt.time ? buildGuyanaIso(salesStartAt.date, salesStartAt.time) : null;
+       const salesEndAtIso = salesEndAt.date && salesEndAt.time ? buildGuyanaIso(salesEndAt.date, salesEndAt.time) : null;
+       const doorsOpenAtIso = doorsOpenAt && startAt.date ? buildGuyanaIso(startAt.date, doorsOpenAt) : null;
+ 
+       const created = await createEvent({
+         title: title.trim(),
+         short_description: shortDescription.trim() || null,
+         long_description: longDescription.trim() || null,
+         category: category.trim() || null,
++        cover_image_url: coverImageUrl.trim() || null,
+         start_at: startAtIso,
+         end_at: endAtIso,
+         doors_open_at: doorsOpenAtIso,
+         sales_start_at: salesStartAtIso,
+         sales_end_at: salesEndAtIso,
+         timezone: GUYANA_TIMEZONE,
+         venue_id: selectedVenueId,
+         custom_venue_name: venueName.trim(),
+         custom_address_text: addressText.trim() || null,
+         refund_policy_text: refundPolicyText.trim() || null,
+         terms_text: termsText.trim() || null,
+         ticket_tiers: tiers.map((tier, index) => ({
+           name: tier.name.trim(),
+           description: tier.description.trim() || null,
+           price_amount: Number(tier.priceAmount).toFixed(2),
+           currency: tier.currency.trim().toUpperCase(),
+           quantity_total: Number(tier.quantityTotal),
+           min_per_order: Number(tier.minPerOrder),
+           max_per_order: Number(tier.maxPerOrder),
+           sort_order: index,
+         })),
+       });
+       onCreated(created.id);
+     } catch (err) {
+       setError(err instanceof ApiError ? err.message : 'Unable to create event.');
+@@ -428,50 +430,67 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
+         keyboardVerticalOffset={Platform.OS === 'ios' ? theme.spacing.md : 0}
+       >
+         <ScrollView
+           contentContainerStyle={[styles.container, { paddingBottom: theme.spacing.xl + insets.bottom + theme.spacing.lg }]}
+           keyboardShouldPersistTaps="handled"
+           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+           showsVerticalScrollIndicator={false}
+         >
+           <Text style={styles.title}>Create Event</Text>
+ 
+         <Text style={styles.sectionTitle}>Basic Info</Text>
+         <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Event title" placeholderTextColor={theme.colors.textSecondary} />
+         <TextInput style={styles.input} value={shortDescription} onChangeText={setShortDescription} placeholder="Short description" placeholderTextColor={theme.colors.textSecondary} />
+         <TextInput
+           style={[styles.input, styles.multiline]}
+           multiline
+           numberOfLines={4}
+           value={longDescription}
+           onChangeText={setLongDescription}
+           placeholder="Long description"
+           placeholderTextColor={theme.colors.textSecondary}
+         />
+         <Pressable style={styles.input} onPress={openCategoryPicker}>
+           <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
+         </Pressable>
++        <TextInput
++          style={styles.input}
++          value={coverImageUrl}
++          onChangeText={setCoverImageUrl}
++          placeholder="Cover image URL"
++          placeholderTextColor={theme.colors.textSecondary}
++          autoCapitalize="none"
++          autoCorrect={false}
++          keyboardType="url"
++        />
++        {coverImageUrl.trim() ? (
++          <Image source={{ uri: coverImageUrl.trim() }} style={styles.coverPreview} resizeMode="cover" />
++        ) : (
++          <View style={styles.coverImageHint}>
++            <Text style={styles.hintText}>Add a cover image URL to make this event stand out in discovery.</Text>
++          </View>
++        )}
+ 
+         <Text style={styles.sectionTitle}>Timing</Text>
+         <View style={styles.timingCard}>
+           <Text style={styles.timingLabel}>Start</Text>
+           <Pressable style={styles.input} onPress={() => startDateTimeFlow('start_at')}>
+             <Text style={styles.pickerValue}>{formatDateTimeValue(startAt)}</Text>
+           </Pressable>
          </View>
-         <ThemedButton label={submitting ? 'Creating order...' : 'Continue'} onPress={handleContinue} disabled={submitting} />
-       </ScrollView>
+ 
+         <View style={styles.timingCard}>
+           <Text style={styles.timingLabel}>End</Text>
+           <Pressable style={styles.input} onPress={() => startDateTimeFlow('end_at')}>
+             <Text style={styles.pickerValue}>{formatDateTimeValue(endAt)}</Text>
+           </Pressable>
+         </View>
+ 
+         <View style={styles.timingCard}>
+           <Text style={styles.timingLabel}>Doors open (optional)</Text>
+           <Pressable style={styles.input} onPress={() => openPicker({ field: 'doors_open_time', mode: 'time', value: doorsOpenAt ?? startAt.time ?? new Date() })}>
+             <Text style={styles.pickerValue}>{doorsOpenAt ? formatTime(doorsOpenAt) : 'Pick time'}</Text>
+           </Pressable>
+         </View>
+ 
+         <View style={styles.timingCard}>
+           <Text style={styles.timingLabel}>Sales start (optional)</Text>
+@@ -670,50 +689,63 @@ const styles = StyleSheet.create({
+   },
+   multiline: { minHeight: 90, textAlignVertical: 'top' },
+   row: { flexDirection: 'row', gap: theme.spacing.sm },
+   half: { flex: 1 },
+   tierCard: {
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     borderRadius: theme.radius.md,
+     padding: theme.spacing.md,
+     backgroundColor: theme.colors.surfaceElevated,
+     gap: theme.spacing.sm,
+   },
+   tierTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
+   timingCard: {
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     borderRadius: theme.radius.md,
+     padding: theme.spacing.md,
+     gap: theme.spacing.sm,
+     backgroundColor: theme.colors.surfaceElevated,
+   },
+   timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
+   pickerValue: { color: theme.colors.textPrimary },
+   placeholderValue: { color: theme.colors.textSecondary },
+   hintText: { color: theme.colors.textSecondary, fontSize: 12 },
++  coverPreview: {
++    width: '100%',
++    height: 160,
++    borderRadius: theme.radius.md,
++    backgroundColor: theme.colors.surfaceElevated,
++  },
++  coverImageHint: {
++    borderWidth: 1,
++    borderColor: theme.colors.border,
++    borderRadius: theme.radius.md,
++    padding: theme.spacing.md,
++    backgroundColor: theme.colors.surfaceElevated,
++  },
+   suggestionsCard: {
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     borderRadius: theme.radius.md,
+     backgroundColor: theme.colors.surfaceElevated,
+   },
+   suggestionItem: {
+     paddingHorizontal: theme.spacing.md,
+     paddingVertical: theme.spacing.sm,
+     borderBottomWidth: 1,
+     borderBottomColor: theme.colors.border,
+   },
+   suggestionTitle: { color: theme.colors.textPrimary, fontWeight: '600' },
+   suggestionSubtitle: { color: theme.colors.textSecondary, marginTop: 2, fontSize: 12 },
+   secondaryButton: {
+     borderWidth: 1,
+     borderColor: theme.colors.primary,
+     borderRadius: theme.radius.md,
+     padding: theme.spacing.md,
+     alignItems: 'center',
+   },
+   secondaryButtonText: { color: theme.colors.primary, fontWeight: '700' },
+   removeButton: {
+     borderWidth: 1,
+     borderColor: theme.colors.error,
+diff --git a/mobile/src/navigation/screens/HomeScreen.tsx b/mobile/src/navigation/screens/HomeScreen.tsx
+index fd153876420d18456d33bce83c683fe36ddd636b..93d8fb15d95d81457fabc55217a36bb1ed2cebaa 100644
+--- a/mobile/src/navigation/screens/HomeScreen.tsx
++++ b/mobile/src/navigation/screens/HomeScreen.tsx
+@@ -1,95 +1,138 @@
+ import { useCallback, useEffect, useMemo, useState } from 'react';
+ import {
+   ActivityIndicator,
+   FlatList,
++  LayoutAnimation,
++  Platform,
+   Pressable,
+   RefreshControl,
+   ScrollView,
+   StyleSheet,
+   Text,
+   TextInput,
++  UIManager,
+   View,
+ } from 'react-native';
+ 
+ import { ApiError } from '../../api/client';
+-import { DiscoveryFilters, EventDiscoveryItem, listDiscoverableEvents } from '../../api/events';
++import { DiscoveryFilters, EventDiscoveryDetail, EventDiscoveryItem, getDiscoverableEventDetail, listDiscoverableEvents } from '../../api/events';
+ import { Screen } from '../../components/Screen';
+ import { ThemedButton } from '../../components/ThemedButton';
+ import { EventCard } from '../components/EventCard';
+ import { theme } from '../../theme';
+ 
+ type DateFilter = 'today' | 'this_week' | 'upcoming';
+ 
+ type HomeScreenProps = {
+   onOpenProfile: () => void;
+   onOpenMyTickets: () => void;
+   onSignOut: () => void;
+   onOpenEvent: (eventId: number) => void;
++  onGetTickets: (eventId: number) => void;
+ };
+ 
+ const CATEGORY_FILTERS = ['All', 'Party', 'Concert', 'Festival'];
+ 
+-export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent }: HomeScreenProps) {
++if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
++  UIManager.setLayoutAnimationEnabledExperimental(true);
++}
++
++export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent, onGetTickets }: HomeScreenProps) {
+   const [events, setEvents] = useState<EventDiscoveryItem[]>([]);
+   const [featuredEvents, setFeaturedEvents] = useState<EventDiscoveryItem[]>([]);
+   const [loading, setLoading] = useState(true);
+   const [refreshing, setRefreshing] = useState(false);
+   const [error, setError] = useState<string | null>(null);
+ 
+   const [searchInput, setSearchInput] = useState('');
+   const [query, setQuery] = useState('');
+   const [selectedCategory, setSelectedCategory] = useState('All');
+   const [dateFilter, setDateFilter] = useState<DateFilter>('upcoming');
+   const [priceFilter, setPriceFilter] = useState<'all' | 'free' | 'paid'>('all');
++  const [expandedEventId, setExpandedEventId] = useState<number | null>(null);
++  const [eventDetailsById, setEventDetailsById] = useState<Record<number, EventDiscoveryDetail>>({});
++  const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null);
++  const [detailErrorById, setDetailErrorById] = useState<Record<number, string | null>>({});
+ 
+   useEffect(() => {
+     const timeout = setTimeout(() => setQuery(searchInput.trim()), 300);
+     return () => clearTimeout(timeout);
+   }, [searchInput]);
+ 
+   const requestFilters = useMemo<DiscoveryFilters>(() => {
+     const isFree = priceFilter === 'all' ? undefined : priceFilter === 'free';
+     return {
+       query,
+       dateBucket: dateFilter,
+       category: selectedCategory === 'All' ? undefined : selectedCategory,
+       isFree,
+     };
+   }, [dateFilter, priceFilter, query, selectedCategory]);
+ 
+   const featuredSubset = useMemo(() => featuredEvents.slice(0, 6), [featuredEvents]);
+   const hasActiveFilters = Boolean(query || selectedCategory !== 'All' || dateFilter !== 'upcoming' || priceFilter !== 'all');
+ 
+   const resetFilters = useCallback(() => {
+     setSearchInput('');
+     setQuery('');
+     setSelectedCategory('All');
+     setDateFilter('upcoming');
+     setPriceFilter('all');
++    setExpandedEventId(null);
+   }, []);
+ 
++  useEffect(() => {
++    setExpandedEventId(null);
++  }, [requestFilters]);
++
++  const toggleEventExpansion = useCallback(
++    async (eventId: number) => {
++      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
++      if (expandedEventId === eventId) {
++        setExpandedEventId(null);
++        return;
++      }
++
++      setExpandedEventId(eventId);
++      if (eventDetailsById[eventId]) return;
++
++      setDetailLoadingId(eventId);
++      setDetailErrorById((current) => ({ ...current, [eventId]: null }));
++      try {
++        const eventDetail = await getDiscoverableEventDetail(eventId);
++        setEventDetailsById((current) => ({ ...current, [eventId]: eventDetail }));
++      } catch (err) {
++        const message = err instanceof ApiError ? err.message : 'Unable to load event details.';
++        setDetailErrorById((current) => ({ ...current, [eventId]: message }));
++      } finally {
++        setDetailLoadingId((current) => (current === eventId ? null : current));
++      }
++    },
++    [eventDetailsById, expandedEventId],
++  );
++
+   const loadEvents = useCallback(
+     async (isRefresh = false) => {
+       if (isRefresh) {
+         setRefreshing(true);
+       } else {
+         setLoading(true);
+       }
+ 
+       try {
+         const [discoveredEvents, discoveryFeed] = await Promise.all([
+           listDiscoverableEvents(requestFilters),
+           listDiscoverableEvents({ dateBucket: 'upcoming' }),
+         ]);
+         setEvents(discoveredEvents);
+         setFeaturedEvents(discoveryFeed);
+         setError(null);
+       } catch (err) {
+         const message = err instanceof ApiError ? err.message : 'Unable to load events right now.';
+         setError(message);
+       } finally {
+         setLoading(false);
+         setRefreshing(false);
+       }
+     },
+     [requestFilters],
+@@ -154,99 +197,126 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
+           { key: 'free', label: 'Free' },
+           { key: 'paid', label: 'Paid' },
+         ].map((item) => (
+           <Pressable
+             key={item.key}
+             style={[styles.chip, priceFilter === item.key && styles.chipActive]}
+             onPress={() => setPriceFilter(item.key as 'all' | 'free' | 'paid')}
+           >
+             <Text style={[styles.chipText, priceFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
+           </Pressable>
+         ))}
+       </View>
+ 
+       {featuredSubset.length > 0 ? (
+         <View style={styles.featuredSection}>
+           <Text style={styles.featuredTitle}>Featured Events</Text>
+           <ScrollView
+             horizontal
+             nestedScrollEnabled
+             showsHorizontalScrollIndicator={false}
+             contentContainerStyle={styles.featuredRow}
+           >
+             {featuredSubset.map((item) => (
+               <View key={item.id} style={styles.featuredCardWrap}>
+                 <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
++                <View style={styles.featuredActions}>
++                  <Pressable style={[styles.featuredActionButton, styles.featuredSecondaryAction]} onPress={() => onOpenEvent(item.id)}>
++                    <Text style={styles.featuredSecondaryActionText}>Details</Text>
++                  </Pressable>
++                  <Pressable style={[styles.featuredActionButton, styles.featuredPrimaryAction]} onPress={() => onGetTickets(item.id)}>
++                    <Text style={styles.featuredPrimaryActionText}>Get Tickets</Text>
++                  </Pressable>
++                </View>
+               </View>
+             ))}
+           </ScrollView>
+         </View>
+       ) : null}
+     </>
+   );
+ 
+   const listFooter = (
+     <Pressable onPress={onSignOut} style={styles.signOutArea}>
+       <Text style={styles.signOutText}>Sign out</Text>
+     </Pressable>
+   );
+ 
+   const listEmpty = loading ? (
+     <View style={styles.stateWrap}>
+       <ActivityIndicator color={theme.colors.primary} />
+       <Text style={styles.stateText}>Loading events...</Text>
+     </View>
+   ) : error ? (
+     <View style={styles.stateWrap}>
+       <Text style={styles.errorText}>{error}</Text>
+       <ThemedButton label="Try Again" onPress={() => loadEvents()} variant="secondary" />
+     </View>
+   ) : (
+     <View style={styles.stateWrap}>
+       <Text style={styles.stateText}>No events match your filters.</Text>
+       <ThemedButton label="Reset Filters" onPress={resetFilters} />
+       {hasActiveFilters && featuredSubset.length > 0 ? (
+         <View style={styles.emptyDiscovery}>
+           <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
+           {featuredSubset.slice(0, 2).map((item) => (
+-            <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
++            <EventCard
++              key={`empty-${item.id}`}
++              event={item}
++              expanded={expandedEventId === item.id}
++              detail={eventDetailsById[item.id]}
++              detailLoading={detailLoadingId === item.id}
++              detailError={detailErrorById[item.id]}
++              onPress={() => toggleEventExpansion(item.id)}
++              onCollapse={() => toggleEventExpansion(item.id)}
++              onGetTickets={() => onGetTickets(item.id)}
++            />
+           ))}
+         </View>
+       ) : null}
+     </View>
+   );
+ 
+   return (
+     <Screen padded={false}>
+       <View style={styles.container}>
+         <FlatList
+           data={loading || error ? [] : events}
+           keyExtractor={(item) => String(item.id)}
+           contentContainerStyle={styles.homeListContent}
+           renderItem={({ item, index }) => (
+             <View style={[styles.eventListItem, index === 0 && styles.firstEventListItem]}>
+-              <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
++              <EventCard
++                event={item}
++                expanded={expandedEventId === item.id}
++                detail={eventDetailsById[item.id]}
++                detailLoading={detailLoadingId === item.id}
++                detailError={detailErrorById[item.id]}
++                onPress={() => toggleEventExpansion(item.id)}
++                onCollapse={() => toggleEventExpansion(item.id)}
++                onGetTickets={() => onGetTickets(item.id)}
++              />
+             </View>
+           )}
+           ListHeaderComponent={listHeader}
+           ListEmptyComponent={listEmpty}
+           ListFooterComponent={listFooter}
+           keyboardShouldPersistTaps="handled"
+           refreshControl={
+             <RefreshControl
+               refreshing={refreshing}
+               onRefresh={() => loadEvents(true)}
+               tintColor={theme.colors.primary}
+             />
+           }
+         />
+       </View>
      </Screen>
    );
  }
  
  const styles = StyleSheet.create({
-   content: { gap: theme.spacing.md, paddingBottom: theme.spacing.xl },
-   title: { color: theme.colors.textPrimary, fontWeight: '700', fontSize: theme.typography.heading },
-   row: { alignItems: 'center', borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: theme.spacing.md, flexDirection: 'row', gap: theme.spacing.sm },
-+  tierDetails: { flex: 1, gap: 2 },
-   name: { color: theme.colors.textPrimary, fontWeight: '700' },
-   meta: { color: theme.colors.textSecondary },
-   counter: { alignItems: 'center', flexDirection: 'row', gap: theme.spacing.xs, justifyContent: 'flex-end', minWidth: 132 },
-   qty: { color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700', minWidth: 30, textAlign: 'center' },
-   stepperButton: { alignItems: 'center', borderRadius: 22, borderWidth: 1, height: 44, justifyContent: 'center', width: 44 },
-   stepperButtonOutline: { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.primaryMuted },
-   stepperButtonFilled: { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
-   stepperButtonPressed: { opacity: 0.78, transform: [{ scale: 0.96 }] },
-   stepperButtonDisabled: { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, opacity: 0.58 },
-   stepperButtonLabel: { color: theme.colors.primary, fontSize: 26, fontWeight: '800', lineHeight: 28, textAlign: 'center' },
-   stepperButtonFilledLabel: { color: theme.colors.background },
-   stepperButtonDisabledLabel: { color: theme.colors.textSecondary },
-   summary: { padding: theme.spacing.md, borderRadius: theme.radius.md, backgroundColor: theme.colors.surface },
-   total: { color: theme.colors.primary, fontWeight: '700' },
- });
+   container: {
+     flex: 1,
+     paddingTop: theme.spacing.md,
+   },
+   header: {
+@@ -326,50 +396,78 @@ const styles = StyleSheet.create({
+   },
+   stateWrap: {
+     paddingHorizontal: theme.spacing.lg,
+     alignItems: 'center',
+     gap: theme.spacing.md,
+     marginTop: theme.spacing.xl,
+   },
+   featuredSection: {
+     marginTop: theme.spacing.xs,
+     marginBottom: theme.spacing.sm,
+   },
+   featuredTitle: {
+     color: theme.colors.textPrimary,
+     fontSize: theme.typography.body,
+     fontWeight: '700',
+     paddingHorizontal: theme.spacing.lg,
+     marginBottom: theme.spacing.sm,
+   },
+   featuredRow: {
+     gap: theme.spacing.md,
+     paddingHorizontal: theme.spacing.lg,
+     paddingRight: theme.spacing.xl,
+   },
+   featuredCardWrap: {
+     width: 290,
++    gap: theme.spacing.sm,
++  },
++  featuredActions: {
++    flexDirection: 'row',
++    gap: theme.spacing.sm,
++  },
++  featuredActionButton: {
++    flex: 1,
++    borderRadius: theme.radius.md,
++    borderWidth: 1,
++    paddingVertical: theme.spacing.sm,
++    alignItems: 'center',
++  },
++  featuredPrimaryAction: {
++    backgroundColor: theme.colors.primary,
++    borderColor: theme.colors.primary,
++  },
++  featuredSecondaryAction: {
++    backgroundColor: theme.colors.surface,
++    borderColor: theme.colors.primaryMuted,
++  },
++  featuredPrimaryActionText: {
++    color: '#090909',
++    fontWeight: '700',
++  },
++  featuredSecondaryActionText: {
++    color: theme.colors.primary,
++    fontWeight: '700',
+   },
+   stateText: {
+     color: theme.colors.textSecondary,
+     textAlign: 'center',
+   },
+   errorText: {
+     color: theme.colors.error,
+     textAlign: 'center',
+   },
+   signOutArea: {
+     paddingVertical: theme.spacing.sm,
+     alignItems: 'center',
+   },
+   signOutText: {
+     color: theme.colors.textSecondary,
+   },
+   emptyDiscovery: {
+     marginTop: theme.spacing.sm,
+     gap: theme.spacing.md,
+   },
+   emptyDiscoveryTitle: {
+     color: theme.colors.textPrimary,
+     fontWeight: '600',
+     textAlign: 'center',
+   },
  
 EOF
 )

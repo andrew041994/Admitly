@@ -2,17 +2,20 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  LayoutAnimation,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  UIManager,
   View,
 } from 'react-native';
 
 import { ApiError } from '../../api/client';
-import { DiscoveryFilters, EventDiscoveryItem, listDiscoverableEvents } from '../../api/events';
+import { DiscoveryFilters, EventDiscoveryDetail, EventDiscoveryItem, getDiscoverableEventDetail, listDiscoverableEvents } from '../../api/events';
 import { Screen } from '../../components/Screen';
 import { ThemedButton } from '../../components/ThemedButton';
 import { EventCard } from '../components/EventCard';
@@ -25,11 +28,16 @@ type HomeScreenProps = {
   onOpenMyTickets: () => void;
   onSignOut: () => void;
   onOpenEvent: (eventId: number) => void;
+  onGetTickets: (eventId: number) => void;
 };
 
 const CATEGORY_FILTERS = ['All', 'Party', 'Concert', 'Festival'];
 
-export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent }: HomeScreenProps) {
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent, onGetTickets }: HomeScreenProps) {
   const [events, setEvents] = useState<EventDiscoveryItem[]>([]);
   const [featuredEvents, setFeaturedEvents] = useState<EventDiscoveryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,6 +49,10 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [dateFilter, setDateFilter] = useState<DateFilter>('upcoming');
   const [priceFilter, setPriceFilter] = useState<'all' | 'free' | 'paid'>('all');
+  const [expandedEventId, setExpandedEventId] = useState<number | null>(null);
+  const [eventDetailsById, setEventDetailsById] = useState<Record<number, EventDiscoveryDetail>>({});
+  const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null);
+  const [detailErrorById, setDetailErrorById] = useState<Record<number, string | null>>({});
 
   useEffect(() => {
     const timeout = setTimeout(() => setQuery(searchInput.trim()), 300);
@@ -66,7 +78,38 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
     setSelectedCategory('All');
     setDateFilter('upcoming');
     setPriceFilter('all');
+    setExpandedEventId(null);
   }, []);
+
+  useEffect(() => {
+    setExpandedEventId(null);
+  }, [requestFilters]);
+
+  const toggleEventExpansion = useCallback(
+    async (eventId: number) => {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      if (expandedEventId === eventId) {
+        setExpandedEventId(null);
+        return;
+      }
+
+      setExpandedEventId(eventId);
+      if (eventDetailsById[eventId]) return;
+
+      setDetailLoadingId(eventId);
+      setDetailErrorById((current) => ({ ...current, [eventId]: null }));
+      try {
+        const eventDetail = await getDiscoverableEventDetail(eventId);
+        setEventDetailsById((current) => ({ ...current, [eventId]: eventDetail }));
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : 'Unable to load event details.';
+        setDetailErrorById((current) => ({ ...current, [eventId]: message }));
+      } finally {
+        setDetailLoadingId((current) => (current === eventId ? null : current));
+      }
+    },
+    [eventDetailsById, expandedEventId],
+  );
 
   const loadEvents = useCallback(
     async (isRefresh = false) => {
@@ -176,6 +219,14 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
             {featuredSubset.map((item) => (
               <View key={item.id} style={styles.featuredCardWrap}>
                 <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
+                <View style={styles.featuredActions}>
+                  <Pressable style={[styles.featuredActionButton, styles.featuredSecondaryAction]} onPress={() => onOpenEvent(item.id)}>
+                    <Text style={styles.featuredSecondaryActionText}>Details</Text>
+                  </Pressable>
+                  <Pressable style={[styles.featuredActionButton, styles.featuredPrimaryAction]} onPress={() => onGetTickets(item.id)}>
+                    <Text style={styles.featuredPrimaryActionText}>Get Tickets</Text>
+                  </Pressable>
+                </View>
               </View>
             ))}
           </ScrollView>
@@ -208,7 +259,17 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
         <View style={styles.emptyDiscovery}>
           <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
           {featuredSubset.slice(0, 2).map((item) => (
-            <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
+            <EventCard
+              key={`empty-${item.id}`}
+              event={item}
+              expanded={expandedEventId === item.id}
+              detail={eventDetailsById[item.id]}
+              detailLoading={detailLoadingId === item.id}
+              detailError={detailErrorById[item.id]}
+              onPress={() => toggleEventExpansion(item.id)}
+              onCollapse={() => toggleEventExpansion(item.id)}
+              onGetTickets={() => onGetTickets(item.id)}
+            />
           ))}
         </View>
       ) : null}
@@ -224,7 +285,16 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
           contentContainerStyle={styles.homeListContent}
           renderItem={({ item, index }) => (
             <View style={[styles.eventListItem, index === 0 && styles.firstEventListItem]}>
-              <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
+              <EventCard
+                event={item}
+                expanded={expandedEventId === item.id}
+                detail={eventDetailsById[item.id]}
+                detailLoading={detailLoadingId === item.id}
+                detailError={detailErrorById[item.id]}
+                onPress={() => toggleEventExpansion(item.id)}
+                onCollapse={() => toggleEventExpansion(item.id)}
+                onGetTickets={() => onGetTickets(item.id)}
+              />
             </View>
           )}
           ListHeaderComponent={listHeader}
@@ -348,6 +418,34 @@ const styles = StyleSheet.create({
   },
   featuredCardWrap: {
     width: 290,
+    gap: theme.spacing.sm,
+  },
+  featuredActions: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  featuredActionButton: {
+    flex: 1,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    paddingVertical: theme.spacing.sm,
+    alignItems: 'center',
+  },
+  featuredPrimaryAction: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  featuredSecondaryAction: {
+    backgroundColor: theme.colors.surface,
+    borderColor: theme.colors.primaryMuted,
+  },
+  featuredPrimaryActionText: {
+    color: '#090909',
+    fontWeight: '700',
+  },
+  featuredSecondaryActionText: {
+    color: theme.colors.primary,
+    fontWeight: '700',
   },
   stateText: {
     color: theme.colors.textSecondary,
