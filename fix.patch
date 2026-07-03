@@ -1,114 +1,138 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/mobile/src/navigation/components/EventCard.tsx b/mobile/src/navigation/components/EventCard.tsx
-index 57bad3dd405a41f69dba16e6cbc53bf56d195326..38a80b848d58561b92145d177f6ff8087b6a92e9 100644
---- a/mobile/src/navigation/components/EventCard.tsx
-+++ b/mobile/src/navigation/components/EventCard.tsx
-@@ -22,51 +22,51 @@ export function EventCard({
-   expanded = false,
-   detail,
-   detailLoading = false,
-   detailError = null,
-   onGetTickets,
-   onCollapse,
- }: EventCardProps) {
-   const displayEvent = detail ?? event;
-   const dateLabel = formatEventDateRange(displayEvent.start_at, displayEvent.end_at);
-   const venueLabel = formatVenueLabel({
-     venueName: displayEvent.venue_name,
-     venueCity: displayEvent.venue_city,
-     venueCountry: displayEvent.venue_country,
-     customVenueName: displayEvent.custom_venue_name,
-     customAddressText: displayEvent.custom_address_text,
-   });
-   const priceLabel = formatPriceLabel(displayEvent.price_summary) ?? 'Price details coming soon';
-   const description = detail?.long_description ?? displayEvent.short_description ?? 'Details coming soon.';
-   const ticketsAvailable = detail?.ticket_tiers?.some((tier) => tier.is_active && tier.available_quantity > 0) ?? true;
+diff --git a/mobile/src/navigation/screens/CreateEventScreen.tsx b/mobile/src/navigation/screens/CreateEventScreen.tsx
+index 3b5a3db8703d649d669f139b4c4ced2d840e251c..b93d137c66121c2bbcd42dd1b4075a9597afdb4d 100644
+--- a/mobile/src/navigation/screens/CreateEventScreen.tsx
++++ b/mobile/src/navigation/screens/CreateEventScreen.tsx
+@@ -500,65 +500,67 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number)
+           contentContainerStyle={[styles.container, { paddingBottom: theme.spacing.xl + insets.bottom + theme.spacing.lg }]}
+           keyboardShouldPersistTaps="handled"
+           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+           showsVerticalScrollIndicator={false}
+         >
+           <Text style={styles.title}>Create Event</Text>
  
-   return (
-     <View style={styles.card}>
-       <Pressable style={({ pressed }) => [styles.heroButton, pressed && styles.pressed]} onPress={onPress}>
-         <View style={styles.imageWrap}>
-           {event.cover_image_url ? (
--            <Image source={{ uri: event.cover_image_url }} style={styles.image} resizeMode="cover" />
-+            <Image source={{ uri: event.cover_image_url }} style={styles.image} resizeMode="contain" />
+         <Text style={styles.sectionTitle}>Basic Info</Text>
+         <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Event title" placeholderTextColor={theme.colors.textSecondary} />
+         <TextInput style={styles.input} value={shortDescription} onChangeText={setShortDescription} placeholder="Short description" placeholderTextColor={theme.colors.textSecondary} />
+         <TextInput
+           style={[styles.input, styles.multiline]}
+           multiline
+           numberOfLines={4}
+           value={longDescription}
+           onChangeText={setLongDescription}
+           placeholder="Long description"
+           placeholderTextColor={theme.colors.textSecondary}
+         />
+         <Pressable style={styles.input} onPress={openCategoryPicker}>
+           <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
+         </Pressable>
+         <View style={styles.coverImageSection}>
+           {coverImagePreviewUri || coverImageUrl ? (
+             <>
+-              <Image source={{ uri: coverImagePreviewUri || coverImageUrl }} style={styles.coverPreview} resizeMode="cover" />
++              <View style={styles.coverPreview}>
++                <Image source={{ uri: coverImagePreviewUri || coverImageUrl }} style={styles.coverPreviewImage} resizeMode="contain" />
++              </View>
+               {coverImageUploading ? <Text style={styles.hintText}>Uploading cover image…</Text> : null}
+               <View style={styles.coverImageActions}>
+                 <Pressable onPress={pickCoverImage} style={styles.coverImageAction} disabled={coverImageUploading}>
+                   <Text style={styles.coverImageActionText}>Replace image</Text>
+                 </Pressable>
+                 <Pressable onPress={removeCoverImage} style={[styles.coverImageAction, styles.coverImageRemoveAction]} disabled={coverImageUploading}>
+                   <Text style={styles.coverImageRemoveText}>Remove</Text>
+                 </Pressable>
+               </View>
+             </>
            ) : (
-             <View style={styles.imageFallback}>
-               <View style={styles.fallbackOrbLarge} />
-               <View style={styles.fallbackOrbSmall} />
-               <Text style={styles.fallbackBrand}>ADMITLY</Text>
-             </View>
+             <Pressable style={styles.coverImageUploadArea} onPress={pickCoverImage} disabled={coverImageUploading}>
+               <Text style={styles.coverImageUploadTitle}>Add event cover image</Text>
+-              <Text style={styles.hintText}>Recommended: event flyer or clear promo image</Text>
++              <Text style={styles.hintText}>Recommended: 1080 × 1350. Other image sizes will show fully with padding.</Text>
+             </Pressable>
            )}
-           <View style={styles.topScrim} />
-           <View style={styles.bottomScrim} />
-           {event.category ? <Text style={styles.categoryBadge}>{event.category.toUpperCase()}</Text> : null}
-           <View style={styles.heroText}>
-             <Text numberOfLines={2} style={styles.heroTitle}>{event.title}</Text>
-             <Text numberOfLines={1} style={styles.heroDate}>{formatEventDateRange(event.start_at, event.end_at)}</Text>
-           </View>
+           {coverImageError ? <Text style={styles.error}>{coverImageError}</Text> : null}
          </View>
-       </Pressable>
  
-       {expanded ? (
-         <View style={styles.expandedBody}>
-           {detailLoading ? <Text style={styles.meta}>Loading event details...</Text> : null}
-           {detailError ? <Text style={styles.errorText}>{detailError}</Text> : null}
- 
-           <View style={styles.detailHeader}>
-             <View style={styles.detailTitleWrap}>
-               {displayEvent.category ? <Text style={styles.category}>{displayEvent.category.toUpperCase()}</Text> : null}
-@@ -97,51 +97,51 @@ export function EventCard({
+         <Text style={styles.sectionTitle}>Timing</Text>
+         <View style={styles.timingCard}>
+           <Text style={styles.timingLabel}>Start</Text>
+           <Pressable style={styles.input} onPress={() => startDateTimeFlow('start_at')}>
+             <Text style={styles.pickerValue}>{formatDateTimeValue(startAt)}</Text>
+           </Pressable>
          </View>
-       ) : null}
-     </View>
-   );
- }
  
- function DetailRow({ label, value, highlight = false }: { label: string; value: string; highlight?: boolean }) {
-   return (
-     <View style={styles.detailRow}>
-       <Text style={styles.detailLabel}>{label}</Text>
-       <Text style={[styles.detailValue, highlight && styles.detailValueHighlight]}>{value}</Text>
-     </View>
-   );
- }
+         <View style={styles.timingCard}>
+           <Text style={styles.timingLabel}>End</Text>
+           <Pressable style={styles.input} onPress={() => startDateTimeFlow('end_at')}>
+             <Text style={styles.pickerValue}>{formatDateTimeValue(endAt)}</Text>
+           </Pressable>
+         </View>
  
- const styles = StyleSheet.create({
-   card: {
-     borderRadius: theme.radius.lg,
+         <View style={styles.timingCard}>
+           <Text style={styles.timingLabel}>Doors open (optional)</Text>
+           <Pressable style={styles.input} onPress={() => openPicker({ field: 'doors_open_time', mode: 'time', value: doorsOpenAt ?? startAt.time ?? new Date() })}>
+             <Text style={styles.pickerValue}>{doorsOpenAt ? formatTime(doorsOpenAt) : 'Pick time'}</Text>
+           </Pressable>
+@@ -763,53 +765,57 @@ const styles = StyleSheet.create({
+   row: { flexDirection: 'row', gap: theme.spacing.sm },
+   half: { flex: 1 },
+   tierCard: {
      borderWidth: 1,
      borderColor: theme.colors.border,
-     backgroundColor: theme.colors.surface,
-     overflow: 'hidden',
+     borderRadius: theme.radius.md,
+     padding: theme.spacing.md,
+     backgroundColor: theme.colors.surfaceElevated,
+     gap: theme.spacing.sm,
    },
-   heroButton: { overflow: 'hidden' },
-   pressed: { opacity: 0.92 },
--  imageWrap: { height: 260, overflow: 'hidden', backgroundColor: theme.colors.surfaceElevated },
-+  imageWrap: { width: '100%', aspectRatio: 4 / 5, overflow: 'hidden', backgroundColor: theme.colors.surfaceElevated },
-   image: { width: '100%', height: '100%' },
-   imageFallback: { flex: 1, backgroundColor: '#120F05', justifyContent: 'center', alignItems: 'center' },
-   fallbackOrbLarge: { position: 'absolute', width: 220, height: 220, borderRadius: 110, backgroundColor: '#3B2E0B', right: -50, top: -40, opacity: 0.75 },
-   fallbackOrbSmall: { position: 'absolute', width: 150, height: 150, borderRadius: 75, backgroundColor: theme.colors.primaryMuted, left: -35, bottom: -45, opacity: 0.35 },
-   fallbackBrand: { color: theme.colors.primary, fontWeight: '800', letterSpacing: 4 },
-   topScrim: { position: 'absolute', top: 0, left: 0, right: 0, height: 82, backgroundColor: 'rgba(0,0,0,0.24)' },
-   bottomScrim: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 150, backgroundColor: 'rgba(0,0,0,0.58)' },
-   categoryBadge: { position: 'absolute', top: theme.spacing.md, left: theme.spacing.md, color: theme.colors.primary, backgroundColor: 'rgba(5,5,5,0.72)', borderColor: 'rgba(212,175,55,0.55)', borderWidth: 1, borderRadius: 999, overflow: 'hidden', paddingHorizontal: theme.spacing.sm, paddingVertical: theme.spacing.xs, fontSize: theme.typography.caption, letterSpacing: 1.1, fontWeight: '800' },
-   heroText: { position: 'absolute', left: theme.spacing.md, right: theme.spacing.md, bottom: theme.spacing.md, gap: theme.spacing.xs },
-   heroTitle: { color: theme.colors.textPrimary, fontSize: 24, lineHeight: 30, fontWeight: '800' },
-   heroDate: { color: theme.colors.textPrimary, fontSize: theme.typography.label, fontWeight: '600' },
-   expandedBody: { padding: theme.spacing.md, gap: theme.spacing.md },
-   detailHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: theme.spacing.md, alignItems: 'flex-start' },
-   detailTitleWrap: { flex: 1, gap: theme.spacing.xs },
-   category: { color: theme.colors.primary, fontSize: theme.typography.caption, letterSpacing: 1.2, fontWeight: '700' },
-   collapseText: { color: theme.colors.primary, fontWeight: '700' },
-   description: { color: theme.colors.textSecondary, fontSize: theme.typography.body, lineHeight: 24 },
-   meta: { color: theme.colors.textSecondary, fontSize: theme.typography.label },
-   errorText: { color: theme.colors.error },
-   detailsGrid: { borderTopWidth: 1, borderTopColor: theme.colors.border },
-   detailRow: { paddingVertical: theme.spacing.sm, borderBottomWidth: 1, borderBottomColor: theme.colors.border, gap: theme.spacing.xs },
-   detailLabel: { color: theme.colors.textSecondary, fontSize: theme.typography.caption, textTransform: 'uppercase', letterSpacing: 0.8 },
-   detailValue: { color: theme.colors.textPrimary, fontSize: theme.typography.label, lineHeight: 20 },
-   detailValueHighlight: { color: theme.colors.primary, fontWeight: '700' },
-   unavailableText: { color: theme.colors.textSecondary, textAlign: 'center', fontSize: theme.typography.caption },
+   tierTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
+   timingCard: {
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     borderRadius: theme.radius.md,
+     padding: theme.spacing.md,
+     gap: theme.spacing.sm,
+     backgroundColor: theme.colors.surfaceElevated,
+   },
+   timingLabel: { color: theme.colors.textPrimary, fontWeight: '700' },
+   pickerValue: { color: theme.colors.textPrimary },
+   placeholderValue: { color: theme.colors.textSecondary },
+   hintText: { color: theme.colors.textSecondary, fontSize: 12 },
+   coverPreview: {
+     width: '100%',
+-    height: 160,
+-    borderRadius: theme.radius.md,
++    aspectRatio: 4 / 5,
+     backgroundColor: theme.colors.surfaceElevated,
++    borderRadius: theme.radius.md,
++  },
++  coverPreviewImage: {
++    width: '100%',
++    height: '100%',
+   },
+   coverImageSection: {
+     gap: theme.spacing.sm,
+   },
+   coverImageUploadArea: {
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     borderRadius: theme.radius.md,
+     borderStyle: 'dashed',
+     padding: theme.spacing.lg,
+     backgroundColor: theme.colors.surfaceElevated,
+     alignItems: 'center',
+     gap: theme.spacing.xs,
+   },
+   coverImageUploadTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
+   coverImageActions: { flexDirection: 'row', gap: theme.spacing.sm },
+   coverImageAction: {
+     flex: 1,
+     borderWidth: 1,
+     borderColor: theme.colors.primary,
+     borderRadius: theme.radius.md,
+     padding: theme.spacing.sm,
+     alignItems: 'center',
+   },
+   coverImageActionText: { color: theme.colors.primary, fontWeight: '700' },
  
 EOF
 )

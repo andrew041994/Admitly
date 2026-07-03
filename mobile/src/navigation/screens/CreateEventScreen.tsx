@@ -522,7 +522,9 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         <View style={styles.coverImageSection}>
           {coverImagePreviewUri || coverImageUrl ? (
             <>
-              <Image source={{ uri: coverImagePreviewUri || coverImageUrl }} style={styles.coverPreview} resizeMode="cover" />
+              <View style={styles.coverPreview}>
+                <Image source={{ uri: coverImagePreviewUri || coverImageUrl }} style={styles.coverPreviewImage} resizeMode="contain" />
+              </View>
               {coverImageUploading ? <Text style={styles.hintText}>Uploading cover image…</Text> : null}
               <View style={styles.coverImageActions}>
                 <Pressable onPress={pickCoverImage} style={styles.coverImageAction} disabled={coverImageUploading}>
@@ -536,7 +538,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
           ) : (
             <Pressable style={styles.coverImageUploadArea} onPress={pickCoverImage} disabled={coverImageUploading}>
               <Text style={styles.coverImageUploadTitle}>Add event cover image</Text>
-              <Text style={styles.hintText}>Recommended: event flyer or clear promo image</Text>
+              <Text style={styles.hintText}>Recommended: 1080 × 1350. Other image sizes will show fully with padding.</Text>
             </Pressable>
           )}
           {coverImageError ? <Text style={styles.error}>{coverImageError}</Text> : null}
@@ -785,9 +787,13 @@ const styles = StyleSheet.create({
   hintText: { color: theme.colors.textSecondary, fontSize: 12 },
   coverPreview: {
     width: '100%',
-    height: 160,
-    borderRadius: theme.radius.md,
+    aspectRatio: 4 / 5,
     backgroundColor: theme.colors.surfaceElevated,
+    borderRadius: theme.radius.md,
+  },
+  coverPreviewImage: {
+    width: '100%',
+    height: '100%',
   },
   coverImageSection: {
     gap: theme.spacing.sm,
