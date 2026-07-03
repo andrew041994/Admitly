@@ -99,127 +99,146 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
     loadEvents();
   }, [loadEvents]);
 
+  const listHeader = (
+    <>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.kicker}>DISCOVER</Text>
+          <Text style={styles.title}>Admitly</Text>
+        </View>
+        <View style={styles.headerLinks}>
+          <Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable>
+          <Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable>
+        </View>
+      </View>
+
+      <View style={styles.searchWrap}>
+        <TextInput
+          value={searchInput}
+          onChangeText={setSearchInput}
+          placeholder="Search events, venues, vibes"
+          placeholderTextColor={theme.colors.textSecondary}
+          style={styles.searchInput}
+          returnKeyType="search"
+        />
+      </View>
+
+      <View style={styles.filtersRow}>
+        {CATEGORY_FILTERS.map((item) => (
+          <Pressable
+            key={item}
+            style={[styles.chip, selectedCategory === item && styles.chipActive]}
+            onPress={() => setSelectedCategory(item)}
+          >
+            <Text style={[styles.chipText, selectedCategory === item && styles.chipTextActive]}>{item}</Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <View style={styles.filtersRow}>
+        {[
+          { key: 'today', label: 'Today' },
+          { key: 'this_week', label: 'This Week' },
+          { key: 'upcoming', label: 'Upcoming' },
+        ].map((item) => (
+          <Pressable
+            key={item.key}
+            style={[styles.chip, dateFilter === item.key && styles.chipActive]}
+            onPress={() => setDateFilter(item.key as DateFilter)}
+          >
+            <Text style={[styles.chipText, dateFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
+          </Pressable>
+        ))}
+        {[
+          { key: 'all', label: 'All' },
+          { key: 'free', label: 'Free' },
+          { key: 'paid', label: 'Paid' },
+        ].map((item) => (
+          <Pressable
+            key={item.key}
+            style={[styles.chip, priceFilter === item.key && styles.chipActive]}
+            onPress={() => setPriceFilter(item.key as 'all' | 'free' | 'paid')}
+          >
+            <Text style={[styles.chipText, priceFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {featuredSubset.length > 0 ? (
+        <View style={styles.featuredSection}>
+          <Text style={styles.featuredTitle}>Featured Events</Text>
+          <ScrollView
+            horizontal
+            nestedScrollEnabled
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.featuredRow}
+          >
+            {featuredSubset.map((item) => (
+              <View key={item.id} style={styles.featuredCardWrap}>
+                <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+    </>
+  );
+
+  const listFooter = (
+    <Pressable onPress={onSignOut} style={styles.signOutArea}>
+      <Text style={styles.signOutText}>Sign out</Text>
+    </Pressable>
+  );
+
+  const listEmpty = loading ? (
+    <View style={styles.stateWrap}>
+      <ActivityIndicator color={theme.colors.primary} />
+      <Text style={styles.stateText}>Loading events...</Text>
+    </View>
+  ) : error ? (
+    <View style={styles.stateWrap}>
+      <Text style={styles.errorText}>{error}</Text>
+      <ThemedButton label="Try Again" onPress={() => loadEvents()} variant="secondary" />
+    </View>
+  ) : (
+    <View style={styles.stateWrap}>
+      <Text style={styles.stateText}>No events match your filters.</Text>
+      <ThemedButton label="Reset Filters" onPress={resetFilters} />
+      {hasActiveFilters && featuredSubset.length > 0 ? (
+        <View style={styles.emptyDiscovery}>
+          <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
+          {featuredSubset.slice(0, 2).map((item) => (
+            <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+
   return (
     <Screen padded={false}>
       <View style={styles.container}>
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.kicker}>DISCOVER</Text>
-            <Text style={styles.title}>Admitly</Text>
-          </View>
-          <View style={styles.headerLinks}>
-            <Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable>
-            <Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable>
-          </View>
-        </View>
-
-        <View style={styles.searchWrap}>
-          <TextInput
-            value={searchInput}
-            onChangeText={setSearchInput}
-            placeholder="Search events, venues, vibes"
-            placeholderTextColor={theme.colors.textSecondary}
-            style={styles.searchInput}
-            returnKeyType="search"
-          />
-        </View>
-
-        <View style={styles.filtersRow}>
-          {CATEGORY_FILTERS.map((item) => (
-            <Pressable
-              key={item}
-              style={[styles.chip, selectedCategory === item && styles.chipActive]}
-              onPress={() => setSelectedCategory(item)}
-            >
-              <Text style={[styles.chipText, selectedCategory === item && styles.chipTextActive]}>{item}</Text>
-            </Pressable>
-          ))}
-        </View>
-
-        <View style={styles.filtersRow}>
-          {[
-            { key: 'today', label: 'Today' },
-            { key: 'this_week', label: 'This Week' },
-            { key: 'upcoming', label: 'Upcoming' },
-          ].map((item) => (
-            <Pressable
-              key={item.key}
-              style={[styles.chip, dateFilter === item.key && styles.chipActive]}
-              onPress={() => setDateFilter(item.key as DateFilter)}
-            >
-              <Text style={[styles.chipText, dateFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
-            </Pressable>
-          ))}
-          {[
-            { key: 'all', label: 'All' },
-            { key: 'free', label: 'Free' },
-            { key: 'paid', label: 'Paid' },
-          ].map((item) => (
-            <Pressable
-              key={item.key}
-              style={[styles.chip, priceFilter === item.key && styles.chipActive]}
-              onPress={() => setPriceFilter(item.key as 'all' | 'free' | 'paid')}
-            >
-              <Text style={[styles.chipText, priceFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
-            </Pressable>
-          ))}
-        </View>
-
-        {featuredSubset.length > 0 ? (
-          <View style={styles.featuredSection}>
-            <Text style={styles.featuredTitle}>Featured Events</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.featuredRow}>
-              {featuredSubset.map((item) => (
-                <View key={item.id} style={styles.featuredCardWrap}>
-                  <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
-                </View>
-              ))}
-            </ScrollView>
-          </View>
-        ) : null}
-
-        {loading ? (
-          <View style={styles.stateWrap}>
-            <ActivityIndicator color={theme.colors.primary} />
-            <Text style={styles.stateText}>Loading events...</Text>
-          </View>
-        ) : error ? (
-          <View style={styles.stateWrap}>
-            <Text style={styles.errorText}>{error}</Text>
-            <ThemedButton label="Try Again" onPress={() => loadEvents()} variant="secondary" />
-          </View>
-        ) : events.length === 0 ? (
-          <View style={styles.stateWrap}>
-            <Text style={styles.stateText}>No events match your filters.</Text>
-            <ThemedButton label="Reset Filters" onPress={resetFilters} />
-            {hasActiveFilters && featuredSubset.length > 0 ? (
-              <View style={styles.emptyDiscovery}>
-                <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
-                {featuredSubset.slice(0, 2).map((item) => (
-                  <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
-                ))}
-              </View>
-            ) : null}
-          </View>
-        ) : (
-          <FlatList
-            data={events}
-            keyExtractor={(item) => String(item.id)}
-            contentContainerStyle={styles.listContent}
-            renderItem={({ item }) => <EventCard event={item} onPress={() => onOpenEvent(item.id)} />}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={() => loadEvents(true)}
-                tintColor={theme.colors.primary}
-              />
-            }
-          />
-        )}
-
-        <Pressable onPress={onSignOut} style={styles.signOutArea}>
-          <Text style={styles.signOutText}>Sign out</Text>
-        </Pressable>
+        <FlatList
+          data={loading || error ? [] : events}
+          keyExtractor={(item) => String(item.id)}
+          contentContainerStyle={styles.homeListContent}
+          renderItem={({ item, index }) => (
+            <View style={[styles.eventListItem, index === 0 && styles.firstEventListItem]}>
+              <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
+            </View>
+          )}
+          ListHeaderComponent={listHeader}
+          ListEmptyComponent={listEmpty}
+          ListFooterComponent={listFooter}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => loadEvents(true)}
+              tintColor={theme.colors.primary}
+            />
+          }
+        />
       </View>
     </Screen>
   );
@@ -294,6 +313,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.sm,
     paddingBottom: theme.spacing.xl,
+  },
+  homeListContent: {
+    paddingBottom: theme.spacing.xl,
+  },
+  eventListItem: {
+    paddingHorizontal: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
+  },
+  firstEventListItem: {
+    marginTop: theme.spacing.sm,
   },
   stateWrap: {
     paddingHorizontal: theme.spacing.lg,

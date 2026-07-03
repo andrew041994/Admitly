@@ -1,219 +1,373 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/backend/app/api/tickets.py b/backend/app/api/tickets.py
-index 0ed47c07af163cd83d61f9cdbc134e639936efd1..128c1f885c68cba0d5f99734f3fdfcb3b872d177 100644
---- a/backend/app/api/tickets.py
-+++ b/backend/app/api/tickets.py
-@@ -1,27 +1,28 @@
- import json
- from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-+from sqlalchemy.exc import SQLAlchemyError
- from sqlalchemy.orm import Session
+diff --git a/mobile/src/navigation/screens/HomeScreen.tsx b/mobile/src/navigation/screens/HomeScreen.tsx
+index b94119ac1ae9547a038b4cbf93c5e84ddd75209b..fd153876420d18456d33bce83c683fe36ddd636b 100644
+--- a/mobile/src/navigation/screens/HomeScreen.tsx
++++ b/mobile/src/navigation/screens/HomeScreen.tsx
+@@ -77,171 +77,190 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
+       }
  
+       try {
+         const [discoveredEvents, discoveryFeed] = await Promise.all([
+           listDiscoverableEvents(requestFilters),
+           listDiscoverableEvents({ dateBucket: 'upcoming' }),
+         ]);
+         setEvents(discoveredEvents);
+         setFeaturedEvents(discoveryFeed);
+         setError(null);
+       } catch (err) {
+         const message = err instanceof ApiError ? err.message : 'Unable to load events right now.';
+         setError(message);
+       } finally {
+         setLoading(false);
+         setRefreshing(false);
+       }
+     },
+     [requestFilters],
+   );
  
- from app.api.ticket_holds import get_current_user_id
- from app.db.session import get_db
- from app.schemas.notification import NotificationDispatchResponse
- from app.schemas.ticket import (
-     TicketCheckInAttemptResponse,
-     TicketCheckInConfirmRequest,
-     TicketCheckInOverrideRequest,
-     TicketCheckInRequest,
-     TicketCheckInResponse,
-     TicketCheckInSummaryResponse,
-     TicketCheckInValidateRequest,
-     TicketCheckInValidateResponse,
-     TicketDetailResponse,
-     TicketResponse,
-     TicketTransferRequest,
-     TicketTransferPendingResponse,
-     TicketVoidRequest,
-     TicketQrResponse,
-     TicketScanRequest,
-     TicketScanResponse,
- )
- from app.schemas.ticket_wallet import (
-@@ -404,50 +405,58 @@ def confirm_event_ticket_check_in(
-         db,
-         scanner_user_id=user_id,
-         event_id=event_id,
-         qr_payload=payload.qr_payload,
-         ticket_code=payload.ticket_code,
-         method=method,
-     )
-     return _build_check_in_response(event_id=event_id, result=result)
+   useEffect(() => {
+     loadEvents();
+   }, [loadEvents]);
  
+-  return (
+-    <Screen padded={false}>
+-      <View style={styles.container}>
+-        <View style={styles.header}>
+-          <View>
+-            <Text style={styles.kicker}>DISCOVER</Text>
+-            <Text style={styles.title}>Admitly</Text>
+-          </View>
+-          <View style={styles.headerLinks}>
+-            <Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable>
+-            <Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable>
+-          </View>
++  const listHeader = (
++    <>
++      <View style={styles.header}>
++        <View>
++          <Text style={styles.kicker}>DISCOVER</Text>
++          <Text style={styles.title}>Admitly</Text>
+         </View>
+-
+-        <View style={styles.searchWrap}>
+-          <TextInput
+-            value={searchInput}
+-            onChangeText={setSearchInput}
+-            placeholder="Search events, venues, vibes"
+-            placeholderTextColor={theme.colors.textSecondary}
+-            style={styles.searchInput}
+-            returnKeyType="search"
+-          />
++        <View style={styles.headerLinks}>
++          <Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable>
++          <Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable>
+         </View>
++      </View>
  
- @router.post("/events/{event_id}/check-in/manual", response_model=TicketCheckInResponse)
- def manual_event_ticket_check_in(
-     event_id: int,
-     payload: TicketCheckInValidateRequest,
-     db: Session = Depends(get_db),
-     user_id: int = Depends(get_current_user_id),
- ) -> TicketCheckInResponse:
-     result = check_in_ticket(
-         db,
-         scanner_user_id=user_id,
-         event_id=event_id,
-         qr_payload=payload.qr_payload,
-         ticket_code=payload.ticket_code,
-         method=CHECK_IN_METHOD_MANUAL,
-     )
-+    try:
-+        db.commit()
-+    except SQLAlchemyError as exc:
-+        db.rollback()
-+        raise HTTPException(
-+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-+            detail="Unable to persist ticket check-in.",
-+        ) from exc
-     return _build_check_in_response(event_id=event_id, result=result)
+-        <View style={styles.filtersRow}>
+-          {CATEGORY_FILTERS.map((item) => (
+-            <Pressable
+-              key={item}
+-              style={[styles.chip, selectedCategory === item && styles.chipActive]}
+-              onPress={() => setSelectedCategory(item)}
+-            >
+-              <Text style={[styles.chipText, selectedCategory === item && styles.chipTextActive]}>{item}</Text>
+-            </Pressable>
+-          ))}
+-        </View>
++      <View style={styles.searchWrap}>
++        <TextInput
++          value={searchInput}
++          onChangeText={setSearchInput}
++          placeholder="Search events, venues, vibes"
++          placeholderTextColor={theme.colors.textSecondary}
++          style={styles.searchInput}
++          returnKeyType="search"
++        />
++      </View>
  
+-        <View style={styles.filtersRow}>
+-          {[
+-            { key: 'today', label: 'Today' },
+-            { key: 'this_week', label: 'This Week' },
+-            { key: 'upcoming', label: 'Upcoming' },
+-          ].map((item) => (
+-            <Pressable
+-              key={item.key}
+-              style={[styles.chip, dateFilter === item.key && styles.chipActive]}
+-              onPress={() => setDateFilter(item.key as DateFilter)}
+-            >
+-              <Text style={[styles.chipText, dateFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
+-            </Pressable>
+-          ))}
+-          {[
+-            { key: 'all', label: 'All' },
+-            { key: 'free', label: 'Free' },
+-            { key: 'paid', label: 'Paid' },
+-          ].map((item) => (
+-            <Pressable
+-              key={item.key}
+-              style={[styles.chip, priceFilter === item.key && styles.chipActive]}
+-              onPress={() => setPriceFilter(item.key as 'all' | 'free' | 'paid')}
+-            >
+-              <Text style={[styles.chipText, priceFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
+-            </Pressable>
+-          ))}
+-        </View>
++      <View style={styles.filtersRow}>
++        {CATEGORY_FILTERS.map((item) => (
++          <Pressable
++            key={item}
++            style={[styles.chip, selectedCategory === item && styles.chipActive]}
++            onPress={() => setSelectedCategory(item)}
++          >
++            <Text style={[styles.chipText, selectedCategory === item && styles.chipTextActive]}>{item}</Text>
++          </Pressable>
++        ))}
++      </View>
  
- @router.get("/events/{event_id}/check-in/summary", response_model=TicketCheckInSummaryResponse)
- def get_event_ticket_check_in_summary(
-     event_id: int,
-     db: Session = Depends(get_db),
-     user_id: int = Depends(get_current_user_id),
- ) -> TicketCheckInSummaryResponse:
-     try:
-         summary = get_event_check_in_summary(db, actor_user_id=user_id, event_id=event_id)
-     except TicketAuthorizationError as exc:
-         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+-        {featuredSubset.length > 0 ? (
+-          <View style={styles.featuredSection}>
+-            <Text style={styles.featuredTitle}>Featured Events</Text>
+-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.featuredRow}>
+-              {featuredSubset.map((item) => (
+-                <View key={item.id} style={styles.featuredCardWrap}>
+-                  <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
+-                </View>
+-              ))}
+-            </ScrollView>
+-          </View>
+-        ) : null}
++      <View style={styles.filtersRow}>
++        {[
++          { key: 'today', label: 'Today' },
++          { key: 'this_week', label: 'This Week' },
++          { key: 'upcoming', label: 'Upcoming' },
++        ].map((item) => (
++          <Pressable
++            key={item.key}
++            style={[styles.chip, dateFilter === item.key && styles.chipActive]}
++            onPress={() => setDateFilter(item.key as DateFilter)}
++          >
++            <Text style={[styles.chipText, dateFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
++          </Pressable>
++        ))}
++        {[
++          { key: 'all', label: 'All' },
++          { key: 'free', label: 'Free' },
++          { key: 'paid', label: 'Paid' },
++        ].map((item) => (
++          <Pressable
++            key={item.key}
++            style={[styles.chip, priceFilter === item.key && styles.chipActive]}
++            onPress={() => setPriceFilter(item.key as 'all' | 'free' | 'paid')}
++          >
++            <Text style={[styles.chipText, priceFilter === item.key && styles.chipTextActive]}>{item.label}</Text>
++          </Pressable>
++        ))}
++      </View>
  
-     return TicketCheckInSummaryResponse(
-         event_id=summary.event_id,
-         total_admittable_tickets=summary.total_admittable_tickets,
-         checked_in_tickets=summary.checked_in_tickets,
-         remaining_tickets=summary.remaining_tickets,
-     )
+-        {loading ? (
+-          <View style={styles.stateWrap}>
+-            <ActivityIndicator color={theme.colors.primary} />
+-            <Text style={styles.stateText}>Loading events...</Text>
+-          </View>
+-        ) : error ? (
+-          <View style={styles.stateWrap}>
+-            <Text style={styles.errorText}>{error}</Text>
+-            <ThemedButton label="Try Again" onPress={() => loadEvents()} variant="secondary" />
+-          </View>
+-        ) : events.length === 0 ? (
+-          <View style={styles.stateWrap}>
+-            <Text style={styles.stateText}>No events match your filters.</Text>
+-            <ThemedButton label="Reset Filters" onPress={resetFilters} />
+-            {hasActiveFilters && featuredSubset.length > 0 ? (
+-              <View style={styles.emptyDiscovery}>
+-                <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
+-                {featuredSubset.slice(0, 2).map((item) => (
+-                  <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
+-                ))}
++      {featuredSubset.length > 0 ? (
++        <View style={styles.featuredSection}>
++          <Text style={styles.featuredTitle}>Featured Events</Text>
++          <ScrollView
++            horizontal
++            nestedScrollEnabled
++            showsHorizontalScrollIndicator={false}
++            contentContainerStyle={styles.featuredRow}
++          >
++            {featuredSubset.map((item) => (
++              <View key={item.id} style={styles.featuredCardWrap}>
++                <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
+               </View>
+-            ) : null}
+-          </View>
+-        ) : (
+-          <FlatList
+-            data={events}
+-            keyExtractor={(item) => String(item.id)}
+-            contentContainerStyle={styles.listContent}
+-            renderItem={({ item }) => <EventCard event={item} onPress={() => onOpenEvent(item.id)} />}
+-            refreshControl={
+-              <RefreshControl
+-                refreshing={refreshing}
+-                onRefresh={() => loadEvents(true)}
+-                tintColor={theme.colors.primary}
+-              />
+-            }
+-          />
+-        )}
++            ))}
++          </ScrollView>
++        </View>
++      ) : null}
++    </>
++  );
  
- 
- @router.get("/events/{event_id}/check-in/activity", response_model=list[TicketCheckInAttemptResponse])
- def get_event_ticket_check_in_activity(
-     event_id: int,
-diff --git a/backend/tests/test_tickets_api.py b/backend/tests/test_tickets_api.py
-index daa9dcbc80bc4d7c4ba7ed318a6294bd6d58ae6e..e1009497f5f03eb092bbacb7c0657966a7c96843 100644
---- a/backend/tests/test_tickets_api.py
-+++ b/backend/tests/test_tickets_api.py
-@@ -1,33 +1,40 @@
- from datetime import datetime, timezone
- from types import SimpleNamespace
- 
- import pytest
- from fastapi import HTTPException
-+from sqlalchemy import select
-+from sqlalchemy.orm import Session
- 
--from app.api.tickets import scan_ticket_qr
--from app.schemas.ticket import TicketScanRequest
-+from app.api.tickets import manual_event_ticket_check_in, scan_ticket_qr
-+from app.models import Ticket
-+from app.models.enums import TicketStatus
-+from app.models.ticket_check_in_attempt import TicketCheckInAttempt
-+from app.schemas.ticket import TicketCheckInValidateRequest, TicketScanRequest
-+from app.services.tickets import CHECK_IN_METHOD_MANUAL, issue_tickets_for_completed_order
-+from tests.test_tickets_service import _seed_order
- 
- 
- def test_scan_ticket_qr_commits_successful_scan(monkeypatch) -> None:
-     class _FakeDb:
-         def __init__(self) -> None:
-             self.commit_calls = 0
- 
-         def commit(self) -> None:
-             self.commit_calls += 1
- 
-     expected_checked_in_at = datetime.now(timezone.utc)
- 
-     monkeypatch.setattr(
-         "app.api.tickets.scan_ticket",
-         lambda db, *, payload, user_id: SimpleNamespace(
-             status="SUCCESS",
-             ticket_id=123,
-             checked_in_at=expected_checked_in_at,
-             message="Ticket checked in successfully.",
-         ),
-     )
- 
-     db = _FakeDb()
-     response = scan_ticket_qr(
-         payload=TicketScanRequest(payload={"ticket_id": 123, "event_id": 99, "hash": "signed"}),
-@@ -48,25 +55,75 @@ def test_scan_ticket_qr_rejects_outside_scan_window_without_commit(monkeypatch)
- 
-         def commit(self) -> None:
-             self.commit_calls += 1
- 
-     monkeypatch.setattr(
-         "app.api.tickets.scan_ticket",
-         lambda db, *, payload, user_id: SimpleNamespace(
-             status="INVALID",
-             ticket_id=None,
-             checked_in_at=None,
-             message="Ticket scanning has closed for this event.",
-         ),
-     )
- 
-     db = _FakeDb()
-     with pytest.raises(HTTPException) as exc:
-         scan_ticket_qr(
-             payload=TicketScanRequest(payload={"ticket_id": 123, "event_id": 99, "hash": "signed"}),
-             db=db,
-             user_id=456,
-         )
- 
-     assert exc.value.status_code == 403
-     assert exc.value.detail == "Ticket scanning has closed for this event."
-     assert db.commit_calls == 0
+-        <Pressable onPress={onSignOut} style={styles.signOutArea}>
+-          <Text style={styles.signOutText}>Sign out</Text>
+-        </Pressable>
++  const listFooter = (
++    <Pressable onPress={onSignOut} style={styles.signOutArea}>
++      <Text style={styles.signOutText}>Sign out</Text>
++    </Pressable>
++  );
 +
++  const listEmpty = loading ? (
++    <View style={styles.stateWrap}>
++      <ActivityIndicator color={theme.colors.primary} />
++      <Text style={styles.stateText}>Loading events...</Text>
++    </View>
++  ) : error ? (
++    <View style={styles.stateWrap}>
++      <Text style={styles.errorText}>{error}</Text>
++      <ThemedButton label="Try Again" onPress={() => loadEvents()} variant="secondary" />
++    </View>
++  ) : (
++    <View style={styles.stateWrap}>
++      <Text style={styles.stateText}>No events match your filters.</Text>
++      <ThemedButton label="Reset Filters" onPress={resetFilters} />
++      {hasActiveFilters && featuredSubset.length > 0 ? (
++        <View style={styles.emptyDiscovery}>
++          <Text style={styles.emptyDiscoveryTitle}>Explore featured picks</Text>
++          {featuredSubset.slice(0, 2).map((item) => (
++            <EventCard key={`empty-${item.id}`} event={item} onPress={() => onOpenEvent(item.id)} />
++          ))}
++        </View>
++      ) : null}
++    </View>
++  );
 +
-+def test_manual_event_ticket_check_in_commits_successful_admission(db_session: Session) -> None:
-+    order, _, _, _, event = _seed_order(db_session, quantity=1)
-+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
-+    ticket.manual_code = "ADM-123456"
-+    db_session.commit()
-+    ticket_id = ticket.id
-+    scanner_user_id = event.organizer.user_id
-+    event_id = event.id
-+
-+    response = manual_event_ticket_check_in(
-+        event_id=event_id,
-+        payload=TicketCheckInValidateRequest(ticket_code="ADM-123456"),
-+        db=db_session,
-+        user_id=scanner_user_id,
-+    )
-+
-+    assert response.success is True
-+    assert response.code == "admitted"
-+    assert response.ticket_id == ticket_id
-+    assert response.checked_in_by_user_id == scanner_user_id
-+
-+    db_session.expire_all()
-+    persisted_ticket = db_session.get(Ticket, ticket_id)
-+    assert persisted_ticket is not None
-+    assert persisted_ticket.status == TicketStatus.CHECKED_IN
-+    assert persisted_ticket.checked_in_at is not None
-+    assert persisted_ticket.checked_in_by_user_id == scanner_user_id
-+    assert persisted_ticket.check_in_method == CHECK_IN_METHOD_MANUAL
-+
-+    attempt = db_session.execute(
-+        select(TicketCheckInAttempt).where(
-+            TicketCheckInAttempt.ticket_id == ticket_id,
-+            TicketCheckInAttempt.event_id == event_id,
-+            TicketCheckInAttempt.actor_user_id == scanner_user_id,
-+            TicketCheckInAttempt.method == CHECK_IN_METHOD_MANUAL,
-+        )
-+    ).scalar_one_or_none()
-+    assert attempt is not None
-+
-+    duplicate_response = manual_event_ticket_check_in(
-+        event_id=event_id,
-+        payload=TicketCheckInValidateRequest(ticket_code="ADM-123456"),
-+        db=db_session,
-+        user_id=scanner_user_id,
-+    )
-+
-+    assert duplicate_response.success is False
-+    assert duplicate_response.code == "already_used"
++  return (
++    <Screen padded={false}>
++      <View style={styles.container}>
++        <FlatList
++          data={loading || error ? [] : events}
++          keyExtractor={(item) => String(item.id)}
++          contentContainerStyle={styles.homeListContent}
++          renderItem={({ item, index }) => (
++            <View style={[styles.eventListItem, index === 0 && styles.firstEventListItem]}>
++              <EventCard event={item} onPress={() => onOpenEvent(item.id)} />
++            </View>
++          )}
++          ListHeaderComponent={listHeader}
++          ListEmptyComponent={listEmpty}
++          ListFooterComponent={listFooter}
++          keyboardShouldPersistTaps="handled"
++          refreshControl={
++            <RefreshControl
++              refreshing={refreshing}
++              onRefresh={() => loadEvents(true)}
++              tintColor={theme.colors.primary}
++            />
++          }
++        />
+       </View>
+     </Screen>
+   );
+ }
+ 
+ const styles = StyleSheet.create({
+   container: {
+     flex: 1,
+     paddingTop: theme.spacing.md,
+   },
+   header: {
+     paddingHorizontal: theme.spacing.lg,
+     marginBottom: theme.spacing.md,
+     flexDirection: 'row',
+     justifyContent: 'space-between',
+     alignItems: 'center',
+   },
+   kicker: {
+     color: theme.colors.primary,
+     fontSize: theme.typography.caption,
+     letterSpacing: 2,
+   },
+   title: {
+     color: theme.colors.textPrimary,
+     fontSize: theme.typography.heading,
+@@ -273,50 +292,60 @@ const styles = StyleSheet.create({
+     borderRadius: 999,
+     borderWidth: 1,
+     borderColor: theme.colors.border,
+     backgroundColor: theme.colors.surface,
+     paddingHorizontal: theme.spacing.md,
+     paddingVertical: theme.spacing.xs,
+   },
+   chipActive: {
+     borderColor: theme.colors.primary,
+     backgroundColor: '#221b08',
+   },
+   chipText: {
+     color: theme.colors.textSecondary,
+     fontSize: theme.typography.caption,
+   },
+   chipTextActive: {
+     color: theme.colors.primary,
+     fontWeight: '700',
+   },
+   listContent: {
+     gap: theme.spacing.md,
+     paddingHorizontal: theme.spacing.lg,
+     paddingVertical: theme.spacing.sm,
+     paddingBottom: theme.spacing.xl,
+   },
++  homeListContent: {
++    paddingBottom: theme.spacing.xl,
++  },
++  eventListItem: {
++    paddingHorizontal: theme.spacing.lg,
++    marginBottom: theme.spacing.md,
++  },
++  firstEventListItem: {
++    marginTop: theme.spacing.sm,
++  },
+   stateWrap: {
+     paddingHorizontal: theme.spacing.lg,
+     alignItems: 'center',
+     gap: theme.spacing.md,
+     marginTop: theme.spacing.xl,
+   },
+   featuredSection: {
+     marginTop: theme.spacing.xs,
+     marginBottom: theme.spacing.sm,
+   },
+   featuredTitle: {
+     color: theme.colors.textPrimary,
+     fontSize: theme.typography.body,
+     fontWeight: '700',
+     paddingHorizontal: theme.spacing.lg,
+     marginBottom: theme.spacing.sm,
+   },
+   featuredRow: {
+     gap: theme.spacing.md,
+     paddingHorizontal: theme.spacing.lg,
+     paddingRight: theme.spacing.xl,
+   },
+   featuredCardWrap: {
+     width: 290,
+   },
  
 EOF
 )
