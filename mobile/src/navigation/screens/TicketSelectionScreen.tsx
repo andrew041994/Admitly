@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../../api/client';
 import { EventDiscoveryDetail } from '../../api/events';
@@ -12,6 +12,43 @@ type Props = {
   event: EventDiscoveryDetail;
   onOrderCreated: (orderId: number) => void;
 };
+
+type StepperButtonProps = {
+  accessibilityLabel: string;
+  disabled?: boolean;
+  label: string;
+  onPress: () => void;
+  tone?: 'filled' | 'outline';
+};
+
+function StepperButton({ accessibilityLabel, disabled = false, label, onPress, tone = 'outline' }: StepperButtonProps) {
+  return (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      hitSlop={4}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.stepperButton,
+        tone === 'filled' ? styles.stepperButtonFilled : styles.stepperButtonOutline,
+        disabled && styles.stepperButtonDisabled,
+        pressed && !disabled && styles.stepperButtonPressed,
+      ]}
+    >
+      <Text
+        style={[
+          styles.stepperButtonLabel,
+          tone === 'filled' && styles.stepperButtonFilledLabel,
+          disabled && styles.stepperButtonDisabledLabel,
+        ]}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
 
 export function TicketSelectionScreen({ event, onOrderCreated }: Props) {
   const [quantities, setQuantities] = useState<Record<number, number>>({});
@@ -140,9 +177,20 @@ export function TicketSelectionScreen({ event, onOrderCreated }: Props) {
                 <Text style={styles.meta}>{tier.available_quantity} left</Text>
               </View>
               <View style={styles.counter}>
-                <ThemedButton label="-" variant="secondary" onPress={() => setQuantities((q) => ({ ...q, [tier.id]: Math.max(0, quantity - 1) }))} />
-                <Text style={styles.qty}>{quantity}</Text>
-                <ThemedButton label="+" variant="secondary" onPress={() => setQuantities((q) => ({ ...q, [tier.id]: Math.min(tier.max_per_order, quantity + 1) }))} />
+                <StepperButton
+                  accessibilityLabel={`Decrease ${tier.name} quantity`}
+                  disabled={quantity === 0}
+                  label="−"
+                  onPress={() => setQuantities((q) => ({ ...q, [tier.id]: Math.max(0, quantity - 1) }))}
+                />
+                <Text accessibilityLabel={`${quantity} ${tier.name} selected`} style={styles.qty}>{quantity}</Text>
+                <StepperButton
+                  accessibilityLabel={`Increase ${tier.name} quantity`}
+                  disabled={quantity >= tier.max_per_order}
+                  label="+"
+                  onPress={() => setQuantities((q) => ({ ...q, [tier.id]: Math.min(tier.max_per_order, quantity + 1) }))}
+                  tone="filled"
+                />
               </View>
             </View>
           );
@@ -161,11 +209,19 @@ export function TicketSelectionScreen({ event, onOrderCreated }: Props) {
 const styles = StyleSheet.create({
   content: { gap: theme.spacing.md, paddingBottom: theme.spacing.xl },
   title: { color: theme.colors.textPrimary, fontWeight: '700', fontSize: theme.typography.heading },
-  row: { borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: theme.spacing.md, flexDirection: 'row', gap: theme.spacing.sm },
+  row: { alignItems: 'center', borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: theme.spacing.md, flexDirection: 'row', gap: theme.spacing.sm },
   name: { color: theme.colors.textPrimary, fontWeight: '700' },
   meta: { color: theme.colors.textSecondary },
-  counter: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm },
-  qty: { color: theme.colors.textPrimary, minWidth: 24, textAlign: 'center' },
+  counter: { alignItems: 'center', flexDirection: 'row', gap: theme.spacing.xs, justifyContent: 'flex-end', minWidth: 132 },
+  qty: { color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700', minWidth: 30, textAlign: 'center' },
+  stepperButton: { alignItems: 'center', borderRadius: 22, borderWidth: 1, height: 44, justifyContent: 'center', width: 44 },
+  stepperButtonOutline: { backgroundColor: theme.colors.surfaceElevated, borderColor: theme.colors.primaryMuted },
+  stepperButtonFilled: { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
+  stepperButtonPressed: { opacity: 0.78, transform: [{ scale: 0.96 }] },
+  stepperButtonDisabled: { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, opacity: 0.58 },
+  stepperButtonLabel: { color: theme.colors.primary, fontSize: 26, fontWeight: '800', lineHeight: 28, textAlign: 'center' },
+  stepperButtonFilledLabel: { color: theme.colors.background },
+  stepperButtonDisabledLabel: { color: theme.colors.textSecondary },
   summary: { padding: theme.spacing.md, borderRadius: theme.radius.md, backgroundColor: theme.colors.surface },
   total: { color: theme.colors.primary, fontWeight: '700' },
 });
