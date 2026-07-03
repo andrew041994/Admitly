@@ -44,7 +44,7 @@ export function EventCard({
       <Pressable style={({ pressed }) => [styles.heroButton, pressed && styles.pressed]} onPress={onPress}>
         <View style={styles.imageWrap}>
           {event.cover_image_url ? (
-            <Image source={{ uri: event.cover_image_url }} style={styles.image} resizeMode="cover" />
+            <Image source={{ uri: event.cover_image_url }} style={styles.image} resizeMode="contain" />
           ) : (
             <View style={styles.imageFallback}>
               <View style={styles.fallbackOrbLarge} />
@@ -119,7 +119,7 @@ const styles = StyleSheet.create({
   },
   heroButton: { overflow: 'hidden' },
   pressed: { opacity: 0.92 },
-  imageWrap: { height: 260, overflow: 'hidden', backgroundColor: theme.colors.surfaceElevated },
+  imageWrap: { width: '100%', aspectRatio: 4 / 5, overflow: 'hidden', backgroundColor: theme.colors.surfaceElevated },
   image: { width: '100%', height: '100%' },
   imageFallback: { flex: 1, backgroundColor: '#120F05', justifyContent: 'center', alignItems: 'center' },
   fallbackOrbLarge: { position: 'absolute', width: 220, height: 220, borderRadius: 110, backgroundColor: '#3B2E0B', right: -50, top: -40, opacity: 0.75 },
