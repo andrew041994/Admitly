@@ -20,11 +20,13 @@ export function setApiAuthToken(token: string | null) {
 
 type ApiOptions = RequestInit & { path: string };
 
-export async function apiRequest<T>({ path, headers, ...init }: ApiOptions): Promise<T> {
+export async function apiRequest<T>({ path, headers, body, ...init }: ApiOptions): Promise<T> {
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
   const response = await fetch(`${env.apiBaseUrl}${path}`, {
     ...init,
+    body,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
       ...(headers ?? {}),
     },

@@ -237,3 +237,13 @@ export async function searchVenues(q: string, limit = 8): Promise<VenueSearchIte
   const params = new URLSearchParams({ q, limit: String(limit) });
   return apiRequest<VenueSearchItem[]>({ path: `/venues/search?${params.toString()}`, method: 'GET' });
 }
+
+export type EventCoverUploadResponse = {
+  url: string;
+};
+
+export async function uploadEventCoverImage(file: { uri: string; name: string; type: string }): Promise<EventCoverUploadResponse> {
+  const formData = new FormData();
+  formData.append('file', file as unknown as Blob);
+  return apiRequest<EventCoverUploadResponse>({ path: '/events/uploads/cover-image', method: 'POST', body: formData });
+}

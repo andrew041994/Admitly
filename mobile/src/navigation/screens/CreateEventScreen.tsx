@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError } from '../../api/client';
-import { createEvent, searchVenues, VenueSearchItem } from '../../api/organizer';
+import { createEvent, searchVenues, uploadEventCoverImage, VenueSearchItem } from '../../api/organizer';
 import { theme } from '../../theme';
 
 type TierFormState = {
@@ -28,6 +29,8 @@ const defaultTier = (): TierFormState => ({
 });
 
 const GUYANA_TIMEZONE = 'America/Guyana';
+const MAX_COVER_IMAGE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_COVER_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 const CATEGORY_OPTIONS = [
   'Party',
   'Concert',
@@ -134,6 +137,9 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const [longDescription, setLongDescription] = useState('');
   const [category, setCategory] = useState('');
   const [coverImageUrl, setCoverImageUrl] = useState('');
+  const [coverImagePreviewUri, setCoverImagePreviewUri] = useState<string | null>(null);
+  const [coverImageUploading, setCoverImageUploading] = useState(false);
+  const [coverImageError, setCoverImageError] = useState<string | null>(null);
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
   const [categorySearch, setCategorySearch] = useState('');
   const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
@@ -371,9 +377,70 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
     return null;
   }, [title, startAt, endAt, venueName, tiers]);
 
+  const pickCoverImage = async () => {
+    setCoverImageError(null);
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setCoverImageError('Photo library permission is required to choose a cover image.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.85,
+      });
+
+      if (result.canceled) return;
+
+      const asset = result.assets[0];
+      if (!asset?.uri) {
+        setCoverImageError('Unable to read the selected image. Please try another image.');
+        return;
+      }
+
+      const mimeType = (asset.mimeType || '').toLowerCase();
+      if (!mimeType || !ALLOWED_COVER_IMAGE_TYPES.has(mimeType)) {
+        setCoverImageError('Unsupported image type. Please choose a JPEG, PNG, or WEBP image.');
+        return;
+      }
+
+      if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_COVER_IMAGE_BYTES) {
+        setCoverImageError('Cover image must be 5 MB or smaller. Please choose a smaller image.');
+        return;
+      }
+
+      setCoverImagePreviewUri(asset.uri);
+      setCoverImageUploading(true);
+      const upload = await uploadEventCoverImage({
+        uri: asset.uri,
+        name: asset.fileName || `event-cover.${mimeType.split('/')[1] || 'jpg'}`,
+        type: mimeType,
+      });
+      setCoverImageUrl(upload.url);
+    } catch (err) {
+      setCoverImagePreviewUri(coverImageUrl || null);
+      setCoverImageError(err instanceof ApiError ? err.message : 'Unable to upload the selected image. Please try again.');
+    } finally {
+      setCoverImageUploading(false);
+    }
+  };
+
+  const removeCoverImage = () => {
+    setCoverImageUrl('');
+    setCoverImagePreviewUri(null);
+    setCoverImageError(null);
+  };
+
   const submit = async () => {
     if (submitValidationError) {
       setError(submitValidationError);
+      return;
+    }
+
+    if (coverImageUploading) {
+      setError('Please wait for the cover image upload to finish.');
       return;
     }
 
@@ -391,7 +458,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         short_description: shortDescription.trim() || null,
         long_description: longDescription.trim() || null,
         category: category.trim() || null,
-        cover_image_url: coverImageUrl.trim() || null,
+        cover_image_url: coverImageUrl || null,
         start_at: startAtIso,
         end_at: endAtIso,
         doors_open_at: doorsOpenAtIso,
@@ -452,23 +519,28 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         <Pressable style={styles.input} onPress={openCategoryPicker}>
           <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
         </Pressable>
-        <TextInput
-          style={styles.input}
-          value={coverImageUrl}
-          onChangeText={setCoverImageUrl}
-          placeholder="Cover image URL"
-          placeholderTextColor={theme.colors.textSecondary}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
-        {coverImageUrl.trim() ? (
-          <Image source={{ uri: coverImageUrl.trim() }} style={styles.coverPreview} resizeMode="cover" />
-        ) : (
-          <View style={styles.coverImageHint}>
-            <Text style={styles.hintText}>Add a cover image URL to make this event stand out in discovery.</Text>
-          </View>
-        )}
+        <View style={styles.coverImageSection}>
+          {coverImagePreviewUri || coverImageUrl ? (
+            <>
+              <Image source={{ uri: coverImagePreviewUri || coverImageUrl }} style={styles.coverPreview} resizeMode="cover" />
+              {coverImageUploading ? <Text style={styles.hintText}>Uploading cover image…</Text> : null}
+              <View style={styles.coverImageActions}>
+                <Pressable onPress={pickCoverImage} style={styles.coverImageAction} disabled={coverImageUploading}>
+                  <Text style={styles.coverImageActionText}>Replace image</Text>
+                </Pressable>
+                <Pressable onPress={removeCoverImage} style={[styles.coverImageAction, styles.coverImageRemoveAction]} disabled={coverImageUploading}>
+                  <Text style={styles.coverImageRemoveText}>Remove</Text>
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <Pressable style={styles.coverImageUploadArea} onPress={pickCoverImage} disabled={coverImageUploading}>
+              <Text style={styles.coverImageUploadTitle}>Add event cover image</Text>
+              <Text style={styles.hintText}>Recommended: event flyer or clear promo image</Text>
+            </Pressable>
+          )}
+          {coverImageError ? <Text style={styles.error}>{coverImageError}</Text> : null}
+        </View>
 
         <Text style={styles.sectionTitle}>Timing</Text>
         <View style={styles.timingCard}>
@@ -576,8 +648,8 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         />
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
-            <Text style={styles.buttonText}>{loading ? 'Creating…' : 'Create Event'}</Text>
+          <Pressable onPress={submit} style={[styles.button, loading || coverImageUploading ? styles.buttonDisabled : null]} disabled={loading || coverImageUploading}>
+            <Text style={styles.buttonText}>{coverImageUploading ? 'Uploading image…' : loading ? 'Creating…' : 'Create Event'}</Text>
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -717,13 +789,32 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.surfaceElevated,
   },
-  coverImageHint: {
+  coverImageSection: {
+    gap: theme.spacing.sm,
+  },
+  coverImageUploadArea: {
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: theme.radius.md,
-    padding: theme.spacing.md,
+    borderStyle: 'dashed',
+    padding: theme.spacing.lg,
     backgroundColor: theme.colors.surfaceElevated,
+    alignItems: 'center',
+    gap: theme.spacing.xs,
   },
+  coverImageUploadTitle: { color: theme.colors.textPrimary, fontWeight: '700' },
+  coverImageActions: { flexDirection: 'row', gap: theme.spacing.sm },
+  coverImageAction: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.sm,
+    alignItems: 'center',
+  },
+  coverImageActionText: { color: theme.colors.primary, fontWeight: '700' },
+  coverImageRemoveAction: { borderColor: theme.colors.error },
+  coverImageRemoveText: { color: theme.colors.error, fontWeight: '700' },
   suggestionsCard: {
     borderWidth: 1,
     borderColor: theme.colors.border,

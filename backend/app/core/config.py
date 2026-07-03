@@ -35,6 +35,13 @@ class Settings(BaseSettings):
 
     ticket_public_base_url: str = Field(default="https://admitly.app", alias="TICKET_PUBLIC_BASE_URL")
 
+    aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: str | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
+    aws_region: str | None = Field(default=None, alias="AWS_REGION")
+    s3_event_bucket: str | None = Field(default=None, alias="S3_EVENT_BUCKET")
+    s3_event_prefix: str = Field(default="event-covers/", alias="S3_EVENT_PREFIX")
+    s3_public_base_url: str | None = Field(default=None, alias="S3_PUBLIC_BASE_URL")
+
 
 
     jwt_secret: str = Field(default="dev-change-me", alias="JWT_SECRET")

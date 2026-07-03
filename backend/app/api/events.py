@@ -1,14 +1,22 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from io import BytesIO
+import logging
+from uuid import uuid4
+
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from PIL import Image, UnidentifiedImageError
+from pydantic import BaseModel
 
 UTC = timezone.utc
-from decimal import Decimal
-
-from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.ticket_holds import get_current_user_id
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.event import Event
 from app.models.event_staff import EventStaff
@@ -78,6 +86,94 @@ from app.services.organizer_events import (
 from app.services.reporting import get_event_reporting_summary, get_event_tier_summary
 
 router = APIRouter(prefix="/events", tags=["events"])
+
+MAX_EVENT_COVER_IMAGE_BYTES = 5 * 1024 * 1024
+ALLOWED_EVENT_COVER_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+logger = logging.getLogger(__name__)
+
+
+class EventCoverUploadResponse(BaseModel):
+    url: str
+
+
+def _get_event_cover_s3_config() -> tuple[str, str, str, str, str, str]:
+    missing = [
+        name
+        for name, value in (
+            ("AWS_ACCESS_KEY_ID", settings.aws_access_key_id),
+            ("AWS_SECRET_ACCESS_KEY", settings.aws_secret_access_key),
+            ("AWS_REGION", settings.aws_region),
+            ("S3_EVENT_BUCKET", settings.s3_event_bucket),
+            ("S3_PUBLIC_BASE_URL", settings.s3_public_base_url),
+        )
+        if not value
+    ]
+    if missing:
+        logger.error("Event cover upload S3 configuration is missing: %s", ", ".join(missing))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Image upload is not configured.")
+
+    return (
+        settings.aws_access_key_id or "",
+        settings.aws_secret_access_key or "",
+        settings.aws_region or "",
+        settings.s3_event_bucket or "",
+        settings.s3_event_prefix.strip("/") + "/" if settings.s3_event_prefix.strip("/") else "",
+        (settings.s3_public_base_url or "").rstrip("/"),
+    )
+
+
+@router.post("/uploads/cover-image", response_model=EventCoverUploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_event_cover_image(
+    file: UploadFile = File(...),
+    _user_id: int = Depends(get_current_user_id),
+) -> EventCoverUploadResponse:
+    content_type = (file.content_type or "").lower()
+    extension = ALLOWED_EVENT_COVER_TYPES.get(content_type)
+    if extension is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported image type. Please upload a JPEG, PNG, or WEBP image.",
+        )
+
+    contents = await file.read(MAX_EVENT_COVER_IMAGE_BYTES + 1)
+    if len(contents) > MAX_EVENT_COVER_IMAGE_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Cover image must be 5 MB or smaller.")
+    if not contents:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cover image file is empty.")
+
+    try:
+        with Image.open(BytesIO(contents)) as image:
+            image.verify()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The selected file is not a valid image.") from exc
+
+    access_key_id, secret_access_key, region, bucket, prefix, public_base_url = _get_event_cover_s3_config()
+    key = f"{prefix}{uuid4().hex}{extension}"
+
+    s3_client = boto3.client(
+        "s3",
+        region_name=region,
+        aws_access_key_id=access_key_id,
+        aws_secret_access_key=secret_access_key,
+    )
+    try:
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=contents,
+            ContentType=content_type,
+            CacheControl="public, max-age=31536000, immutable",
+        )
+    except (BotoCoreError, ClientError) as exc:
+        logger.exception("Failed to upload event cover image to S3 bucket %s", bucket)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to upload cover image. Please try again.") from exc
+
+    return EventCoverUploadResponse(url=f"{public_base_url}/{key}")
+
 
 def _to_utc_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
