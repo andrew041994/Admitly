@@ -2,7 +2,7 @@ export type AuthStackParamList = {
   SignIn: undefined;
   SignUp: undefined;
   ForgotPassword: undefined;
-  ResetPassword: undefined;
+  ResetPassword: { token?: string } | undefined;
 };
 
 export type AppStackParamList = {

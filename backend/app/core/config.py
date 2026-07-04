@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD")
     smtp_use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
     frontend_base_url: str = Field(default="https://admitly.app", alias="FRONTEND_BASE_URL")
+    app_deep_link_base_url: str = Field(default="admitly://", alias="APP_DEEP_LINK_BASE_URL")
 
     push_notifications_enabled: bool = Field(default=False, alias="PUSH_NOTIFICATIONS_ENABLED")
     push_provider: str = Field(default="noop", alias="PUSH_PROVIDER")

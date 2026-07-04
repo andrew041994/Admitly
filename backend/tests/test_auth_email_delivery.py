@@ -7,6 +7,7 @@ from app.api import auth as auth_api
 from app.models import User
 from app.schemas.auth import ForgotPasswordRequest, RequestVerificationRequest
 from app.services.auth import register_user
+from app.services import email as email_service
 from app.services.email import EmailConfigurationError, send_email
 
 
@@ -125,3 +126,27 @@ def test_smtp_missing_config_is_swallowed_by_auth_endpoint_for_existing_user(
     response = auth_api.forgot_password(ForgotPasswordRequest(email=user.email), db=db_session)
 
     assert response.success is True
+
+
+def test_password_reset_email_uses_mobile_deep_link_and_plain_code_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, str] = {}
+
+    def fake_send_email(to_email: str, subject: str, body: str) -> str:
+        sent["to_email"] = to_email
+        sent["subject"] = subject
+        sent["body"] = body
+        return "sent_mock"
+
+    monkeypatch.setattr(email_service.settings, "app_deep_link_base_url", "admitly://")
+    monkeypatch.setattr(email_service, "send_email", fake_send_email)
+
+    status = email_service.send_password_reset_email("user@example.com", "reset-token-123")
+
+    assert status == "sent_mock"
+    assert sent["to_email"] == "user@example.com"
+    assert sent["subject"] == "Reset your Admitly password"
+    assert "admitly://reset-password?token=reset-token-123" in sent["body"]
+    assert "Tap this link on your phone to open Admitly and reset your password." in sent["body"]
+    assert "If the link does not open the app, copy and paste this reset code into the Reset Password screen." in sent["body"]
+    assert "reset-token-123" in sent["body"]
+    assert "admitlyevents.com/reset-password" not in sent["body"]

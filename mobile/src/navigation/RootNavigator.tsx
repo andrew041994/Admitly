@@ -1,4 +1,4 @@
-import { NavigationContainer, DarkTheme } from '@react-navigation/native';
+import { NavigationContainer, DarkTheme, LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { useSession } from '../context/SessionContext';
@@ -30,6 +30,23 @@ import { StaffEventsScreen } from './screens/StaffEventsScreen';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
+
+const linking: LinkingOptions<AuthStackParamList> = {
+  prefixes: ['admitly://'],
+  config: {
+    screens: {
+      SignIn: 'sign-in',
+      SignUp: 'sign-up',
+      ForgotPassword: 'forgot-password',
+      ResetPassword: {
+        path: 'reset-password',
+        parse: {
+          token: (token: string) => token,
+        },
+      },
+    },
+  },
+};
 
 const navTheme = {
   ...DarkTheme,
@@ -73,7 +90,9 @@ function AuthNavigator() {
         )}
       </AuthStack.Screen>
       <AuthStack.Screen name="ResetPassword" options={{ headerShown: false }}>
-        {({ navigation }) => <ResetPasswordScreen onGoToSignIn={() => navigation.navigate('SignIn')} />}
+        {({ navigation, route }) => (
+          <ResetPasswordScreen initialToken={route.params?.token} onGoToSignIn={() => navigation.navigate('SignIn')} />
+        )}
       </AuthStack.Screen>
     </AuthStack.Navigator>
   );
@@ -211,7 +230,7 @@ export function RootNavigator() {
   const { state } = useSession();
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer theme={navTheme} linking={linking}>
       {state === 'booting' ? <BootScreen /> : state === 'signedOut' ? <AuthNavigator /> : <SignedInNavigator />}
     </NavigationContainer>
   );

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import smtplib
 from email.message import EmailMessage
+from urllib.parse import urlencode
 
 from app.core.config import settings
 
@@ -70,6 +71,12 @@ def send_email(to_email: str, subject: str, body: str) -> str:
     raise EmailConfigurationError(f"Unsupported email provider: {settings.email_provider}")
 
 
+def _base_url_with_path(base_url: str, path: str) -> str:
+    if base_url.endswith("://"):
+        return f"{base_url}{path.lstrip('/')}"
+    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+
 def send_verification_email(to_email: str, token: str) -> str:
     link = f"{settings.frontend_base_url.rstrip('/')}/verify-email?token={token}"
     body = (
@@ -84,12 +91,12 @@ def send_verification_email(to_email: str, token: str) -> str:
 
 
 def send_password_reset_email(to_email: str, token: str) -> str:
-    link = f"{settings.frontend_base_url.rstrip('/')}/reset-password?token={token}"
+    link = f"{_base_url_with_path(settings.app_deep_link_base_url, 'reset-password')}?{urlencode({'token': token})}"
     body = (
         "We received a request to reset your Admitly password.\n\n"
-        "Reset your password by opening this link:\n"
+        "Tap this link on your phone to open Admitly and reset your password.\n"
         f"{link}\n\n"
-        "If the link does not work, paste this reset code into the app:\n"
+        "If the link does not open the app, copy and paste this reset code into the Reset Password screen.\n"
         f"{token}\n\n"
         f"This link and code expire in {settings.password_reset_token_exp_minutes} minutes.\n\n"
         "If you did not request a password reset, you can safely ignore this email."
