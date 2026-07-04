@@ -91,12 +91,12 @@ def send_verification_email(to_email: str, token: str) -> str:
 
 
 def send_password_reset_email(to_email: str, token: str) -> str:
-    link = f"{_base_url_with_path(settings.app_deep_link_base_url, 'reset-password')}?{urlencode({'token': token})}"
+    link = f"{_base_url_with_path(settings.frontend_base_url, 'reset-password')}?{urlencode({'token': token})}"
     body = (
         "We received a request to reset your Admitly password.\n\n"
         "Tap this link on your phone to open Admitly and reset your password.\n"
         f"{link}\n\n"
-        "If the link does not open the app, copy and paste this reset code into the Reset Password screen.\n"
+        "If the app does not open, copy and paste this reset code into the Reset Password screen.\n"
         f"{token}\n\n"
         f"This link and code expire in {settings.password_reset_token_exp_minutes} minutes.\n\n"
         "If you did not request a password reset, you can safely ignore this email."

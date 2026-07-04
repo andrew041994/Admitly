@@ -8,6 +8,7 @@ import { MessagingPage } from '../pages/MessagingPage';
 import { IntegrationsPage } from '../pages/IntegrationsPage';
 import { EventApprovalsPage } from '../pages/EventApprovalsPage';
 import { LoginPage } from '../pages/LoginPage';
+import { ResetPasswordRedirectPage } from '../pages/ResetPasswordRedirectPage';
 
 function RequireAdmin() {
   const session = getAdminSession();
@@ -20,6 +21,7 @@ export function AppRouter() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/reset-password" element={<ResetPasswordRedirectPage />} />
       <Route element={<RequireAdmin />}>
         <Route index element={<Navigate to="/support" replace />} />
         <Route path="/support" element={<SupportPage />} />
