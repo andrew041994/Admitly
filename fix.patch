@@ -1,9 +1,12 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/backend/.env.example b/backend/.env.example
-index 6bb68989d3e6a0fef8f7ac53e82dc90aec774469..7a0335a2b2f7ad6f60995093d01414feb08832f8 100644
+index 7a0335a2b2f7ad6f60995093d01414feb08832f8..add00c1882ae7e68a3040ffc0c89337cca51e66a 100644
 --- a/backend/.env.example
 +++ b/backend/.env.example
-@@ -4,42 +4,43 @@ ALLOW_DEV_HEADER_AUTH=false
+@@ -1,46 +1,49 @@
+ APP_NAME=Admitly API
+ ENV=development
+ ALLOW_DEV_HEADER_AUTH=false
  DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/admitly
  
  MMG_ENABLED=false
@@ -21,15 +24,19 @@ index 6bb68989d3e6a0fef8f7ac53e82dc90aec774469..7a0335a2b2f7ad6f60995093d01414fe
  ENABLE_DEV_TEST_CHECKOUT=true
  
  EMAIL_NOTIFICATIONS_ENABLED=false
- EMAIL_PROVIDER=noop
+-EMAIL_PROVIDER=noop
++# Recommended production provider: sendgrid. Supported: noop, mock, smtp, sendgrid.
++EMAIL_PROVIDER=sendgrid
  EMAIL_FROM_ADDRESS=
++SENDGRID_API_KEY=
++# Legacy SMTP settings are kept for backward compatibility, but are not recommended for production.
  SMTP_HOST=
  SMTP_PORT=587
  SMTP_USERNAME=
  SMTP_PASSWORD=
  SMTP_USE_TLS=true
  FRONTEND_BASE_URL=https://admitly.app
-+APP_DEEP_LINK_BASE_URL=admitly://
+ APP_DEEP_LINK_BASE_URL=admitly://
  PUSH_NOTIFICATIONS_ENABLED=false
  PUSH_PROVIDER=noop
  TICKET_PUBLIC_BASE_URL=https://admitly.app
@@ -48,10 +55,11 @@ index 6bb68989d3e6a0fef8f7ac53e82dc90aec774469..7a0335a2b2f7ad6f60995093d01414fe
  VERIFICATION_TOKEN_EXP_HOURS=24
  PASSWORD_RESET_TOKEN_EXP_MINUTES=60
 diff --git a/backend/app/core/config.py b/backend/app/core/config.py
-index 985bf8cc43bc79c20f3deefd960c04624907da77..d39e01cedf4bc3192dee20c1c1255ec39d9503f7 100644
+index d39e01cedf4bc3192dee20c1c1255ec39d9503f7..91a8ef620d40e110e32f6423083c8356cc9ea6f6 100644
 --- a/backend/app/core/config.py
 +++ b/backend/app/core/config.py
-@@ -14,50 +14,51 @@ class Settings(BaseSettings):
+@@ -13,50 +13,51 @@ class Settings(BaseSettings):
+ 
      mmg_enabled: bool = Field(default=False, alias="MMG_ENABLED")
      mmg_provider_mode: str = Field(default="mock", alias="MMG_PROVIDER_MODE")
      mmg_base_url: str | None = Field(default=None, alias="MMG_BASE_URL")
@@ -76,8 +84,9 @@ index 985bf8cc43bc79c20f3deefd960c04624907da77..d39e01cedf4bc3192dee20c1c1255ec3
      smtp_username: str | None = Field(default=None, alias="SMTP_USERNAME")
      smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD")
      smtp_use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
++    sendgrid_api_key: str | None = Field(default=None, alias="SENDGRID_API_KEY")
      frontend_base_url: str = Field(default="https://admitly.app", alias="FRONTEND_BASE_URL")
-+    app_deep_link_base_url: str = Field(default="admitly://", alias="APP_DEEP_LINK_BASE_URL")
+     app_deep_link_base_url: str = Field(default="admitly://", alias="APP_DEEP_LINK_BASE_URL")
  
      push_notifications_enabled: bool = Field(default=False, alias="PUSH_NOTIFICATIONS_ENABLED")
      push_provider: str = Field(default="noop", alias="PUSH_PROVIDER")
@@ -101,24 +110,27 @@ index 985bf8cc43bc79c20f3deefd960c04624907da77..d39e01cedf4bc3192dee20c1c1255ec3
      rate_limit_order_create_count: int = Field(default=8, alias="RATE_LIMIT_ORDER_CREATE_COUNT")
      rate_limit_order_create_window_seconds: int = Field(default=60, alias="RATE_LIMIT_ORDER_CREATE_WINDOW_SECONDS")
      rate_limit_payment_initiate_count: int = Field(default=6, alias="RATE_LIMIT_PAYMENT_INITIATE_COUNT")
-     rate_limit_payment_initiate_window_seconds: int = Field(default=60, alias="RATE_LIMIT_PAYMENT_INITIATE_WINDOW_SECONDS")
-     rate_limit_payment_submit_count: int = Field(default=6, alias="RATE_LIMIT_PAYMENT_SUBMIT_COUNT")
 diff --git a/backend/app/services/email.py b/backend/app/services/email.py
-index cadd404354d248eabe63a9d0d6fed5e0c5e58242..f977ca4a03281500f83f4af8874f273422181934 100644
+index 86cd05c55cc3cd3a9b12ef86d065bc9b3e4a9117..46e840e734218e73e353add110eaad82f74a88bc 100644
 --- a/backend/app/services/email.py
 +++ b/backend/app/services/email.py
-@@ -1,30 +1,31 @@
+@@ -1,96 +1,148 @@
  from __future__ import annotations
  
++import json
  import logging
  import smtplib
  from email.message import EmailMessage
-+from urllib.parse import urlencode
+ from urllib.parse import urlencode
++from urllib.request import Request, urlopen
  
  from app.core.config import settings
  
  logger = logging.getLogger(__name__)
  
++SENDGRID_MAIL_SEND_URL = "https://api.sendgrid.com/v3/mail/send"
++SENDGRID_TIMEOUT_SECONDS = 15
++
  
  class EmailConfigurationError(RuntimeError):
      """Raised when email delivery is enabled but required provider settings are missing."""
@@ -139,9 +151,69 @@ index cadd404354d248eabe63a9d0d6fed5e0c5e58242..f977ca4a03281500f83f4af8874f2734
      return settings.smtp_host, settings.smtp_port, settings.email_from_address
  
  
-@@ -48,50 +49,56 @@ def send_email(to_email: str, subject: str, body: str) -> str:
++def _require_sendgrid_config() -> tuple[str, str]:
++    missing: list[str] = []
++    if not settings.sendgrid_api_key:
++        missing.append("SENDGRID_API_KEY")
++    if not settings.email_from_address:
++        missing.append("EMAIL_FROM_ADDRESS")
++    if missing:
++        raise EmailConfigurationError(f"SendGrid email delivery is missing required setting(s): {', '.join(missing)}")
++    return settings.sendgrid_api_key, settings.email_from_address
++
++
++def _send_sendgrid_email(to_email: str, subject: str, body: str) -> str:
++    api_key, from_address = _require_sendgrid_config()
++    payload = {
++        "personalizations": [{"to": [{"email": to_email}]}],
++        "from": {"email": from_address},
++        "subject": subject,
++        "content": [{"type": "text/plain", "value": body}],
++    }
++    request = Request(
++        SENDGRID_MAIL_SEND_URL,
++        data=json.dumps(payload).encode("utf-8"),
++        headers={
++            "Authorization": f"Bearer {api_key}",
++            "Content-Type": "application/json",
++        },
++        method="POST",
++    )
++
++    try:
++        with urlopen(request, timeout=SENDGRID_TIMEOUT_SECONDS) as response:
++            status_code = response.getcode()
++    except Exception as exc:
++        status_code = getattr(exc, "code", None)
++        if status_code is not None:
++            raise EmailConfigurationError(f"SendGrid email delivery failed with status {status_code}") from exc
++        raise EmailConfigurationError("SendGrid email delivery failed") from exc
++
++    if 200 <= status_code < 300:
++        return "sent_sendgrid"
++    raise EmailConfigurationError(f"SendGrid email delivery failed with status {status_code}")
++
++
+ def send_email(to_email: str, subject: str, body: str) -> str:
+     """Send a plain-text email using the configured provider.
+ 
+     Return values are stable status strings so callers and tests can distinguish
+     skipped delivery from successful delivery without exposing secrets or tokens.
+     """
+     if not settings.email_notifications_enabled:
+         return "skipped_disabled"
+ 
+     provider = _provider()
+     if provider == "noop":
+         return "skipped_noop"
+ 
+     if provider == "mock":
+         logger.info(
+             "Mock email delivery accepted",
+-            extra={"email_provider": provider, "to_email": to_email, "subject": subject, "body_length": len(body)},
++            extra={"email_provider": provider, "subject": subject, "body_length": len(body)},
          )
-         logger.debug("Mock email body", extra={"email_provider": provider, "body": body})
+-        logger.debug("Mock email body", extra={"email_provider": provider, "body": body})
          return "sent_mock"
  
      if provider == "smtp":
@@ -162,15 +234,21 @@ index cadd404354d248eabe63a9d0d6fed5e0c5e58242..f977ca4a03281500f83f4af8874f2734
              smtp.send_message(message)
          return "sent_smtp"
  
-     raise EmailConfigurationError(f"Unsupported email provider: {settings.email_provider}")
+-    raise EmailConfigurationError(f"Unsupported email provider: {settings.email_provider}")
++    if provider == "sendgrid":
++        return _send_sendgrid_email(to_email, subject, body)
++
++    raise EmailConfigurationError(
++        f"Unsupported email provider: {settings.email_provider}. Supported providers: noop, mock, smtp, sendgrid"
++    )
  
  
-+def _base_url_with_path(base_url: str, path: str) -> str:
-+    if base_url.endswith("://"):
-+        return f"{base_url}{path.lstrip('/')}"
-+    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
-+
-+
+ def _base_url_with_path(base_url: str, path: str) -> str:
+     if base_url.endswith("://"):
+         return f"{base_url}{path.lstrip('/')}"
+     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+ 
+ 
  def send_verification_email(to_email: str, token: str) -> str:
      link = f"{settings.frontend_base_url.rstrip('/')}/verify-email?token={token}"
      body = (
@@ -185,27 +263,18 @@ index cadd404354d248eabe63a9d0d6fed5e0c5e58242..f977ca4a03281500f83f4af8874f2734
  
  
  def send_password_reset_email(to_email: str, token: str) -> str:
--    link = f"{settings.frontend_base_url.rstrip('/')}/reset-password?token={token}"
-+    link = f"{_base_url_with_path(settings.app_deep_link_base_url, 'reset-password')}?{urlencode({'token': token})}"
+     link = f"{_base_url_with_path(settings.frontend_base_url, 'reset-password')}?{urlencode({'token': token})}"
      body = (
          "We received a request to reset your Admitly password.\n\n"
--        "Reset your password by opening this link:\n"
-+        "Tap this link on your phone to open Admitly and reset your password.\n"
-         f"{link}\n\n"
--        "If the link does not work, paste this reset code into the app:\n"
-+        "If the link does not open the app, copy and paste this reset code into the Reset Password screen.\n"
-         f"{token}\n\n"
-         f"This link and code expire in {settings.password_reset_token_exp_minutes} minutes.\n\n"
-         "If you did not request a password reset, you can safely ignore this email."
-     )
-     return send_email(to_email, "Reset your Admitly password", body)
 diff --git a/backend/tests/test_auth_email_delivery.py b/backend/tests/test_auth_email_delivery.py
-index 9f001ed83db2dc3062d1c9e982cb02d8f51310dd..6cdc941477de90a2d4f88a848a1f77e0a7d7df88 100644
+index c31abd49c41b953c5d7c57cc0b6a9e91fa01dda6..519ad27974f97566ff481c010c0aa6949eb82d1c 100644
 --- a/backend/tests/test_auth_email_delivery.py
 +++ b/backend/tests/test_auth_email_delivery.py
-@@ -1,34 +1,35 @@
+@@ -1,27 +1,29 @@
  from __future__ import annotations
  
++import json
++
  import pytest
  from sqlalchemy.orm import Session
  
@@ -213,7 +282,7 @@ index 9f001ed83db2dc3062d1c9e982cb02d8f51310dd..6cdc941477de90a2d4f88a848a1f77e0
  from app.models import User
  from app.schemas.auth import ForgotPasswordRequest, RequestVerificationRequest
  from app.services.auth import register_user
-+from app.services import email as email_service
+ from app.services import email as email_service
  from app.services.email import EmailConfigurationError, send_email
  
  
@@ -231,353 +300,112 @@ index 9f001ed83db2dc3062d1c9e982cb02d8f51310dd..6cdc941477de90a2d4f88a848a1f77e0
      db.refresh(user)
      return user
  
- 
- def test_request_verification_for_existing_unverified_user_calls_email_sender(
-     db_session: Session, monkeypatch: pytest.MonkeyPatch
- ) -> None:
-     user = _seed_user(db_session, "verify")
-     calls: list[tuple[str, str]] = []
- 
-     def fake_send(to_email: str, token: str) -> str:
-@@ -103,25 +104,49 @@ def test_smtp_missing_config_raises_safe_error(monkeypatch: pytest.MonkeyPatch)
-     monkeypatch.setattr("app.services.email.settings.email_from_address", None)
- 
-     with pytest.raises(EmailConfigurationError) as exc:
-         send_email("user@example.com", "Subject", "secret-token-body")
- 
-     message = str(exc.value)
-     assert "SMTP_HOST" in message
-     assert "EMAIL_FROM_ADDRESS" in message
-     assert "secret-token-body" not in message
-     assert "user@example.com" not in message
- 
- 
- def test_smtp_missing_config_is_swallowed_by_auth_endpoint_for_existing_user(
-     db_session: Session, monkeypatch: pytest.MonkeyPatch
- ) -> None:
-     user = _seed_user(db_session, "smtp-safe")
- 
-     def fail_send(to_email: str, token: str) -> str:
-         raise EmailConfigurationError("SMTP email delivery is missing required setting(s): SMTP_HOST")
- 
-     monkeypatch.setattr(auth_api, "send_password_reset_email", fail_send)
- 
-     response = auth_api.forgot_password(ForgotPasswordRequest(email=user.email), db=db_session)
- 
+@@ -128,25 +130,105 @@ def test_smtp_missing_config_is_swallowed_by_auth_endpoint_for_existing_user(
      assert response.success is True
+ 
+ 
+ def test_password_reset_email_uses_clickable_web_link_and_plain_code_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+     sent: dict[str, str] = {}
+ 
+     def fake_send_email(to_email: str, subject: str, body: str) -> str:
+         sent["to_email"] = to_email
+         sent["subject"] = subject
+         sent["body"] = body
+         return "sent_mock"
+ 
+     monkeypatch.setattr(email_service.settings, "frontend_base_url", "https://admitlyevents.com")
+     monkeypatch.setattr(email_service, "send_email", fake_send_email)
+ 
+     status = email_service.send_password_reset_email("user@example.com", "reset-token-123")
+ 
+     assert status == "sent_mock"
+     assert sent["to_email"] == "user@example.com"
+     assert sent["subject"] == "Reset your Admitly password"
+     assert "https://admitlyevents.com/reset-password?token=reset-token-123" in sent["body"]
+     assert "Tap this link on your phone to open Admitly and reset your password." in sent["body"]
+     assert "If the app does not open, copy and paste this reset code into the Reset Password screen." in sent["body"]
+     assert "reset-token-123" in sent["body"]
+     assert "admitly://reset-password" not in sent["body"]
 +
 +
-+def test_password_reset_email_uses_mobile_deep_link_and_plain_code_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-+    sent: dict[str, str] = {}
++def test_sendgrid_missing_api_key_raises_safe_error(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setattr("app.services.email.settings.email_notifications_enabled", True)
++    monkeypatch.setattr("app.services.email.settings.email_provider", "sendgrid")
++    monkeypatch.setattr("app.services.email.settings.sendgrid_api_key", None)
++    monkeypatch.setattr("app.services.email.settings.email_from_address", "noreply@admitlyevents.com")
 +
-+    def fake_send_email(to_email: str, subject: str, body: str) -> str:
-+        sent["to_email"] = to_email
-+        sent["subject"] = subject
-+        sent["body"] = body
-+        return "sent_mock"
++    with pytest.raises(EmailConfigurationError) as exc:
++        send_email("user@example.com", "Subject", "secret-token-body")
 +
-+    monkeypatch.setattr(email_service.settings, "app_deep_link_base_url", "admitly://")
-+    monkeypatch.setattr(email_service, "send_email", fake_send_email)
++    message = str(exc.value)
++    assert "SENDGRID_API_KEY" in message
++    assert "secret-token-body" not in message
++    assert "user@example.com" not in message
 +
-+    status = email_service.send_password_reset_email("user@example.com", "reset-token-123")
 +
-+    assert status == "sent_mock"
-+    assert sent["to_email"] == "user@example.com"
-+    assert sent["subject"] == "Reset your Admitly password"
-+    assert "admitly://reset-password?token=reset-token-123" in sent["body"]
-+    assert "Tap this link on your phone to open Admitly and reset your password." in sent["body"]
-+    assert "If the link does not open the app, copy and paste this reset code into the Reset Password screen." in sent["body"]
-+    assert "reset-token-123" in sent["body"]
-+    assert "admitlyevents.com/reset-password" not in sent["body"]
-diff --git a/mobile/src/navigation/RootNavigator.tsx b/mobile/src/navigation/RootNavigator.tsx
-index 0746c7dc7f7d2a728fc19460f5757ef225862e7e..bf5e1e3ce446ccfdf242f722cc1f8c99bc41f1e7 100644
---- a/mobile/src/navigation/RootNavigator.tsx
-+++ b/mobile/src/navigation/RootNavigator.tsx
-@@ -1,101 +1,120 @@
--import { NavigationContainer, DarkTheme } from '@react-navigation/native';
-+import { NavigationContainer, DarkTheme, LinkingOptions } from '@react-navigation/native';
- import { createNativeStackNavigator } from '@react-navigation/native-stack';
- 
- import { useSession } from '../context/SessionContext';
- import { theme } from '../theme';
- import { useEffect, useState } from 'react';
- import { ApiError } from '../api/client';
- import { EventDiscoveryDetail, getDiscoverableEventDetail } from '../api/events';
- import { AppStackParamList, AuthStackParamList } from './types';
- import { BootScreen } from './screens/BootScreen';
- import { EventDetailScreen } from './screens/EventDetailScreen';
- import { CreateEventScreen } from './screens/CreateEventScreen';
- import { ForgotPasswordScreen } from './screens/ForgotPasswordScreen';
- import { HomeScreen } from './screens/HomeScreen';
- import { ResetPasswordScreen } from './screens/ResetPasswordScreen';
- import { SignInScreen } from './screens/SignInScreen';
- import { SignUpScreen } from './screens/SignUpScreen';
- import { PurchaseResultScreen } from './screens/PurchaseResultScreen';
- import { MmgAgentCheckoutScreen } from './screens/MmgAgentCheckoutScreen';
- import { MyTicketsScreen } from './screens/MyTicketsScreen';
- import { TicketDetailScreen } from './screens/TicketDetailScreen';
- import { CheckoutMethodScreen } from './screens/CheckoutMethodScreen';
- import { TicketSelectionScreen } from './screens/TicketSelectionScreen';
- import { ScannerScreen } from './screens/ScannerScreen';
- import { MyEventsScreen } from './screens/MyEventsScreen';
- import { OrganizerDashboardScreen } from './screens/OrganizerDashboardScreen';
- import { ProfileScreen } from './screens/ProfileScreen';
- import { StaffManagementScreen } from './screens/StaffManagementScreen';
- import { StaffEventsScreen } from './screens/StaffEventsScreen';
- 
- const AuthStack = createNativeStackNavigator<AuthStackParamList>();
- const AppStack = createNativeStackNavigator<AppStackParamList>();
- 
-+const linking: LinkingOptions<AuthStackParamList> = {
-+  prefixes: ['admitly://'],
-+  config: {
-+    screens: {
-+      SignIn: 'sign-in',
-+      SignUp: 'sign-up',
-+      ForgotPassword: 'forgot-password',
-+      ResetPassword: {
-+        path: 'reset-password',
-+        parse: {
-+          token: (token: string) => token,
-+        },
-+      },
-+    },
-+  },
-+};
++def test_sendgrid_missing_from_address_raises_safe_error(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setattr("app.services.email.settings.email_notifications_enabled", True)
++    monkeypatch.setattr("app.services.email.settings.email_provider", "sendgrid")
++    monkeypatch.setattr("app.services.email.settings.sendgrid_api_key", "SG.secret")
++    monkeypatch.setattr("app.services.email.settings.email_from_address", None)
 +
- const navTheme = {
-   ...DarkTheme,
-   colors: {
-     ...DarkTheme.colors,
-     background: theme.colors.background,
-     card: theme.colors.surface,
-     text: theme.colors.textPrimary,
-     border: theme.colors.border,
-     primary: theme.colors.primary,
-   },
- };
- 
- function AuthNavigator() {
-   return (
-     <AuthStack.Navigator
-       initialRouteName="SignIn"
-       screenOptions={{
-         headerStyle: { backgroundColor: theme.colors.surface },
-         headerTintColor: theme.colors.primary,
-         contentStyle: { backgroundColor: theme.colors.background },
-       }}
-     >
-       <AuthStack.Screen name="SignIn" options={{ headerShown: false }}>
-         {({ navigation }) => (
-           <SignInScreen
-             onGoToSignUp={() => navigation.navigate('SignUp')}
-             onGoToForgotPassword={() => navigation.navigate('ForgotPassword')}
-           />
-         )}
-       </AuthStack.Screen>
-       <AuthStack.Screen name="SignUp" options={{ headerShown: false }}>
-         {({ navigation }) => <SignUpScreen onGoToSignIn={() => navigation.navigate('SignIn')} />}
-       </AuthStack.Screen>
-       <AuthStack.Screen name="ForgotPassword" options={{ headerShown: false }}>
-         {({ navigation }) => (
-           <ForgotPasswordScreen
-             onGoToSignIn={() => navigation.navigate('SignIn')}
-             onGoToResetPassword={() => navigation.navigate('ResetPassword')}
-           />
-         )}
-       </AuthStack.Screen>
-       <AuthStack.Screen name="ResetPassword" options={{ headerShown: false }}>
--        {({ navigation }) => <ResetPasswordScreen onGoToSignIn={() => navigation.navigate('SignIn')} />}
-+        {({ navigation, route }) => (
-+          <ResetPasswordScreen initialToken={route.params?.token} onGoToSignIn={() => navigation.navigate('SignIn')} />
-+        )}
-       </AuthStack.Screen>
-     </AuthStack.Navigator>
-   );
- }
- 
- function TicketSelectionRoute({ eventId, onOrderCreated }: { eventId: number; onOrderCreated: (orderId: number) => void }) {
-   const [event, setEvent] = useState<EventDiscoveryDetail | null>(null);
- 
-   useEffect(() => {
-     getDiscoverableEventDetail(eventId).then(setEvent).catch((err) => {
-       const message = err instanceof ApiError ? err.message : 'Unable to load ticket tiers.';
-       throw new Error(message);
-     });
-   }, [eventId]);
- 
-   if (!event) return <BootScreen />;
-   return <TicketSelectionScreen event={event} onOrderCreated={onOrderCreated} />;
- }
- 
- function SignedInNavigator() {
-   const { signOut, user } = useSession();
-   const canAccessScanner = Boolean(user);
- 
-   return (
-     <AppStack.Navigator
-@@ -189,30 +208,30 @@ function SignedInNavigator() {
-       <AppStack.Screen name="StaffEvents" options={{ title: 'Events I’m Working' }}>
-         {({ navigation }) => (
-           <StaffEventsScreen
-             onOpenScanner={(eventId, eventTitle) => navigation.navigate('Scanner', { eventId, eventTitle })}
-           />
-         )}
-       </AppStack.Screen>
-       <AppStack.Screen name="CreateEvent" options={{ title: 'Create Event' }}>
-         {({ navigation }) => <CreateEventScreen onCreated={(eventId) => navigation.replace('OrganizerDashboard', { eventId })} />}
-       </AppStack.Screen>
-       <AppStack.Screen name="MyEvents" options={{ title: 'My Events' }}>
-         {({ navigation }) => <MyEventsScreen onOpenEvent={(eventId) => navigation.navigate('OrganizerDashboard', { eventId })} />}
-       </AppStack.Screen>
-       <AppStack.Screen name="StaffManagement" component={StaffManagementScreen} options={{ title: 'Staff Management' }} />
-       <AppStack.Screen name="OrganizerDashboard" options={{ title: 'Event Dashboard' }}>
-         {({ route }) => <OrganizerDashboardScreen eventId={route.params.eventId} />}
-       </AppStack.Screen>
-     </AppStack.Navigator>
-   );
- }
- 
- export function RootNavigator() {
-   const { state } = useSession();
- 
-   return (
--    <NavigationContainer theme={navTheme}>
-+    <NavigationContainer theme={navTheme} linking={linking}>
-       {state === 'booting' ? <BootScreen /> : state === 'signedOut' ? <AuthNavigator /> : <SignedInNavigator />}
-     </NavigationContainer>
-   );
- }
-diff --git a/mobile/src/navigation/screens/ResetPasswordScreen.tsx b/mobile/src/navigation/screens/ResetPasswordScreen.tsx
-index 0eea03e13150e631b90bb8c0abef4a3003a6a647..881ed402345278ec8a6983be7f59bf20cf60fd63 100644
---- a/mobile/src/navigation/screens/ResetPasswordScreen.tsx
-+++ b/mobile/src/navigation/screens/ResetPasswordScreen.tsx
-@@ -1,78 +1,90 @@
--import { useState } from 'react';
-+import { useEffect, useRef, useState } from 'react';
- import { Text, TouchableOpacity } from 'react-native';
- 
- import { ThemedButton } from '../../components/ThemedButton';
- import { getErrorMessage, useSession } from '../../context/SessionContext';
- import { theme } from '../../theme';
- import { AuthError, AuthInput, AuthLink, AuthScreenLayout, AuthSuccess } from './AuthScreenLayout';
- 
- type ResetPasswordScreenProps = {
-+  initialToken?: string;
-   onGoToSignIn: () => void;
- };
- 
--export function ResetPasswordScreen({ onGoToSignIn }: ResetPasswordScreenProps) {
-+export function ResetPasswordScreen({ initialToken, onGoToSignIn }: ResetPasswordScreenProps) {
-   const { resetPassword } = useSession();
--  const [token, setToken] = useState('');
-+  const hasEditedToken = useRef(false);
-+  const [token, setToken] = useState(initialToken ?? '');
-   const [newPassword, setNewPassword] = useState('');
-   const [confirmPassword, setConfirmPassword] = useState('');
-   const [showPassword, setShowPassword] = useState(false);
-   const [submitting, setSubmitting] = useState(false);
-   const [error, setError] = useState<string | null>(null);
-   const [success, setSuccess] = useState<string | null>(null);
- 
-+  useEffect(() => {
-+    if (initialToken && !hasEditedToken.current) {
-+      setToken(initialToken);
++    with pytest.raises(EmailConfigurationError) as exc:
++        send_email("user@example.com", "Subject", "secret-token-body")
++
++    message = str(exc.value)
++    assert "EMAIL_FROM_ADDRESS" in message
++    assert "SG.secret" not in message
++    assert "secret-token-body" not in message
++    assert "user@example.com" not in message
++
++
++def test_sendgrid_provider_sends_expected_request_payload(monkeypatch: pytest.MonkeyPatch) -> None:
++    captured: dict[str, object] = {}
++
++    class FakeResponse:
++        def __enter__(self) -> "FakeResponse":
++            return self
++
++        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
++            return None
++
++        def getcode(self) -> int:
++            return 202
++
++    def fake_urlopen(request: object, timeout: int) -> FakeResponse:
++        captured["url"] = request.full_url
++        captured["method"] = request.get_method()
++        captured["headers"] = dict(request.header_items())
++        captured["payload"] = json.loads(request.data.decode("utf-8"))
++        captured["timeout"] = timeout
++        return FakeResponse()
++
++    def fail_smtp(*args: object, **kwargs: object) -> None:
++        raise AssertionError("SMTP should not be used for SendGrid delivery")
++
++    monkeypatch.setattr("app.services.email.settings.email_notifications_enabled", True)
++    monkeypatch.setattr("app.services.email.settings.email_provider", "sendgrid")
++    monkeypatch.setattr("app.services.email.settings.sendgrid_api_key", "SG.secret")
++    monkeypatch.setattr("app.services.email.settings.email_from_address", "noreply@admitlyevents.com")
++    monkeypatch.setattr(email_service, "urlopen", fake_urlopen)
++    monkeypatch.setattr(email_service.smtplib, "SMTP", fail_smtp)
++
++    status = send_email("user@example.com", "Subject", "plain body")
++
++    assert status == "sent_sendgrid"
++    assert captured["url"] == "https://api.sendgrid.com/v3/mail/send"
++    assert captured["method"] == "POST"
++    assert captured["timeout"] == 15
++    assert captured["headers"] == {
++        "Authorization": "Bearer SG.secret",
++        "Content-type": "application/json",
 +    }
-+  }, [initialToken]);
-+
-+  function handleTokenChange(value: string) {
-+    hasEditedToken.current = true;
-+    setToken(value);
-+  }
-+
-   async function handleSubmit() {
-     if (!token.trim() || !newPassword || !confirmPassword) {
-       setError('Please complete all fields.');
-       return;
-     }
- 
-     if (newPassword !== confirmPassword) {
-       setError('Passwords do not match.');
-       return;
-     }
- 
-     setSubmitting(true);
-     setError(null);
-     setSuccess(null);
- 
-     try {
--      // TODO(phase-3): support token prefill from deep-link query params when deep linking is enabled.
-       await resetPassword(token, newPassword);
-       setSuccess('Password reset successful. You can now sign in with your new password.');
-     } catch (err) {
-       setError(getErrorMessage(err));
-     } finally {
-       setSubmitting(false);
-     }
-   }
- 
-   return (
-     <AuthScreenLayout title="Reset Password" subtitle="Enter your reset token and choose a new password.">
-       <AuthInput
-         value={token}
--        onChangeText={setToken}
-+        onChangeText={handleTokenChange}
-         placeholder="Reset token"
-         autoCapitalize="none"
-         autoComplete="one-time-code"
-         textContentType="oneTimeCode"
-       />
-       <AuthInput
-         value={newPassword}
-         onChangeText={setNewPassword}
-         placeholder="New password"
-         secureTextEntry={!showPassword}
-         autoComplete="password-new"
-         textContentType="newPassword"
-       />
-       <AuthInput
-         value={confirmPassword}
-         onChangeText={setConfirmPassword}
-         placeholder="Confirm new password"
-         secureTextEntry={!showPassword}
-         autoComplete="password-new"
-         textContentType="newPassword"
-       />
- 
-       <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)}>
-         <Text style={{ color: theme.colors.primary, fontWeight: '600' }}>
-           {showPassword ? 'Hide passwords' : 'Show passwords'}
-diff --git a/mobile/src/navigation/types.ts b/mobile/src/navigation/types.ts
-index c34e360d8e5a9cdf6014e5044fee0454cbd390be..8923db907db8ba54a42a58a0f33532deed61851e 100644
---- a/mobile/src/navigation/types.ts
-+++ b/mobile/src/navigation/types.ts
-@@ -1,24 +1,24 @@
- export type AuthStackParamList = {
-   SignIn: undefined;
-   SignUp: undefined;
-   ForgotPassword: undefined;
--  ResetPassword: undefined;
-+  ResetPassword: { token?: string } | undefined;
- };
- 
- export type AppStackParamList = {
-   Home: undefined;
-   EventDetail: { eventId: number };
-   TicketSelection: { eventId: number };
-   CheckoutMethod: { eventId: number; orderId: number };
-   MmgAgentCheckout: { eventId: number; orderId: number; referenceCode: string };
-   PurchaseResult: { eventId: number; orderId: number; title: string; message: string };
-   MyTickets: undefined;
-   TicketDetail: { ticketId: number };
-   Scanner: { eventId: number; eventTitle: string };
-   Profile: undefined;
-   StaffEvents: undefined;
-   CreateEvent: undefined;
-   MyEvents: undefined;
-   StaffManagement: undefined;
-   OrganizerDashboard: { eventId: number };
- };
++    assert captured["payload"] == {
++        "personalizations": [{"to": [{"email": "user@example.com"}]}],
++        "from": {"email": "noreply@admitlyevents.com"},
++        "subject": "Subject",
++        "content": [{"type": "text/plain", "value": "plain body"}],
++    }
  
 EOF
 )

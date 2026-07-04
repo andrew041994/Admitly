@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import json
 import logging
 import smtplib
 from email.message import EmailMessage
 from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+SENDGRID_MAIL_SEND_URL = "https://api.sendgrid.com/v3/mail/send"
+SENDGRID_TIMEOUT_SECONDS = 15
 
 
 class EmailConfigurationError(RuntimeError):
@@ -29,6 +34,49 @@ def _require_smtp_config() -> tuple[str, int, str]:
     return settings.smtp_host, settings.smtp_port, settings.email_from_address
 
 
+def _require_sendgrid_config() -> tuple[str, str]:
+    missing: list[str] = []
+    if not settings.sendgrid_api_key:
+        missing.append("SENDGRID_API_KEY")
+    if not settings.email_from_address:
+        missing.append("EMAIL_FROM_ADDRESS")
+    if missing:
+        raise EmailConfigurationError(f"SendGrid email delivery is missing required setting(s): {', '.join(missing)}")
+    return settings.sendgrid_api_key, settings.email_from_address
+
+
+def _send_sendgrid_email(to_email: str, subject: str, body: str) -> str:
+    api_key, from_address = _require_sendgrid_config()
+    payload = {
+        "personalizations": [{"to": [{"email": to_email}]}],
+        "from": {"email": from_address},
+        "subject": subject,
+        "content": [{"type": "text/plain", "value": body}],
+    }
+    request = Request(
+        SENDGRID_MAIL_SEND_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=SENDGRID_TIMEOUT_SECONDS) as response:
+            status_code = response.getcode()
+    except Exception as exc:
+        status_code = getattr(exc, "code", None)
+        if status_code is not None:
+            raise EmailConfigurationError(f"SendGrid email delivery failed with status {status_code}") from exc
+        raise EmailConfigurationError("SendGrid email delivery failed") from exc
+
+    if 200 <= status_code < 300:
+        return "sent_sendgrid"
+    raise EmailConfigurationError(f"SendGrid email delivery failed with status {status_code}")
+
+
 def send_email(to_email: str, subject: str, body: str) -> str:
     """Send a plain-text email using the configured provider.
 
@@ -45,9 +93,8 @@ def send_email(to_email: str, subject: str, body: str) -> str:
     if provider == "mock":
         logger.info(
             "Mock email delivery accepted",
-            extra={"email_provider": provider, "to_email": to_email, "subject": subject, "body_length": len(body)},
+            extra={"email_provider": provider, "subject": subject, "body_length": len(body)},
         )
-        logger.debug("Mock email body", extra={"email_provider": provider, "body": body})
         return "sent_mock"
 
     if provider == "smtp":
@@ -68,7 +115,12 @@ def send_email(to_email: str, subject: str, body: str) -> str:
             smtp.send_message(message)
         return "sent_smtp"
 
-    raise EmailConfigurationError(f"Unsupported email provider: {settings.email_provider}")
+    if provider == "sendgrid":
+        return _send_sendgrid_email(to_email, subject, body)
+
+    raise EmailConfigurationError(
+        f"Unsupported email provider: {settings.email_provider}. Supported providers: noop, mock, smtp, sendgrid"
+    )
 
 
 def _base_url_with_path(base_url: str, path: str) -> str:

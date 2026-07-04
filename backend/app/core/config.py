@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     smtp_username: str | None = Field(default=None, alias="SMTP_USERNAME")
     smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD")
     smtp_use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
+    sendgrid_api_key: str | None = Field(default=None, alias="SENDGRID_API_KEY")
     frontend_base_url: str = Field(default="https://admitly.app", alias="FRONTEND_BASE_URL")
     app_deep_link_base_url: str = Field(default="admitly://", alias="APP_DEEP_LINK_BASE_URL")
 

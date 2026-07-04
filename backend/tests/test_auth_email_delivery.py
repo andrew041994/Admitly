@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -150,3 +152,83 @@ def test_password_reset_email_uses_clickable_web_link_and_plain_code_fallback(mo
     assert "If the app does not open, copy and paste this reset code into the Reset Password screen." in sent["body"]
     assert "reset-token-123" in sent["body"]
     assert "admitly://reset-password" not in sent["body"]
+
+
+def test_sendgrid_missing_api_key_raises_safe_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.email.settings.email_notifications_enabled", True)
+    monkeypatch.setattr("app.services.email.settings.email_provider", "sendgrid")
+    monkeypatch.setattr("app.services.email.settings.sendgrid_api_key", None)
+    monkeypatch.setattr("app.services.email.settings.email_from_address", "noreply@admitlyevents.com")
+
+    with pytest.raises(EmailConfigurationError) as exc:
+        send_email("user@example.com", "Subject", "secret-token-body")
+
+    message = str(exc.value)
+    assert "SENDGRID_API_KEY" in message
+    assert "secret-token-body" not in message
+    assert "user@example.com" not in message
+
+
+def test_sendgrid_missing_from_address_raises_safe_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.email.settings.email_notifications_enabled", True)
+    monkeypatch.setattr("app.services.email.settings.email_provider", "sendgrid")
+    monkeypatch.setattr("app.services.email.settings.sendgrid_api_key", "SG.secret")
+    monkeypatch.setattr("app.services.email.settings.email_from_address", None)
+
+    with pytest.raises(EmailConfigurationError) as exc:
+        send_email("user@example.com", "Subject", "secret-token-body")
+
+    message = str(exc.value)
+    assert "EMAIL_FROM_ADDRESS" in message
+    assert "SG.secret" not in message
+    assert "secret-token-body" not in message
+    assert "user@example.com" not in message
+
+
+def test_sendgrid_provider_sends_expected_request_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def getcode(self) -> int:
+            return 202
+
+    def fake_urlopen(request: object, timeout: int) -> FakeResponse:
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["headers"] = dict(request.header_items())
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    def fail_smtp(*args: object, **kwargs: object) -> None:
+        raise AssertionError("SMTP should not be used for SendGrid delivery")
+
+    monkeypatch.setattr("app.services.email.settings.email_notifications_enabled", True)
+    monkeypatch.setattr("app.services.email.settings.email_provider", "sendgrid")
+    monkeypatch.setattr("app.services.email.settings.sendgrid_api_key", "SG.secret")
+    monkeypatch.setattr("app.services.email.settings.email_from_address", "noreply@admitlyevents.com")
+    monkeypatch.setattr(email_service, "urlopen", fake_urlopen)
+    monkeypatch.setattr(email_service.smtplib, "SMTP", fail_smtp)
+
+    status = send_email("user@example.com", "Subject", "plain body")
+
+    assert status == "sent_sendgrid"
+    assert captured["url"] == "https://api.sendgrid.com/v3/mail/send"
+    assert captured["method"] == "POST"
+    assert captured["timeout"] == 15
+    assert captured["headers"] == {
+        "Authorization": "Bearer SG.secret",
+        "Content-type": "application/json",
+    }
+    assert captured["payload"] == {
+        "personalizations": [{"to": [{"email": "user@example.com"}]}],
+        "from": {"email": "noreply@admitlyevents.com"},
+        "subject": "Subject",
+        "content": [{"type": "text/plain", "value": "plain body"}],
+    }
