@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
@@ -21,6 +23,7 @@ from app.schemas.auth import (
     VerifyRequest,
     VerifyResponse,
 )
+from app.services.email import send_password_reset_email, send_verification_email
 from app.services.auth import (
     authenticate_user,
     generate_email_verification_token,
@@ -32,6 +35,8 @@ from app.services.auth import (
     verify_email_token,
 )
 from app.core.security import normalize_email
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -124,8 +129,18 @@ def request_verification(payload: RequestVerificationRequest, db: Session = Depe
     email = normalize_email(payload.email)
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if user is not None and user.is_active and not user.is_verified:
-        # Token generation is in place; email delivery wiring can be plugged in later.
-        generate_email_verification_token(db, user=user)
+        token = generate_email_verification_token(db, user=user)
+        try:
+            delivery_status = send_verification_email(user.email, token)
+            logger.info(
+                "Verification email delivery processed",
+                extra={"user_id": user.id, "delivery_status": delivery_status},
+            )
+        except Exception:
+            logger.exception(
+                "Verification email delivery failed",
+                extra={"user_id": user.id, "email_provider": "configured"},
+            )
     return VerifyResponse(success=True)
 
 
@@ -142,8 +157,18 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     email = normalize_email(payload.email)
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if user is not None and user.is_active:
-        # Token generation is in place; email delivery wiring can be plugged in later.
-        generate_password_reset_token(db, user=user)
+        token = generate_password_reset_token(db, user=user)
+        try:
+            delivery_status = send_password_reset_email(user.email, token)
+            logger.info(
+                "Password reset email delivery processed",
+                extra={"user_id": user.id, "delivery_status": delivery_status},
+            )
+        except Exception:
+            logger.exception(
+                "Password reset email delivery failed",
+                extra={"user_id": user.id, "email_provider": "configured"},
+            )
     return VerifyResponse(success=True)
 
 
