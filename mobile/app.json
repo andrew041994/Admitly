@@ -33,7 +33,8 @@
         {
           "cameraPermission": "Admitly uses your camera to scan ticket QR codes for event check-in."
         }
-      ]
+      ],
+      "expo-secure-store"
     ]
   }
 }

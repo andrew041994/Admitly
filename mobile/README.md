@@ -31,7 +31,7 @@ Fallback config is defined in `app.json` under `expo.extra.apiBaseUrl`.
 - Expo TypeScript app shell
 - EAS build scaffolding (`eas.json`)
 - Root navigation for boot/signed-out/signed-in states
-- Session bootstrap scaffold with AsyncStorage
+- Session bootstrap with SecureStore-backed authentication credentials
 - API client and env configuration scaffolding
 - Admitly black/gold theme tokens and reusable UI primitives
 - Branded placeholder screens for upcoming phases

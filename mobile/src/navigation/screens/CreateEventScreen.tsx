@@ -1,11 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import type { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError } from '../../api/client';
 import { createEvent, searchVenues, uploadEventCoverImage, VenueSearchItem } from '../../api/organizer';
+import {
+  applyDateSelection,
+  applyTimeSelection,
+  getConfirmedPickerValue,
+  isEndAfterStart,
+} from '../../features/events/createEventDateTime';
+import type { DateTimeField } from '../../features/events/createEventDateTime';
 import { theme } from '../../theme';
 
 type TierFormState = {
@@ -72,11 +80,6 @@ const CATEGORY_OPTIONS = [
   'Other',
 ] as const;
 
-type DateTimeField = {
-  date: Date | null;
-  time: Date | null;
-};
-
 type DateTimeFieldKey = 'start_at' | 'end_at' | 'sales_start_at' | 'sales_end_at';
 
 type PickerField =
@@ -94,7 +97,6 @@ type PickerSession = {
   field: PickerField;
   mode: 'date' | 'time';
   value: Date;
-  selectedDate?: Date;
 } | null;
 
 const formatDate = (value: Date) =>
@@ -149,6 +151,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const [salesEndAt, setSalesEndAt] = useState<DateTimeField>({ date: null, time: null });
   const [pickerSession, setPickerSession] = useState<PickerSession>(null);
   const [pickerDraftValue, setPickerDraftValue] = useState<Date>(new Date());
+  const activePickerSessionRef = useRef<Exclude<PickerSession, null> | null>(null);
   const [venueName, setVenueName] = useState('');
   const [addressText, setAddressText] = useState('');
   const [selectedVenueId, setSelectedVenueId] = useState<number | null>(null);
@@ -271,10 +274,99 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
     closeCategoryPicker();
   };
 
-  const openPicker = (nextSession: Exclude<PickerSession, null>) => {
+  const getTimePickerSession = (session: Exclude<PickerSession, null>, selectedDate: Date) => {
+    const timeValue =
+      session.field === 'start_date'
+        ? startAt.time ?? selectedDate
+        : session.field === 'end_date'
+          ? endAt.time ?? startAt.time ?? selectedDate
+          : session.field === 'sales_start_date'
+            ? salesStartAt.time ?? selectedDate
+            : salesEndAt.time ?? selectedDate;
+
+    const field: PickerField =
+      session.field === 'start_date'
+        ? 'start_time'
+        : session.field === 'end_date'
+          ? 'end_time'
+          : session.field === 'sales_start_date'
+            ? 'sales_start_time'
+            : 'sales_end_time';
+
+    return { field, mode: 'time' as const, value: timeValue };
+  };
+
+  const applyPickerValue = (session: Exclude<PickerSession, null>, selectedValue: Date) => {
+    if (activePickerSessionRef.current !== session) return;
+    activePickerSessionRef.current = null;
+
+    if (session.field === 'doors_open_time') {
+      setDoorsOpenAt(new Date(selectedValue.getTime()));
+      setPickerSession(null);
+      return;
+    }
+
+    if (session.mode === 'date') {
+      if (session.field === 'start_date') {
+        setStartAt((current) => applyDateSelection(current, selectedValue));
+      } else if (session.field === 'end_date') {
+        setEndAt((current) => applyDateSelection(current, selectedValue));
+      } else if (session.field === 'sales_start_date') {
+        setSalesStartAt((current) => applyDateSelection(current, selectedValue));
+      } else if (session.field === 'sales_end_date') {
+        setSalesEndAt((current) => applyDateSelection(current, selectedValue));
+      }
+
+      openPicker(getTimePickerSession(session, selectedValue));
+      return;
+    }
+
+    if (session.field === 'start_time') {
+      setStartAt((current) => applyTimeSelection(current, selectedValue));
+    } else if (session.field === 'end_time') {
+      setEndAt((current) => applyTimeSelection(current, selectedValue));
+    } else if (session.field === 'sales_start_time') {
+      setSalesStartAt((current) => applyTimeSelection(current, selectedValue));
+    } else if (session.field === 'sales_end_time') {
+      setSalesEndAt((current) => applyTimeSelection(current, selectedValue));
+    }
+
+    setPickerSession(null);
+  };
+
+  const handlePickerChange = (
+    session: Exclude<PickerSession, null>,
+    event: DateTimePickerEvent,
+    value?: Date,
+  ) => {
+    if (activePickerSessionRef.current !== session) return;
+    const confirmedValue = getConfirmedPickerValue(event.type, value);
+    if (!confirmedValue) {
+      activePickerSessionRef.current = null;
+      setPickerSession(null);
+      return;
+    }
+
+    if (Platform.OS === 'android') {
+      applyPickerValue(session, confirmedValue);
+    } else {
+      setPickerDraftValue(confirmedValue);
+    }
+  };
+
+  function openPicker(nextSession: Exclude<PickerSession, null>) {
+    activePickerSessionRef.current = nextSession;
     setPickerDraftValue(nextSession.value);
     setPickerSession(nextSession);
-  };
+
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: nextSession.value,
+        mode: nextSession.mode,
+        onChange: (event, value) => handlePickerChange(nextSession, event, value),
+      });
+    }
+  }
 
   const startDateTimeFlow = (field: DateTimeFieldKey) => {
     const now = new Date();
@@ -294,69 +386,19 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   };
 
   const cancelPickerSelection = () => {
+    activePickerSessionRef.current = null;
     setPickerSession(null);
   };
 
   const completePickerSelection = () => {
     if (!pickerSession) return;
-
-    if (pickerSession.field === 'doors_open_time') {
-      setDoorsOpenAt(pickerDraftValue);
-      setPickerSession(null);
-      return;
-    }
-
-    if (pickerSession.mode === 'date') {
-      const nextTimeValue =
-        pickerSession.field === 'start_date'
-          ? startAt.time ?? pickerDraftValue
-          : pickerSession.field === 'end_date'
-            ? endAt.time ?? startAt.time ?? pickerDraftValue
-            : pickerSession.field === 'sales_start_date'
-              ? salesStartAt.time ?? pickerDraftValue
-              : salesEndAt.time ?? pickerDraftValue;
-
-      const nextField: PickerField =
-        pickerSession.field === 'start_date'
-          ? 'start_time'
-          : pickerSession.field === 'end_date'
-            ? 'end_time'
-            : pickerSession.field === 'sales_start_date'
-              ? 'sales_start_time'
-              : 'sales_end_time';
-
-      setPickerSession({
-        field: nextField,
-        mode: 'time',
-        value: nextTimeValue,
-        selectedDate: pickerDraftValue,
-      });
-      setPickerDraftValue(nextTimeValue);
-      return;
-    }
-
-    const finalDate = pickerSession.selectedDate;
-    if (!finalDate) {
-      setPickerSession(null);
-      return;
-    }
-
-    if (pickerSession.field === 'start_time') {
-      setStartAt({ date: finalDate, time: pickerDraftValue });
-    } else if (pickerSession.field === 'end_time') {
-      setEndAt({ date: finalDate, time: pickerDraftValue });
-    } else if (pickerSession.field === 'sales_start_time') {
-      setSalesStartAt({ date: finalDate, time: pickerDraftValue });
-    } else if (pickerSession.field === 'sales_end_time') {
-      setSalesEndAt({ date: finalDate, time: pickerDraftValue });
-    }
-
-    setPickerSession(null);
+    applyPickerValue(pickerSession, pickerDraftValue);
   };
 
   const submitValidationError = useMemo(() => {
     if (!title.trim()) return 'Event title is required.';
     if (!startAt.date || !startAt.time || !endAt.date || !endAt.time) return 'Start and end date/time are required.';
+    if (!isEndAfterStart(startAt, endAt)) return 'End date/time must be after start date/time.';
     if (!venueName.trim()) return 'Venue name is required for MVP event creation.';
     if (tiers.length < 1) return 'At least one ticket tier is required.';
 
@@ -656,7 +698,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {pickerSession ? (
+      {pickerSession && Platform.OS !== 'android' ? (
         <Modal transparent animationType="fade" visible onRequestClose={cancelPickerSelection}>
           <View style={styles.modalBackdrop}>
             <Pressable style={StyleSheet.absoluteFill} onPress={cancelPickerSelection} />
@@ -677,9 +719,7 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
                 <DateTimePicker
                   value={pickerDraftValue}
                   mode={pickerSession.mode}
-                  onChange={(_, date) => {
-                    if (date) setPickerDraftValue(date);
-                  }}
+                  onChange={(event, date) => handlePickerChange(pickerSession, event, date)}
                 />
               </View>
             </View>

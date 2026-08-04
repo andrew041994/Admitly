@@ -1,43 +1,33 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
-import { storageKeys } from './keys';
+import { createAuthStorage, StoredSession } from './authStorageCore';
+import { legacyStorageKeys, secureStorageKeys } from './keys';
 
-export type StoredSession = {
-  accessToken: string;
-  refreshToken: string | null;
-};
+const authStorage = createAuthStorage({
+  secureStorage: {
+    getItem: SecureStore.getItemAsync,
+    setItem: SecureStore.setItemAsync,
+    removeItem: SecureStore.deleteItemAsync,
+  },
+  legacyStorage: {
+    getItem: AsyncStorage.getItem,
+    removeItem: AsyncStorage.removeItem,
+  },
+  keys: {
+    secureAccessToken: secureStorageKeys.accessToken,
+    secureRefreshToken: secureStorageKeys.refreshToken,
+    legacyAccessToken: legacyStorageKeys.sessionToken,
+    legacyRefreshToken: legacyStorageKeys.refreshToken,
+  },
+});
 
-export async function getStoredSession(): Promise<StoredSession | null> {
-  const [accessToken, refreshToken] = await Promise.all([
-    AsyncStorage.getItem(storageKeys.sessionToken),
-    AsyncStorage.getItem(storageKeys.refreshToken),
-  ]);
-
-  if (!accessToken) {
-    return null;
-  }
-
-  return {
-    accessToken,
-    refreshToken,
-  };
-}
-
-export async function setStoredSession(session: StoredSession): Promise<void> {
-  const writes: Array<Promise<void>> = [AsyncStorage.setItem(storageKeys.sessionToken, session.accessToken)];
-
-  if (session.refreshToken) {
-    writes.push(AsyncStorage.setItem(storageKeys.refreshToken, session.refreshToken));
-  } else {
-    writes.push(AsyncStorage.removeItem(storageKeys.refreshToken));
-  }
-
-  await Promise.all(writes);
-}
-
-export async function clearStoredSession(): Promise<void> {
-  await Promise.all([
-    AsyncStorage.removeItem(storageKeys.sessionToken),
-    AsyncStorage.removeItem(storageKeys.refreshToken),
-  ]);
-}
+export type { StoredSession };
+export const getAccessToken = authStorage.getAccessToken;
+export const setAccessToken = authStorage.setAccessToken;
+export const getRefreshToken = authStorage.getRefreshToken;
+export const setRefreshToken = authStorage.setRefreshToken;
+export const getStoredSession = authStorage.getStoredSession;
+export const setStoredSession = authStorage.setStoredSession;
+export const clearStoredSession = authStorage.clearStoredSession;
+export const migrateLegacyCredentials = authStorage.migrateLegacyCredentials;
