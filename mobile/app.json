@@ -8,17 +8,24 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.admitly.mobile"
+      "bundleIdentifier": "com.admitly.app"
     },
     "android": {
-      "package": "com.admitly.mobile"
+      "package": "com.admitly.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "bundler": "metro"
     },
     "extra": {
       "apiBaseUrl": "https://admitly.onrender.com",
-      "enableDevTestCheckout": "true"
+      "enableDevTestCheckout": "true",
+      "eas": {
+        "projectId": "3b821e35-7259-4d68-b0ad-feb62b2a44b5"
+      }
     },
     "plugins": [
       [
