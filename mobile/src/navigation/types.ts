@@ -3,10 +3,13 @@ export type AuthStackParamList = {
   SignUp: undefined;
   ForgotPassword: undefined;
   ResetPassword: { token?: string } | undefined;
+  VerifyEmail: { token?: string } | undefined;
 };
 
 export type AppStackParamList = {
+  VerifyEmail: { token?: string } | undefined;
   Home: undefined;
+  Notifications: undefined;
   EventDetail: { eventId: number };
   TicketSelection: { eventId: number };
   CheckoutMethod: { eventId: number; orderId: number };

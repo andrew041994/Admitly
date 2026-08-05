@@ -5,6 +5,7 @@ import { ThemedButton } from '../../components/ThemedButton';
 import { getErrorMessage, useSession } from '../../context/SessionContext';
 import { theme } from '../../theme';
 import { AuthError, AuthInput, AuthLink, AuthScreenLayout } from './AuthScreenLayout';
+import { normalizeEmailAddress } from '../../features/auth/emailValidation';
 
 type SignInScreenProps = {
   onGoToSignUp: () => void;
@@ -26,12 +27,17 @@ export function SignInScreen({ onGoToSignUp, onGoToForgotPassword }: SignInScree
       setError('Please enter both email and password.');
       return;
     }
+    const normalizedEmail = normalizeEmailAddress(email);
+    if (!normalizedEmail) {
+      setError('Enter a valid email address.');
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
 
     try {
-      await signIn(email, password);
+      await signIn(normalizedEmail, password);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {

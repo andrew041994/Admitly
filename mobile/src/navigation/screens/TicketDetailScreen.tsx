@@ -13,12 +13,11 @@ import {
 } from '../../api/tickets';
 import { Screen } from '../../components/Screen';
 import { ThemedButton } from '../../components/ThemedButton';
-import { PHONE_TRANSFER_LABEL, canCreateResolvedTransfer, canSubmitTransfer, normalizeTransferIdentifier } from '../../features/transfers/validation';
+import { canCreateResolvedTransfer, canSubmitTransfer, normalizeTransferEmail } from '../../features/transfers/validation';
 import { theme } from '../../theme';
 
 type TicketDetailScreenProps = {
   ticketId: number;
-  onCompleteProfile: () => void;
 };
 
 function formatDate(iso: string): string {
@@ -56,7 +55,7 @@ export function TicketDetailScreen({ ticketId }: TicketDetailScreenProps) {
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Unable to load ticket.'));
   }, [ticketId]);
 
-  const normalizedEmail = normalizeTransferIdentifier('email', email);
+  const normalizedEmail = normalizeTransferEmail(email);
 
   async function continueToConfirmation() {
     if (!canSubmitTransfer(normalizedEmail, resolving) || !normalizedEmail) return;
@@ -180,7 +179,6 @@ export function TicketDetailScreen({ ticketId }: TicketDetailScreenProps) {
               />
               {email && !normalizedEmail ? <Text style={styles.error}>Enter a valid email address.</Text> : null}
               <ThemedButton label="Continue" onPress={continueToConfirmation} loading={resolving} disabled={!canSubmitTransfer(normalizedEmail, resolving)} />
-              <Text style={styles.disabledMode}>{PHONE_TRANSFER_LABEL}</Text>
             </View>
           )}
           {transferError ? <Text accessibilityRole="alert" style={styles.error}>{transferError}</Text> : null}
@@ -213,6 +211,5 @@ const styles = StyleSheet.create({
   warning: { color: theme.colors.textSecondary, paddingVertical: theme.spacing.sm },
   formGap: { gap: theme.spacing.sm },
   modeLabel: { color: theme.colors.textPrimary, fontWeight: '600' },
-  disabledMode: { color: theme.colors.textSecondary, textAlign: 'center', opacity: 0.8 },
   input: { color: theme.colors.textPrimary, borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.sm, paddingHorizontal: theme.spacing.sm, paddingVertical: 12 },
 });

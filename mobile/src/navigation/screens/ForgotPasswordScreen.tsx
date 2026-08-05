@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ThemedButton } from '../../components/ThemedButton';
 import { getErrorMessage, useSession } from '../../context/SessionContext';
 import { AuthError, AuthInput, AuthLink, AuthScreenLayout, AuthSuccess } from './AuthScreenLayout';
+import { normalizeEmailAddress } from '../../features/auth/emailValidation';
 
 type ForgotPasswordScreenProps = {
   onGoToSignIn: () => void;
@@ -21,13 +22,18 @@ export function ForgotPasswordScreen({ onGoToSignIn, onGoToResetPassword }: Forg
       setError('Please enter your email.');
       return;
     }
+    const normalizedEmail = normalizeEmailAddress(email);
+    if (!normalizedEmail) {
+      setError('Enter a valid email address.');
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
     setSuccess(null);
 
     try {
-      await requestPasswordReset(email);
+      await requestPasswordReset(normalizedEmail);
       setSuccess('If an account exists for this email, reset instructions have been sent.');
     } catch (err) {
       setError(getErrorMessage(err));

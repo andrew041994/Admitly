@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import logging
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dataclasses import dataclass
 from datetime import timezone
 from enum import Enum
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
@@ -14,12 +14,14 @@ from app.models.event import Event
 from app.models.dispute import Dispute
 from app.models.enums import MessageChannel, MessageTemplateType, ReminderType
 from app.models.order import Order
+from app.models.order_item import OrderItem
 from app.models.push_token import PushToken
 from app.models.ticket import Ticket
 from app.models.ticket_transfer_invite import TicketTransferInvite
 from app.models.user import User
 from app.services.messaging import dispatch_templated_message
 from app.services.ticket_qr import get_ticket_public_url
+from app.services.notification_center import create_user_notification, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -207,13 +209,14 @@ def notify_order_completed(db: Session, order: Order) -> NotificationDispatchRes
     result = dispatch_templated_message(
         db,
         template_type=MessageTemplateType.ORDER_CONFIRMATION,
-        channels=(MessageChannel.EMAIL, MessageChannel.PUSH),
+        channels=(MessageChannel.EMAIL,),
         recipient_user_id=order.user_id,
         recipient_email=email,
         related_entity_type="order",
         related_entity_id=order.id,
         context={"order_id": str(order.id), "event_id": str(order.event_id), "event_title": event_label},
     )
+    result.channel_results["push"] = "handled_by_ticket_delivery"
     return NotificationDispatchResult(success=result.success, channel_results=result.channel_results)
 
 
@@ -227,7 +230,7 @@ def notify_tickets_issued(db: Session, order: Order, tickets: list[Ticket]) -> N
     result = dispatch_templated_message(
         db,
         template_type=MessageTemplateType.TICKET_ISSUED,
-        channels=(MessageChannel.EMAIL, MessageChannel.PUSH),
+        channels=(MessageChannel.EMAIL,),
         recipient_user_id=order.user_id,
         recipient_email=email,
         related_entity_type="order",
@@ -242,6 +245,26 @@ def notify_tickets_issued(db: Session, order: Order, tickets: list[Ticket]) -> N
             ),
         },
     )
+    expected_quantity = int(db.execute(
+        select(func.coalesce(func.sum(OrderItem.quantity), 0)).where(OrderItem.order_id == order.id)
+    ).scalar_one())
+    if quantity == expected_quantity:
+        event_label = _order_event_label(order)
+        create_user_notification(
+            db,
+            user_id=order.user_id,
+            notification_type="ticket_purchase_completed",
+            title="Tickets ready",
+            body=f"{quantity} ticket(s) for {event_label} are now in your wallet.",
+            dedupe_key=f"order:{order.id}:tickets-issued",
+            route_key="wallet",
+            route_params={"order_id": order.id, "event_id": order.event_id},
+            related_entity_type="order",
+            related_entity_id=order.id,
+        )
+        result.channel_results["push"] = "queued_durable"
+    else:
+        result.channel_results["push"] = "deferred_until_order_fulfilled"
     return NotificationDispatchResult(success=result.success, channel_results=result.channel_results)
 
 
@@ -305,7 +328,7 @@ def notify_ticket_transfer_invite_created(db: Session, invite: TicketTransferInv
     result = dispatch_templated_message(
         db,
         template_type=MessageTemplateType.TRANSFER_INVITE,
-        channels=(MessageChannel.EMAIL, MessageChannel.PUSH),
+        channels=(MessageChannel.EMAIL,),
         recipient_user_id=invite.recipient_user_id,
         recipient_email=recipient_email,
         related_entity_type="transfer_invite",
@@ -315,6 +338,23 @@ def notify_ticket_transfer_invite_created(db: Session, invite: TicketTransferInv
         },
         idempotency_key=f"transfer:{invite.id}:created",
     )
+    if invite.recipient_user_id is not None:
+        ticket = db.get(Ticket, invite.ticket_id)
+        event = db.get(Event, ticket.event_id) if ticket is not None else None
+        event_label = event.title if event is not None else "an event"
+        create_user_notification(
+            db,
+            user_id=invite.recipient_user_id,
+            notification_type="ticket_received",
+            title="Ticket transfer awaiting you",
+            body=f"A ticket for {event_label} is waiting for your acceptance.",
+            dedupe_key=f"transfer:{invite.id}:created",
+            route_key="transfers",
+            route_params={"transfer_id": invite.id, "ticket_id": invite.ticket_id},
+            related_entity_type="transfer",
+            related_entity_id=invite.id,
+        )
+        result.channel_results["push"] = "queued_durable"
     return NotificationDispatchResult(success=result.success, channel_results=result.channel_results)
 
 
@@ -323,59 +363,72 @@ def notify_ticket_transfer_invite_accepted(
     invite: TicketTransferInvite,
     ticket: Ticket,
 ) -> dict[str, NotificationDispatchResult]:
-    sender = dispatch_notification_event(
+    event = db.get(Event, ticket.event_id)
+    event_label = event.title if event is not None else "the event"
+    create_user_notification(
         db,
-        event_type=NotificationEventType.TICKET_TRANSFER_ACCEPTED,
-        push=PushMessage(
-            user_id=invite.sender_user_id,
-            title="Transfer accepted",
-            body=f"Ticket #{ticket.id} transfer completed.",
-            data={"type": "ticket_transfer_invite_accepted", "ticket_id": str(ticket.id), "invite_id": str(invite.id)},
-        ),
+        user_id=invite.sender_user_id,
+        notification_type="ticket_transfer_accepted",
+        title="Transfer accepted",
+        body=f"Your ticket transfer for {event_label} was accepted.",
+        dedupe_key=f"transfer:{invite.id}:accepted",
+        route_key="transfers",
+        route_params={"transfer_id": invite.id, "event_id": ticket.event_id},
+        related_entity_type="transfer",
+        related_entity_id=invite.id,
     )
-    recipient = dispatch_notification_event(
-        db,
-        event_type=NotificationEventType.TICKET_TRANSFER_ACCEPTED,
-        push=PushMessage(
-            user_id=ticket.owner_user_id,
-            title="Ticket received",
-            body=f"You now own ticket #{ticket.id}.",
-            data={"type": "ticket_transfer_invite_claimed", "ticket_id": str(ticket.id), "invite_id": str(invite.id)},
-        ),
-    )
-    return {"sender": sender, "recipient": recipient}
+    queued = NotificationDispatchResult(success=True, channel_results={"push": "queued_durable"})
+    return {"sender": queued, "recipient": NotificationDispatchResult(success=True, channel_results={"push": "not_required"})}
 
 
 def notify_ticket_transfer_canceled(db: Session, invite: TicketTransferInvite) -> NotificationDispatchResult:
     recipient_email = invite.recipient_email
     if not recipient_email and invite.recipient_user_id:
         recipient_email = _user_email(db, invite.recipient_user_id)
-    return _dispatch(
+    result = _dispatch(
         db,
         email=EmailMessage(
             to_email=recipient_email,
             subject=f"Transfer canceled for ticket #{invite.ticket_id}",
             body=f"The pending transfer for ticket #{invite.ticket_id} was canceled.",
         ) if recipient_email else None,
-        push=PushMessage(
-            user_id=invite.recipient_user_id,
-            title="Transfer canceled",
-            body=f"The transfer for ticket #{invite.ticket_id} was canceled.",
-            data={"type": "ticket_transfer_canceled", "ticket_id": str(invite.ticket_id), "transfer_id": str(invite.id)},
-        ) if invite.recipient_user_id else None,
+        push=None,
     )
+    if invite.recipient_user_id is not None:
+        ticket = db.get(Ticket, invite.ticket_id)
+        event = db.get(Event, ticket.event_id) if ticket is not None else None
+        create_user_notification(
+            db,
+            user_id=invite.recipient_user_id,
+            notification_type="ticket_transfer_canceled",
+            title="Transfer canceled",
+            body=f"The ticket transfer for {event.title if event else 'the event'} is no longer available.",
+            dedupe_key=f"transfer:{invite.id}:canceled",
+            route_key="transfers",
+            route_params={"transfer_id": invite.id, "ticket_id": invite.ticket_id},
+            related_entity_type="transfer",
+            related_entity_id=invite.id,
+        )
+        result.channel_results["push"] = "queued_durable"
+    return result
 
 
 def notify_ticket_transfer_invite_declined(db: Session, invite: TicketTransferInvite) -> NotificationDispatchResult:
-    return _dispatch(
+    ticket = db.get(Ticket, invite.ticket_id)
+    event = db.get(Event, ticket.event_id) if ticket is not None else None
+    create_user_notification(
         db,
-        push=PushMessage(
-            user_id=invite.sender_user_id,
-            title="Transfer declined",
-            body=f"The transfer for ticket #{invite.ticket_id} was declined.",
-            data={"type": "ticket_transfer_declined", "ticket_id": str(invite.ticket_id), "transfer_id": str(invite.id)},
-        ),
+        user_id=invite.sender_user_id,
+        notification_type="ticket_transfer_declined",
+        title="Transfer declined",
+        body=f"Your ticket transfer for {event.title if event else 'the event'} was declined.",
+        dedupe_key=f"transfer:{invite.id}:declined",
+        route_key="transfers",
+        route_params={"transfer_id": invite.id, "ticket_id": invite.ticket_id},
+        related_entity_type="transfer",
+        related_entity_id=invite.id,
     )
+    return NotificationDispatchResult(success=True, channel_results={"push": "queued_durable"})
 
 
 def notify_ticket_transfer_expired(db: Session, invite: TicketTransferInvite) -> dict[str, NotificationDispatchResult]:
@@ -461,30 +514,71 @@ def notify_event_cancelled(event: Event, *, actor_user_id: int) -> NotificationD
     return last
 
 
-def register_push_token(db: Session, *, user_id: int, token: str, platform: str | None) -> PushToken:
+def register_push_token(
+    db: Session,
+    *,
+    user_id: int,
+    token: str,
+    platform: str | None,
+    installation_id: str | None = None,
+) -> PushToken:
     normalized = token.strip()
-    existing = db.execute(select(PushToken).where(PushToken.token == normalized)).scalar_one_or_none()
+    normalized_installation = (installation_id or "").strip() or None
+    by_token = db.execute(select(PushToken).where(PushToken.token == normalized)).scalar_one_or_none()
+    by_installation = (
+        db.execute(select(PushToken).where(PushToken.installation_id == normalized_installation)).scalar_one_or_none()
+        if normalized_installation is not None
+        else None
+    )
+    if by_token is not None and by_installation is not None and by_token.id != by_installation.id:
+        by_installation.installation_id = None
+        by_installation.is_active = False
+        by_installation.disabled_reason = "token_rotated"
+        db.flush()
+    existing = by_token or by_installation
     if existing is not None:
         existing.user_id = user_id
+        existing.token = normalized
+        existing.installation_id = normalized_installation
         existing.platform = platform
         existing.is_active = True
+        existing.disabled_reason = None
+        existing.last_registered_at = utc_now()
         db.flush()
         return existing
 
-    push_token = PushToken(user_id=user_id, token=normalized, platform=platform, is_active=True)
+    push_token = PushToken(
+        user_id=user_id,
+        token=normalized,
+        installation_id=normalized_installation,
+        platform=platform,
+        is_active=True,
+        last_registered_at=utc_now(),
+    )
     db.add(push_token)
     db.flush()
     return push_token
 
 
-def deactivate_push_token(db: Session, *, user_id: int, token: str) -> bool:
-    normalized = token.strip()
+def deactivate_push_token(
+    db: Session,
+    *,
+    user_id: int,
+    token: str | None = None,
+    installation_id: str | None = None,
+) -> bool:
+    normalized = (token or "").strip() or None
+    normalized_installation = (installation_id or "").strip() or None
     push_token = db.execute(
-        select(PushToken).where(PushToken.user_id == user_id, PushToken.token == normalized)
-    ).scalar_one_or_none()
+        select(PushToken).where(
+            PushToken.user_id == user_id,
+            ((PushToken.token == normalized) if normalized else (PushToken.installation_id == normalized_installation)),
+        )
+    ).scalars().first()
     if push_token is None:
         return False
     push_token.is_active = False
+    push_token.disabled_reason = "logout_or_user_disabled"
     db.flush()
     return True
 
@@ -496,7 +590,11 @@ def _to_aware(dt):
 
 
 def _format_event_start_for_message(event: Event) -> str:
-    return _to_aware(event.start_at).astimezone(ZoneInfo("America/Guyana")).strftime("%Y-%m-%d %H:%M %Z")
+    try:
+        event_timezone = ZoneInfo(event.timezone or "America/Guyana")
+    except ZoneInfoNotFoundError:
+        event_timezone = ZoneInfo("America/Guyana")
+    return _to_aware(event.start_at).astimezone(event_timezone).strftime("%Y-%m-%d %H:%M %Z")
 
 
 def _reminder_message(reminder_type: ReminderType) -> tuple[str, str]:
@@ -537,11 +635,19 @@ def notify_event_reminder(
     )
     _ = body_phrase
     _ = ticket_count
-    return dispatch_notification_event(
+    create_user_notification(
         db,
-        event_type=_notification_event_for_reminder(reminder_type),
-        push=push,
+        user_id=user.id,
+        notification_type="event_starting_soon",
+        title=push.title,
+        body=push.body,
+        dedupe_key=f"event:{event.id}:user:{user.id}:reminder:{reminder_type.value}",
+        route_key="event",
+        route_params={"event_id": event.id},
+        related_entity_type="event",
+        related_entity_id=event.id,
     )
+    return NotificationDispatchResult(success=True, channel_results={"push": "queued_durable"})
 
 
 def notify_dispute_resolved(

@@ -35,9 +35,8 @@ test('confirmation displays verified recipient and ticket context before creatio
   assert.match(source, /Ownership moves only after the recipient accepts/);
 });
 
-test('phone is disabled and missing profile phone cannot gate email transfer', () => {
-  assert.match(source, /PHONE_TRANSFER_LABEL/);
-  assert.doesNotMatch(source, /getAccountProfile|hasPhone|recipientType/);
+test('phone collection and phone transfer controls are absent', () => {
+  assert.doesNotMatch(source, /phone|PHONE_TRANSFER_LABEL|getAccountProfile|hasPhone|recipientType/i);
 });
 
 test('expired references return to lookup and uncertain requests reconcile against outgoing transfers', () => {

@@ -54,6 +54,8 @@ class TicketDetailResponse(TicketResponse):
 
 
 class TicketCheckInRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     qr_payload: str | None = None
     ticket_code: str | None = None
 
@@ -71,6 +73,8 @@ class TicketCheckInResponse(BaseModel):
 
 
 class TicketCheckInValidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     qr_payload: str | None = None
     ticket_code: str | None = None
 
@@ -88,6 +92,8 @@ class TicketCheckInValidateResponse(BaseModel):
 
 
 class TicketCheckInConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     qr_payload: str | None = None
     ticket_code: str | None = None
     method: str | None = None
@@ -101,6 +107,8 @@ class TicketCheckInSummaryResponse(BaseModel):
 
 
 class TicketCheckInOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     qr_payload: str | None = None
     ticket_code: str | None = None
     admit: bool
@@ -122,6 +130,8 @@ class TicketCheckInAttemptResponse(BaseModel):
 
 
 class TicketVoidRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     reason: str | None = None
 
 
@@ -134,6 +144,8 @@ class TicketQrResponse(BaseModel):
 
 
 class TicketScanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     payload: dict[str, object] | str
     selected_event_id: int | None = None
 

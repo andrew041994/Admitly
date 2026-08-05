@@ -3,7 +3,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_admin_id, get_current_user_id
 from app.db.session import get_db
 from app.models.enums import DisputeStatus, RefundReason, RefundStatus
 from app.models.user import User
@@ -129,7 +129,7 @@ def create_dispute(
 def admin_list_refunds(
     status_filter: str | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> list[RefundResponse]:
     _require_admin(db, user_id=user_id)
     parsed = None
@@ -150,7 +150,7 @@ def admin_approve_refund(
     refund_id: int,
     payload: RefundApproveRequest,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> RefundResponse:
     _require_admin(db, user_id=user_id)
     try:
@@ -176,7 +176,7 @@ def admin_reject_refund(
     refund_id: int,
     payload: RefundRejectRequest,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> RefundResponse:
     _require_admin(db, user_id=user_id)
     try:
@@ -195,7 +195,7 @@ def admin_reject_refund(
 def admin_list_disputes(
     status_filter: str | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> list[DisputeResponse]:
     _require_admin(db, user_id=user_id)
     parsed = None
@@ -214,7 +214,7 @@ def admin_resolve_dispute(
     dispute_id: int,
     payload: DisputeResolveRequest,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> DisputeResponse:
     parsed_reason = None
     if payload.refund_reason is not None:
@@ -249,7 +249,7 @@ def admin_reject_dispute(
     dispute_id: int,
     payload: DisputeRejectRequest,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> DisputeResponse:
     _require_admin(db, user_id=user_id)
     try:

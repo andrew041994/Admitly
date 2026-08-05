@@ -5,13 +5,13 @@ from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.orders import resend_order_confirmation_notification
 from app.db.base import Base
 from app.api.tickets import resend_ticket
-from app.models import Event, OrganizerProfile, Order, OrderItem, TicketTier, User, Venue
+from app.models import Event, OrganizerProfile, Order, OrderItem, TicketTier, User, UserNotification, Venue
 from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus, ReminderType
 from app.services.events import cancel_event
 from app.services import notifications as notification_service
@@ -104,6 +104,22 @@ def test_complete_paid_order_triggers_notification_hooks(db_session: Session, mo
 
     complete_paid_order(db_session, order)
     assert called == {"completed": 1, "issued": 2}
+
+
+def test_paid_fulfilled_order_creates_one_durable_delivery_notification(db_session: Session) -> None:
+    order, buyer, _ = _seed_order(db_session, suffix="durable-purchase", completed=False)
+    assert db_session.execute(select(UserNotification).where(UserNotification.user_id == buyer.id)).scalars().all() == []
+    order.payment_verification_status = "verified"
+    complete_paid_order(db_session, order)
+    complete_paid_order(db_session, order)
+    rows = db_session.execute(
+        select(UserNotification).where(
+            UserNotification.user_id == buyer.id,
+            UserNotification.notification_type == "ticket_purchase_completed",
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].route_key == "wallet"
 
 
 def test_ticket_transfer_triggers_notification(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -246,35 +262,27 @@ def test_event_reminder_routes_push_only_and_graceful_without_tokens(
         ticket_count=2,
     )
     assert result.success is True
-    assert result.channel_results["push"] == "skipped_no_tokens"
-    assert sent == {"email": 0, "push": 1}
+    assert result.channel_results["push"] == "queued_durable"
+    assert sent == {"email": 0, "push": 0}
 
 
 @pytest.mark.parametrize(
-    ("reminder_type", "expected_event_type"),
+    ("reminder_type", "expected_dedupe_suffix"),
     [
-        (ReminderType.HOURS_24_BEFORE, NotificationEventType.EVENT_TOMORROW_REMINDER),
-        (ReminderType.HOURS_3_BEFORE, NotificationEventType.EVENT_TODAY_REMINDER),
-        (ReminderType.MINUTES_30_BEFORE, NotificationEventType.EVENT_STARTING_SOON_REMINDER),
+        (ReminderType.HOURS_24_BEFORE, "24_hours_before"),
+        (ReminderType.HOURS_3_BEFORE, "3_hours_before"),
+        (ReminderType.HOURS_1_BEFORE, "1_hour_before"),
+        (ReminderType.MINUTES_30_BEFORE, "30_minutes_before"),
     ],
 )
 def test_event_reminder_uses_centralized_event_taxonomy(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     reminder_type: ReminderType,
-    expected_event_type: NotificationEventType,
+    expected_dedupe_suffix: str,
 ) -> None:
     order, buyer, event = _seed_order(db_session, suffix=f"taxonomy-{reminder_type.value}")
     issue_tickets_for_completed_order(db_session, order)
-    captured: list[NotificationEventType] = []
-
-    original_dispatch = notification_service.dispatch_notification_event
-
-    def _capture_dispatch(db, *, event_type, email=None, push=None):
-        captured.append(event_type)
-        return original_dispatch(db, event_type=event_type, email=email, push=push)
-
-    monkeypatch.setattr("app.services.notifications.dispatch_notification_event", _capture_dispatch)
     notify_event_reminder(
         db_session,
         event=event,
@@ -283,7 +291,15 @@ def test_event_reminder_uses_centralized_event_taxonomy(
         ticket_count=1,
     )
 
-    assert captured == [expected_event_type]
+    from app.models.user_notification import UserNotification
+    row = db_session.execute(
+        select(UserNotification).where(
+            UserNotification.user_id == buyer.id,
+            UserNotification.related_entity_id == event.id,
+            UserNotification.notification_type == "event_starting_soon",
+        )
+    ).scalar_one()
+    assert row.dedupe_key.endswith(expected_dedupe_suffix)
 
 
 def test_ticket_issue_email_includes_ticket_specific_qr_links(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -4,10 +4,10 @@ export type AuthUser = {
   id: number;
   email: string;
   full_name: string;
-  phone_number: string | null;
-  phone_is_verified: boolean;
   is_active: boolean;
   is_verified: boolean;
+  email_verified_at: string | null;
+  requires_email_verification: boolean;
   is_admin: boolean;
   auth_provider: string;
   created_at: string;
@@ -36,11 +36,27 @@ export async function login(email: string, password: string): Promise<AuthRespon
   });
 }
 
-export async function register(fullName: string, email: string, phoneNumber: string, password: string): Promise<AuthResponse> {
+export async function register(fullName: string, email: string, password: string): Promise<AuthResponse> {
   return apiRequest<AuthResponse>({
     path: '/auth/register',
     method: 'POST',
-    body: JSON.stringify({ full_name: fullName, email, phone_number: phoneNumber, password }),
+    body: JSON.stringify({ full_name: fullName, email, password }),
+  });
+}
+
+export async function requestEmailVerification(email: string): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>({
+    path: '/auth/request-verification',
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function verifyEmail(token: string): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>({
+    path: '/auth/verify',
+    method: 'POST',
+    body: JSON.stringify({ token }),
   });
 }
 

@@ -21,7 +21,7 @@ from app.models.ticket_tier import TicketTier
 from app.models.user import User
 from app.models.venue import Venue
 from app.services.event_permissions import EventPermissionAction, has_event_permission_by_id
-from tests.utils import unique_email
+from tests.utils import auth_headers, unique_email
 
 
 
@@ -93,7 +93,7 @@ def test_event_creation_and_creator_ownership(client: TestClient, db_session: Se
             }
         ],
     }
-    response = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
+    response = client.post("/events", json=payload, headers=auth_headers(creator))
     assert response.status_code == 201
     body = response.json()
     assert body["status"] == "draft"
@@ -108,7 +108,7 @@ def test_event_creation_and_creator_ownership(client: TestClient, db_session: Se
     assert created.visibility == EventVisibility.PUBLIC
     assert created.approval_status == EventApprovalStatus.PENDING
 
-    invalid = client.post("/events", json={**payload, "end_at": payload["start_at"]}, headers={"x-user-id": str(creator.id)})
+    invalid = client.post("/events", json={**payload, "end_at": payload["start_at"]}, headers=auth_headers(creator))
     assert invalid.status_code == 422
 
     unauth = client.post("/events", json=payload)
@@ -142,7 +142,7 @@ def test_event_creation_with_multiple_tiers_and_defaults(client: TestClient, db_
             },
         ],
     }
-    response = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
+    response = client.post("/events", json=payload, headers=auth_headers(creator))
     assert response.status_code == 201
     body = response.json()
     assert body["status"] == "draft"
@@ -175,13 +175,13 @@ def test_event_creation_validation_errors(client: TestClient, db_session: Sessio
         ],
     }
 
-    zero_tiers = client.post("/events", json={**base_payload, "ticket_tiers": []}, headers={"x-user-id": str(creator.id)})
+    zero_tiers = client.post("/events", json={**base_payload, "ticket_tiers": []}, headers=auth_headers(creator))
     assert zero_tiers.status_code == 422
 
     bad_times = client.post(
         "/events",
         json={**base_payload, "sales_start_at": base_payload["end_at"], "sales_end_at": base_payload["start_at"]},
-        headers={"x-user-id": str(creator.id)},
+        headers=auth_headers(creator),
     )
     assert bad_times.status_code == 422
 
@@ -191,7 +191,7 @@ def test_event_creation_validation_errors(client: TestClient, db_session: Sessio
             **base_payload,
             "ticket_tiers": [{**base_payload["ticket_tiers"][0], "price_amount": "-1.00"}],
         },
-        headers={"x-user-id": str(creator.id)},
+        headers=auth_headers(creator),
     )
     assert bad_tier.status_code == 422
 
@@ -223,7 +223,7 @@ def test_event_creation_is_atomic_when_tier_validation_fails(client: TestClient,
         ],
     }
     before_count = db_session.query(Event).count()
-    response = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
+    response = client.post("/events", json=payload, headers=auth_headers(creator))
     assert response.status_code == 422
     assert db_session.query(Event).count() == before_count
 
@@ -237,11 +237,11 @@ def test_mine_and_active_event_listing(client: TestClient, db_session: Session) 
     _seed_event(db_session, other, title="Other Event", end_offset_hours=10)
     db_session.commit()
 
-    mine = client.get("/events/mine", headers={"x-user-id": str(owner.id)})
+    mine = client.get("/events/mine", headers=auth_headers(owner))
     assert mine.status_code == 200
     assert len(mine.json()) == 2
 
-    active = client.get("/events/mine/active", headers={"x-user-id": str(owner.id)})
+    active = client.get("/events/mine/active", headers=auth_headers(owner))
     assert active.status_code == 200
     titles = [row["title"] for row in active.json()]
     assert titles == ["Active Event"]
@@ -284,7 +284,7 @@ def test_mine_active_listing_with_multiple_tiers_has_no_duplicates(client: TestC
     )
     db_session.commit()
 
-    active = client.get("/events/mine/active", headers={"x-user-id": str(owner.id)})
+    active = client.get("/events/mine/active", headers=auth_headers(owner))
     assert active.status_code == 200
     body = active.json()
     assert len(body) == 1
@@ -321,7 +321,7 @@ def test_event_creation_reuses_existing_normalized_venue_and_searches(client: Te
             }
         ],
     }
-    created = client.post("/events", json=payload, headers={"x-user-id": str(creator.id)})
+    created = client.post("/events", json=payload, headers=auth_headers(creator))
     assert created.status_code == 201
     body = created.json()
     assert body["venue_id"] == existing_venue.id
@@ -331,7 +331,7 @@ def test_event_creation_reuses_existing_normalized_venue_and_searches(client: Te
     venues = db_session.query(Venue).filter(func.lower(Venue.name).like("%providence stadium%")).all()
     assert len(venues) == 1
 
-    search = client.get("/venues/search", params={"q": "provi"}, headers={"x-user-id": str(creator.id)})
+    search = client.get("/venues/search", params={"q": "provi"}, headers=auth_headers(creator))
     assert search.status_code == 200
     results = search.json()
     assert len(results) >= 1
@@ -348,11 +348,11 @@ def test_staff_assignment_permissions_and_expiration(client: TestClient, db_sess
     outsider_event = _seed_event(db_session, outsider, title="Other", end_offset_hours=2)
     db_session.commit()
 
-    assign = client.post(f"/events/{event.id}/staff", json={"user_id": staff.id, "role": EventStaffRole.CHECKIN.value}, headers={"x-user-id": str(owner.id)})
+    assign = client.post(f"/events/{event.id}/staff", json={"user_id": staff.id, "role": EventStaffRole.CHECKIN.value}, headers=auth_headers(owner))
     assert assign.status_code == 201
-    duplicate = client.post(f"/events/{event.id}/staff", json={"user_id": staff.id, "role": EventStaffRole.CHECKIN.value}, headers={"x-user-id": str(owner.id)})
+    duplicate = client.post(f"/events/{event.id}/staff", json={"user_id": staff.id, "role": EventStaffRole.CHECKIN.value}, headers=auth_headers(owner))
     assert duplicate.status_code == 409
-    forbidden = client.post(f"/events/{event.id}/staff", json={"user_id": owner.id, "role": EventStaffRole.CHECKIN.value}, headers={"x-user-id": str(outsider.id)})
+    forbidden = client.post(f"/events/{event.id}/staff", json={"user_id": owner.id, "role": EventStaffRole.CHECKIN.value}, headers=auth_headers(outsider))
     assert forbidden.status_code == 403
 
     assert has_event_permission_by_id(db_session, user_id=staff.id, event_id=event.id, action=EventPermissionAction.CHECKIN_TICKETS)
@@ -392,16 +392,16 @@ def test_dashboard_profile_and_user_search(client: TestClient, db_session: Sessi
     db_session.add(OrderItem(order_id=order.id, ticket_tier_id=tier.id, quantity=2, unit_price=50))
     db_session.commit()
 
-    dashboard = client.get(f"/events/{event.id}/dashboard", headers={"x-user-id": str(owner.id)})
+    dashboard = client.get(f"/events/{event.id}/dashboard", headers=auth_headers(owner))
     assert dashboard.status_code == 200
     assert "tickets_sold" in dashboard.json()
-    forbidden = client.get(f"/events/{event.id}/dashboard", headers={"x-user-id": str(staff.id)})
+    forbidden = client.get(f"/events/{event.id}/dashboard", headers=auth_headers(staff))
     assert forbidden.status_code == 403
 
-    profile = client.get("/account/profile", headers={"x-user-id": str(owner.id)})
+    profile = client.get("/account/profile", headers=auth_headers(owner))
     assert profile.status_code == 200
     assert profile.json()["my_events_count"] >= 1
 
-    search = client.get("/users/search", params={"q": "staff"}, headers={"x-user-id": str(owner.id)})
+    search = client.get("/users/search", params={"q": "staff"}, headers=auth_headers(owner))
     assert search.status_code == 200
     assert any("staff" in row["full_name"].lower() for row in search.json())

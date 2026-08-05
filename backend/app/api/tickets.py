@@ -4,7 +4,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_user_id
 from app.db.session import get_db
 from app.schemas.notification import NotificationDispatchResponse
 from app.schemas.ticket import (
@@ -35,6 +35,7 @@ from app.services.tickets import (
     CHECK_IN_METHOD_MANUAL,
     CHECK_IN_METHOD_QR,
     CHECK_IN_STATUS_TRANSFER_PENDING,
+    CHECK_IN_STATUS_UNAUTHORIZED,
     TicketAuthorizationError,
     TicketCheckInConflictError,
     TicketCrossEventError,
@@ -115,6 +116,14 @@ def _build_check_in_response(*, event_id: int, result) -> TicketCheckInResponse:
         message=message,
         ui_signal="green" if success else "red",
     )
+
+
+def _raise_if_check_in_unauthorized(result) -> None:
+    if result.status == CHECK_IN_STATUS_UNAUTHORIZED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to check in tickets for this event.",
+        )
 
 
 
@@ -339,6 +348,7 @@ def validate_event_ticket(
         qr_payload=payload.qr_payload,
         ticket_code=payload.ticket_code,
     )
+    _raise_if_check_in_unauthorized(result)
     return TicketCheckInValidateResponse(
         valid=result.valid,
         code=result.status,
@@ -368,6 +378,7 @@ def confirm_event_ticket_check_in(
         ticket_code=payload.ticket_code,
         method=method,
     )
+    _raise_if_check_in_unauthorized(result)
     return _build_check_in_response(event_id=event_id, result=result)
 
 
@@ -386,6 +397,7 @@ def manual_event_ticket_check_in(
         ticket_code=payload.ticket_code,
         method=CHECK_IN_METHOD_MANUAL,
     )
+    _raise_if_check_in_unauthorized(result)
     try:
         db.commit()
     except SQLAlchemyError as exc:
@@ -489,6 +501,7 @@ def check_in_event_ticket(
         ticket_code=payload.ticket_code,
         method=CHECK_IN_METHOD_QR,
     )
+    _raise_if_check_in_unauthorized(result)
     return _build_check_in_response(event_id=event_id, result=result)
 
 
@@ -597,6 +610,8 @@ def scan_ticket_qr(
         normalized_payload["event_id"] = selected_event_id
 
     result = scan_ticket(db, payload=normalized_payload, user_id=user_id)
+    if result.message == "Not authorized to scan this event.":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=result.message)
     if result.message in {
         "Ticket scanning is not open yet for this event.",
         "Ticket scanning has closed for this event.",
@@ -618,6 +633,8 @@ def check_in_ticket_by_id(
     user_id: int = Depends(get_current_user_id),
 ) -> TicketScanResponse:
     result = check_in_ticket_manually(db, ticket_id=ticket_id, user_id=user_id)
+    if result.message == "Not authorized to scan this event.":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=result.message)
     return TicketScanResponse(
         status=result.status,
         ticket_id=result.ticket_id,

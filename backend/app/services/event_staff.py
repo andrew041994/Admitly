@@ -77,8 +77,8 @@ def add_event_staff(
         action=EventPermissionAction.MANAGE_EVENT_STAFF,
     )
     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-    if user is None:
-        raise EventStaffValidationError("User not found.")
+    if user is None or not user.is_active:
+        raise EventStaffValidationError("An active user account is required for staff assignment.")
 
     event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
     if event is None:

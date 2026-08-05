@@ -19,7 +19,7 @@ from app.models.organizer_profile import OrganizerProfile
 from app.models.ticket_tier import TicketTier
 from app.models.user import User
 from app.models.venue import Venue
-from tests.utils import unique_email
+from tests.utils import auth_headers, unique_email
 
 
 
@@ -97,13 +97,13 @@ def test_organizer_list_and_access_controls(client: TestClient, db_session: Sess
     mine = _seed_event(db_session, owner, title="Mine")
     _seed_event(db_session, other, title="Theirs")
 
-    listed = client.get("/events/organizer/events", headers={"x-user-id": str(owner.id)})
+    listed = client.get("/events/organizer/events", headers=auth_headers(owner))
     assert listed.status_code == 200
     body = listed.json()
     assert len(body) == 1
     assert body[0]["id"] == mine.id
 
-    forbidden = client.get(f"/events/organizer/events/{mine.id}", headers={"x-user-id": str(other.id)})
+    forbidden = client.get(f"/events/organizer/events/{mine.id}", headers=auth_headers(other))
     assert forbidden.status_code == 403
 
 
@@ -111,19 +111,19 @@ def test_publish_unpublish_and_validation(client: TestClient, db_session: Sessio
     owner = _seed_user(db_session, unique_email("publish_owner"), "Publisher")
     event = _seed_event(db_session, owner, title="Draft Publish", status=EventStatus.DRAFT)
 
-    ok = client.post(f"/events/organizer/events/{event.id}/publish", headers={"x-user-id": str(owner.id)})
+    ok = client.post(f"/events/organizer/events/{event.id}/publish", headers=auth_headers(owner))
     assert ok.status_code == 200
     assert ok.json()["status"] == "published"
     assert ok.json()["approval_status"] == "approved"
     assert ok.json()["is_publicly_visible"] is True
 
-    unpub = client.post(f"/events/organizer/events/{event.id}/unpublish", headers={"x-user-id": str(owner.id)})
+    unpub = client.post(f"/events/organizer/events/{event.id}/unpublish", headers=auth_headers(owner))
     assert unpub.status_code == 200
     assert unpub.json()["status"] == "unpublished"
 
     event.title = ""
     db_session.flush()
-    invalid = client.post(f"/events/organizer/events/{event.id}/publish", headers={"x-user-id": str(owner.id)})
+    invalid = client.post(f"/events/organizer/events/{event.id}/publish", headers=auth_headers(owner))
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "publish_validation_failed"
 
@@ -135,7 +135,7 @@ def test_cancel_and_tier_editing_rules(client: TestClient, db_session: Session) 
 
     draft_edit = client.patch(
         f"/events/organizer/events/{event.id}",
-        headers={"x-user-id": str(owner.id)},
+        headers=auth_headers(owner),
         json={
             "title": "Updated Title",
             "ticket_tiers": [
@@ -167,7 +167,7 @@ def test_cancel_and_tier_editing_rules(client: TestClient, db_session: Session) 
     db_session.flush()
     too_low = client.patch(
         f"/events/organizer/events/{event.id}",
-        headers={"x-user-id": str(owner.id)},
+        headers=auth_headers(owner),
         json={
             "ticket_tiers": [
                 {
@@ -186,7 +186,7 @@ def test_cancel_and_tier_editing_rules(client: TestClient, db_session: Session) 
 
     cannot_delete = client.patch(
         f"/events/organizer/events/{event.id}",
-        headers={"x-user-id": str(owner.id)},
+        headers=auth_headers(owner),
         json={
             "ticket_tiers": [
                 {
@@ -206,7 +206,7 @@ def test_cancel_and_tier_editing_rules(client: TestClient, db_session: Session) 
 
     cancel = client.post(
         f"/events/organizer/events/{event.id}/cancel",
-        headers={"x-user-id": str(owner.id)},
+        headers=auth_headers(owner),
         json={"reason": "weather"},
     )
     assert cancel.status_code == 200
@@ -234,7 +234,7 @@ def test_dashboard_metrics_defaults(client: TestClient, db_session: Session) -> 
     db_session.add(OrderItem(order_id=order.id, ticket_tier_id=tier.id, quantity=3, unit_price=1000, currency="GYD"))
     db_session.flush()
 
-    listed = client.get("/events/organizer/events", headers={"x-user-id": str(owner.id)})
+    listed = client.get("/events/organizer/events", headers=auth_headers(owner))
     assert listed.status_code == 200
     row = listed.json()[0]
     assert row["status"] == "published"
@@ -264,7 +264,7 @@ def test_discovery_requires_published_and_approved(client: TestClient, db_sessio
     pending.published_at = datetime.now(UTC)
     db_session.flush()
 
-    response = client.get("/events/discover", headers={"x-user-id": str(owner.id)})
+    response = client.get("/events/discover")
     assert response.status_code == 200
     ids = [row["id"] for row in response.json()]
     assert approved.id in ids
@@ -286,7 +286,7 @@ def test_discovery_this_week_bucket_returns_success(client: TestClient, db_sessi
     response = client.get(
         "/events/discover",
         params={"date_bucket": "this_week"},
-        headers={"x-user-id": str(owner.id)},
+        headers=auth_headers(owner),
     )
     assert response.status_code == 200
     ids = [row["id"] for row in response.json()]
@@ -315,7 +315,7 @@ def test_organizer_event_status_variants_are_explicit(client: TestClient, db_ses
     cancelled = _seed_event(db_session, owner, title="Cancelled State", status=EventStatus.CANCELLED, approval_status=EventApprovalStatus.APPROVED)
     db_session.flush()
 
-    listed = client.get("/events/organizer/events", headers={"x-user-id": str(owner.id)})
+    listed = client.get("/events/organizer/events", headers=auth_headers(owner))
     assert listed.status_code == 200
     by_title = {row["title"]: row for row in listed.json()}
 
@@ -339,7 +339,7 @@ def test_organizer_event_status_variants_are_explicit(client: TestClient, db_ses
 
     detail = client.get(
         f"/events/organizer/events/{published_pending.id}",
-        headers={"x-user-id": str(owner.id)},
+        headers=auth_headers(owner),
     )
     assert detail.status_code == 200
     assert detail.json()["status"] == "published"

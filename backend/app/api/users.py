@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_user_id
 from app.db.session import get_db
 from app.models.event import Event
 from app.models.enums import EventStatus
@@ -17,7 +17,6 @@ class UserSearchResult(BaseModel):
     id: int
     full_name: str
     email: str
-    phone: str | None
 
 
 def _mask_email(email: str) -> str:
@@ -27,15 +26,6 @@ def _mask_email(email: str) -> str:
     else:
         safe_left = left[:2] + "*" * (len(left) - 2)
     return f"{safe_left}@{domain}" if domain else safe_left
-
-
-def _mask_phone(phone: str | None) -> str | None:
-    if not phone:
-        return None
-    digits = "".join(ch for ch in phone if ch.isdigit())
-    if len(digits) <= 4:
-        return "*" * len(digits)
-    return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
 
 
 @router.get("/search", response_model=list[UserSearchResult])
@@ -68,7 +58,6 @@ def search_users(
             or_(
                 User.full_name.ilike(like_q),
                 User.email.ilike(like_q),
-                User.phone.ilike(like_q),
             ),
             User.id != user_id,
         )
@@ -80,7 +69,6 @@ def search_users(
             id=user.id,
             full_name=user.full_name,
             email=_mask_email(user.email),
-            phone=_mask_phone(user.phone),
         )
         for user in users
     ]

@@ -130,16 +130,17 @@ def _base_url_with_path(base_url: str, path: str) -> str:
 
 
 def send_verification_email(to_email: str, token: str) -> str:
-    link = f"{settings.frontend_base_url.rstrip('/')}/verify-email?token={token}"
+    link = f"{_base_url_with_path(settings.frontend_base_url, 'verify-email')}?{urlencode({'token': token})}"
     body = (
         "Welcome to Admitly!\n\n"
-        "Verify your account by opening this link:\n"
+        "Verify your email to finish setting up your Admitly account:\n"
         f"{link}\n\n"
         "If the link does not work, paste this verification code into the app:\n"
         f"{token}\n\n"
-        "If you did not request this email, you can safely ignore it."
+        f"This link and code expire in {settings.verification_token_exp_hours} hours.\n\n"
+        "If you did not create an Admitly account, you can safely ignore this email."
     )
-    return send_email(to_email, "Verify your Admitly account", body)
+    return send_email(to_email, "Verify your Admitly email", body)
 
 
 def send_password_reset_email(to_email: str, token: str) -> str:

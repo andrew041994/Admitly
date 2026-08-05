@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
-from app.models import Event, EventReminderLog, OrganizerProfile, Order, OrderItem, Ticket, TicketTier, User, Venue
+from app.models import Event, EventReminderLog, OrganizerProfile, Order, OrderItem, Ticket, TicketTier, User, UserNotification, Venue
 from app.models.enums import (
     EventApprovalStatus,
     EventStatus,
@@ -106,6 +106,9 @@ def test_should_send_window_logic() -> None:
     event_30 = Event(start_at=now + timedelta(minutes=30), end_at=now + timedelta(hours=1), organizer_id=1, venue_id=None,
                      title="E3", slug="e3", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
                      approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
+    event_60 = Event(start_at=now + timedelta(minutes=60), end_at=now + timedelta(hours=2), organizer_id=1, venue_id=None,
+                     title="E60", slug="e60", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
+                     approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
     outside = Event(start_at=now + timedelta(hours=10), end_at=now + timedelta(hours=11), organizer_id=1, venue_id=None,
                     title="E4", slug="e4", status=EventStatus.PUBLISHED, visibility=EventVisibility.PUBLIC,
                     approval_status=EventApprovalStatus.APPROVED, timezone="America/Guyana", is_location_pinned=False)
@@ -113,6 +116,7 @@ def test_should_send_window_logic() -> None:
     assert should_send_reminder_for_event(event_24, ReminderType.HOURS_24_BEFORE, now=now)
     assert should_send_reminder_for_event(event_today, ReminderType.HOURS_3_BEFORE, now=now)
     assert should_send_reminder_for_event(event_30, ReminderType.MINUTES_30_BEFORE, now=now)
+    assert should_send_reminder_for_event(event_60, ReminderType.HOURS_1_BEFORE, now=now)
     assert not should_send_reminder_for_event(outside, ReminderType.HOURS_24_BEFORE, now=now)
 
 
@@ -154,6 +158,26 @@ def test_recipients_use_current_owner_after_transfer(db_session: Session) -> Non
     )
     user_ids = {user.id for user, _ in recipients}
     assert recipient.id in user_ids
+
+
+def test_one_hour_reminder_uses_current_owner_and_deduplicates_multiple_tickets(db_session: Session) -> None:
+    now = get_guyana_now()
+    order, buyer, event = _seed_order(db_session, suffix="one-hour-owner", event_start_at=now + timedelta(hours=1))
+    tickets = issue_tickets_for_completed_order(db_session, order)
+    recipient = User(email=unique_email("one_hour_recipient"), full_name="Recipient", is_verified=True)
+    db_session.add(recipient)
+    db_session.commit()
+    transfer_ticket_to_user(db_session, ticket_id=tickets[0].id, from_user_id=buyer.id, to_user_id=recipient.id)
+    recipients = get_eligible_event_reminder_recipients(
+        db_session, event_id=event.id, reminder_type=ReminderType.HOURS_1_BEFORE, now=now
+    )
+    counts = {user.id: count for user, count in recipients}
+    assert counts == {buyer.id: 1, recipient.id: 1}
+    first = dispatch_due_event_reminders(db_session, now=now)
+    db_session.commit()
+    second = dispatch_due_event_reminders(db_session, now=now)
+    assert first.sent_per_type[ReminderType.HOURS_1_BEFORE] == 2
+    assert second.sent_per_type[ReminderType.HOURS_1_BEFORE] == 0
 
 
 def test_recipient_eligibility_and_grouping(db_session: Session) -> None:
@@ -227,7 +251,7 @@ def test_dispatch_dedup_and_repeat_runs(db_session: Session, monkeypatch: pytest
     assert len(logs) == 1
 
 
-def test_dispatch_uses_email_and_push_paths(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dispatch_persists_in_app_before_async_push(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
     order, _, _ = _seed_order(db_session, suffix="channels", event_start_at=now + timedelta(hours=24, minutes=1))
     issue_tickets_for_completed_order(db_session, order)
@@ -253,7 +277,10 @@ def test_dispatch_uses_email_and_push_paths(db_session: Session, monkeypatch: py
     dispatch_due_event_reminders(db_session, now=now)
 
     assert sent["email"] == 0
-    assert sent["push"] == 1
+    assert sent["push"] == 0
+    assert db_session.execute(
+        select(UserNotification).where(UserNotification.notification_type == "event_starting_soon")
+    ).scalar_one().push_status == "no_tokens"
 
 
 def test_reminder_dispatch_does_not_mutate_ticket_state(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:

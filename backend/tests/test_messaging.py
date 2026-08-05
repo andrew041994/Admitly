@@ -77,7 +77,9 @@ def test_dispatch_logs_order_confirmation_attempts(db_session: Session) -> None:
     notify_order_completed(db_session, order)
     notify_order_completed(db_session, order)
     logs = db_session.execute(select(MessageDeliveryLog).where(MessageDeliveryLog.related_entity_type == "order", MessageDeliveryLog.related_entity_id == order.id, MessageDeliveryLog.template_type == MessageTemplateType.ORDER_CONFIRMATION)).scalars().all()
-    assert len(logs) == 4
+    # Order confirmation remains email; mobile push is queued once when tickets are fully issued.
+    assert len(logs) == 2
+    assert {log.channel.value for log in logs} == {"email"}
 
 
 def test_event_broadcast_permission_enforced(db_session: Session) -> None:

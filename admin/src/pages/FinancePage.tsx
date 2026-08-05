@@ -1,7 +1,6 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { ApiError } from '../lib/apiClient';
-import { apiBaseUrl } from '../lib/config';
-import { buildOrdersExportUrl, fetchAdminFinanceOrders, fetchAdminFinanceSummary, FinanceOrderRow } from '../lib/financeApi';
+import { downloadAdminFinanceOrders, fetchAdminFinanceOrders, fetchAdminFinanceSummary, FinanceOrderRow } from '../lib/financeApi';
 
 function formatMoney(amount: number, currency: string) {
   return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
@@ -65,7 +64,7 @@ export function FinancePage() {
           <button type="submit" disabled={loading}>{loading ? 'Loading…' : 'Load report'}</button>
         </form>
         <p className="muted-text">Date range uses paid_at with inclusive date_from and exclusive date_to.</p>
-        <button type="button" onClick={() => window.open(`${apiBaseUrl}${buildOrdersExportUrl(dateFrom || undefined, dateTo || undefined)}`, '_blank')}>
+        <button type="button" onClick={() => void downloadAdminFinanceOrders(dateFrom || undefined, dateTo || undefined)}>
           Export orders CSV
         </button>
         {error ? <p className="error-text">{error}</p> : null}

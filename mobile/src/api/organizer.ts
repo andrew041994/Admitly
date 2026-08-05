@@ -164,7 +164,6 @@ export type UserSearchResult = {
   id: number;
   full_name: string;
   email: string;
-  phone: string | null;
 };
 
 export async function createEvent(payload: CreateEventPayload): Promise<CreateEventResponse> {

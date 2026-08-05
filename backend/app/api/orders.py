@@ -15,8 +15,7 @@ from app.models.ticket_tier import TicketTier
 from sqlalchemy import select
 
 from app.api.rate_limit import apply_rate_limit, request_client_ip
-from app.api.auth import get_current_user
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_user, get_current_user_id
 from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.mmg import (

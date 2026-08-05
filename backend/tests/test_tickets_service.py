@@ -468,17 +468,14 @@ def test_event_scoped_one_step_route_returns_red_for_wrong_event_and_unauthorize
     db_session.commit()
     db_session.refresh(outsider)
 
-    unauthorized = check_in_event_ticket(
-        event_id=event_1.id,
-        payload=TicketCheckInRequest(qr_payload=ticket_1.qr_payload),
-        db=db_session,
-        user_id=outsider.id,
-    )
-    assert unauthorized.success is False
-    assert unauthorized.code == "unauthorized"
-    assert unauthorized.message == "You are not authorized to check in tickets for this event"
-    assert unauthorized.ui_signal == "red"
-    assert unauthorized.ticket_id is None
+    with pytest.raises(HTTPException) as exc:
+        check_in_event_ticket(
+            event_id=event_1.id,
+            payload=TicketCheckInRequest(qr_payload=ticket_1.qr_payload),
+            db=db_session,
+            user_id=outsider.id,
+        )
+    assert exc.value.status_code == 403
 
 
 def test_event_scoped_one_step_route_returns_red_for_invalid_not_found_and_voided(db_session: Session) -> None:

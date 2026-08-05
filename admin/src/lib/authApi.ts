@@ -1,5 +1,5 @@
 import { apiRequest } from './apiClient';
-import { AdminSession, setAdminSession } from './authSession';
+import { AdminSession, clearAdminSession, getAdminSession, setAdminSession } from './authSession';
 
 export async function loginAdmin(email: string, password: string): Promise<AdminSession> {
   const response = await apiRequest('/auth/login', {
@@ -21,4 +21,18 @@ export async function loginAdmin(email: string, password: string): Promise<Admin
   };
   setAdminSession(session);
   return session;
+}
+
+export async function validateAdminSession(): Promise<AdminSession> {
+  const session = getAdminSession();
+  if (!session) throw new Error('Authentication required.');
+  const response = await apiRequest('/auth/me');
+  const user = (await response.json()) as AdminSession['user'];
+  if (!user.is_admin) {
+    clearAdminSession();
+    throw new Error('Admin access required.');
+  }
+  const refreshedSession = { ...session, user };
+  setAdminSession(refreshedSession);
+  return refreshedSession;
 }

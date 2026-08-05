@@ -4,10 +4,10 @@ export type AccountProfile = {
   id: number;
   email: string;
   full_name: string;
-  phone_number: string | null;
-  phone_is_verified: boolean;
   is_active: boolean;
   is_verified: boolean;
+  email_verified_at: string | null;
+  requires_email_verification: boolean;
   my_tickets_count: number;
   my_events_count: number;
   staff_events_count: number;
@@ -26,14 +26,6 @@ export type StaffEvent = {
 
 export async function getAccountProfile(): Promise<AccountProfile> {
   return apiRequest<AccountProfile>({ path: '/account/profile', method: 'GET' });
-}
-
-export async function updateAccountProfile(fullName: string, phoneNumber: string): Promise<void> {
-  await apiRequest({
-    path: '/account/profile',
-    method: 'PATCH',
-    body: JSON.stringify({ full_name: fullName, phone_number: phoneNumber }),
-  });
 }
 
 export async function listMyStaffEvents(): Promise<StaffEvent[]> {

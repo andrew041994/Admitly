@@ -15,7 +15,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_admin_id, get_current_user_id
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.event import Event
@@ -83,6 +83,7 @@ from app.services.organizer_events import (
     unpublish_event,
     update_event_and_tiers,
 )
+from app.services.nearby_notifications import enqueue_nearby_event_after_commit
 from app.services.reporting import get_event_reporting_summary, get_event_tier_summary
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -381,7 +382,6 @@ def discover_events(
     date_bucket: str | None = Query(default=None, pattern="^(today|this_week|upcoming)$"),
     is_free: bool | None = Query(default=None),
     db: Session = Depends(get_db),
-    _user_id: int = Depends(get_current_user_id),
 ) -> list[EventDiscoveryItemResponse]:
     query = _discoverable_event_query()
 
@@ -436,7 +436,7 @@ def discover_events(
 @router.get("/admin/pending-approval", response_model=list[AdminEventApprovalItemResponse])
 def list_pending_event_approvals(
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> list[AdminEventApprovalItemResponse]:
     _require_admin(db, user_id=user_id)
     events = (
@@ -458,7 +458,7 @@ def list_pending_event_approvals(
 def approve_event_for_discovery(
     event_id: int,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> AdminEventApprovalItemResponse:
     _require_admin(db, user_id=user_id)
     event = db.execute(
@@ -474,6 +474,7 @@ def approve_event_for_discovery(
         db.add(event)
         db.commit()
         db.refresh(event)
+        enqueue_nearby_event_after_commit(db, event_id=event.id)
 
     return _to_admin_approval_item(event)
 
@@ -482,7 +483,6 @@ def approve_event_for_discovery(
 def discover_event_detail(
     event_id: int,
     db: Session = Depends(get_db),
-    _user_id: int = Depends(get_current_user_id),
 ) -> EventDiscoveryDetailResponse:
     event = (
         db.execute(_discoverable_event_query().where(Event.id == event_id))
@@ -775,6 +775,7 @@ def publish_organizer_event(
     try:
         event = publish_event(db, actor_user_id=user_id, event_id=event_id)
         db.commit()
+        enqueue_nearby_event_after_commit(db, event_id=event.id)
     except OrganizerEventNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except OrganizerEventAuthorizationError as exc:
@@ -992,7 +993,7 @@ def admin_list_event_refund_batches(
     status_filter: str | None = Query(default=None, alias="status"),
     event_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> list[EventRefundBatchResponse]:
     _require_admin(db, user_id=user_id)
     parsed_status = None
@@ -1009,7 +1010,7 @@ def admin_list_event_refund_batches(
 def admin_get_event_refund_batch(
     batch_id: int,
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
+    user_id: int = Depends(get_current_admin_id),
 ) -> EventRefundBatchResponse:
     _require_admin(db, user_id=user_id)
     batch = get_event_refund_batch(db, batch_id=batch_id)

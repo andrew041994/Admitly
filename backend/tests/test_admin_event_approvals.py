@@ -104,7 +104,6 @@ def test_discovery_excludes_pending_and_includes_after_admin_approval(db_session
         date_bucket=None,
         is_free=None,
         db=db_session,
-        _user_id=viewer.id,
     )
     assert all(item.id != pending.id for item in before)
 
@@ -117,7 +116,6 @@ def test_discovery_excludes_pending_and_includes_after_admin_approval(db_session
         date_bucket=None,
         is_free=None,
         db=db_session,
-        _user_id=viewer.id,
     )
     assert any(item.id == pending.id for item in after)
 

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_user_id
 from app.db.session import get_db
 from app.models.enums import PromoCodeDiscountType
 from app.models.promo_code import PromoCode

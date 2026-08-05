@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from app.models.organizer_profile import OrganizerProfile
     from app.models.password_reset_token import PasswordResetToken
     from app.models.push_token import PushToken
+    from app.models.user_notification import NotificationPreference, UserNotification
     from app.models.ticket import Ticket
     from app.models.ticket_hold import TicketHold
     from app.models.ticket_scan_log import TicketScanLog
@@ -33,6 +34,8 @@ class User(TimestampMixin, Base):
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    email_verification_required_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     auth_provider: Mapped[str] = mapped_column(String(32), default="local", nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -52,6 +55,10 @@ class User(TimestampMixin, Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     push_tokens: Mapped[list["PushToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    notifications: Mapped[list["UserNotification"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    notification_preference: Mapped["NotificationPreference | None"] = relationship(
+        back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="user", foreign_keys="Ticket.user_id")
     purchased_tickets: Mapped[list["Ticket"]] = relationship(
         back_populates="purchaser", foreign_keys="Ticket.purchaser_user_id"

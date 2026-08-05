@@ -2,8 +2,7 @@ from sqlalchemy import func, select
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.auth import get_current_user
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_user, get_current_user_id
 from app.db.session import get_db
 from app.models.event import Event
 from app.models.event_staff import EventStaff
@@ -18,7 +17,7 @@ from app.schemas.account import (
     UpdateProfileRequest,
 )
 from app.schemas.auth import UserResponse
-from app.services.auth import change_password, update_profile
+from app.services.auth import change_password, requires_email_verification, update_profile
 
 router = APIRouter(prefix="/account", tags=["account"])
 
@@ -28,10 +27,10 @@ def _to_user_response(user: User) -> UserResponse:
         id=user.id,
         email=user.email,
         full_name=user.full_name,
-        phone_number=user.phone,
-        phone_is_verified=user.phone_verified_at is not None,
         is_active=user.is_active,
         is_verified=user.is_verified,
+        email_verified_at=user.email_verified_at,
+        requires_email_verification=requires_email_verification(user),
         is_admin=user.is_admin,
         auth_provider=user.auth_provider,
         created_at=user.created_at,
@@ -46,7 +45,7 @@ def patch_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> UserResponse:
-    updated = update_profile(db, user=current_user, full_name=payload.full_name, phone_number=payload.phone_number)
+    updated = update_profile(db, user=current_user, full_name=payload.full_name)
     return _to_user_response(updated)
 
 
@@ -75,10 +74,10 @@ def get_profile(
         id=current_user.id,
         email=current_user.email,
         full_name=current_user.full_name,
-        phone_number=current_user.phone,
-        phone_is_verified=current_user.phone_verified_at is not None,
         is_active=current_user.is_active,
         is_verified=current_user.is_verified,
+        email_verified_at=current_user.email_verified_at,
+        requires_email_verification=requires_email_verification(current_user),
         my_tickets_count=int(my_tickets_count or 0),
         my_events_count=int(my_events_count or 0),
         staff_events_count=int(staff_events_count or 0),

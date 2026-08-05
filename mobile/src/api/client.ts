@@ -22,14 +22,20 @@ type ApiOptions = RequestInit & { path: string };
 
 export async function apiRequest<T>({ path, headers, body, ...init }: ApiOptions): Promise<T> {
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  const requestHeaders = new Headers(headers);
+  if (!isFormData && !requestHeaders.has('Content-Type')) {
+    requestHeaders.set('Content-Type', 'application/json');
+  }
+  // Authentication is session-owned; individual feature calls cannot override it.
+  if (authToken) {
+    requestHeaders.set('Authorization', `Bearer ${authToken}`);
+  } else {
+    requestHeaders.delete('Authorization');
+  }
   const response = await fetch(`${env.apiBaseUrl}${path}`, {
     ...init,
     body,
-    headers: {
-      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-      ...(headers ?? {}),
-    },
+    headers: requestHeaders,
   });
 
   if (!response.ok) {

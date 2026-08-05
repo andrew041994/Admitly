@@ -3,7 +3,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.rate_limit import apply_rate_limit, request_client_ip
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_admin, get_current_user_id
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.admin_action_audit import AdminActionAudit
@@ -39,7 +39,11 @@ from app.services.support import (
     run_admin_support_action,
 )
 
-router = APIRouter(prefix="/admin/support/orders", tags=["admin-support"])
+router = APIRouter(
+    prefix="/admin/support/orders",
+    tags=["admin-support"],
+    dependencies=[Depends(get_current_admin)],
+)
 
 
 def _require_admin(db: Session, *, user_id: int) -> None:

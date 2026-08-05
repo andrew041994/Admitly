@@ -14,6 +14,8 @@ from app.models.promo_code import PromoCode
 from app.models.promo_code_redemption import PromoCodeRedemption
 from app.models.promo_code_ticket_tier import PromoCodeTicketTier
 from app.models.push_token import PushToken
+from app.models.push_dispatch import NotificationJob, PushDispatch
+from app.models.user_notification import NotificationPreference, UserNotification
 from app.models.verification_token import EmailVerificationToken
 from app.models.password_reset_token import PasswordResetToken
 from app.models.ticket import Ticket
@@ -53,6 +55,10 @@ __all__ = [
     "PromoCodeRedemption",
     "PromoCodeTicketTier",
     "PushToken",
+    "PushDispatch",
+    "NotificationJob",
+    "UserNotification",
+    "NotificationPreference",
     "EmailVerificationToken",
     "PasswordResetToken",
     "Ticket",

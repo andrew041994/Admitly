@@ -15,7 +15,6 @@ if not DATABASE_URL:
     raise RuntimeError("TEST_DATABASE_URL must point to an isolated test database.")
 os.environ["DATABASE_URL"] = DATABASE_URL
 os.environ.setdefault("ENV", "development")
-os.environ.setdefault("ALLOW_DEV_HEADER_AUTH", "true")
 
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402

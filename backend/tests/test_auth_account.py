@@ -4,18 +4,22 @@ from datetime import timedelta
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.security import create_token, normalize_email, utc_now
 from app.db.base import Base
 from app.models import EmailVerificationToken, PasswordResetToken, User
+from app.schemas.auth import ForgotPasswordRequest, LoginRequest, RegisterRequest, RequestVerificationRequest
 from app.services.auth import (
     authenticate_user,
     change_password,
     generate_email_verification_token,
     generate_password_reset_token,
     refresh_auth_tokens,
+    require_verified_email_access,
+    requires_email_verification,
     register_user,
     reset_password_with_token,
     resolve_user_from_access_token,
@@ -40,13 +44,13 @@ def test_registration_success_and_lowercasing(db_session: Session) -> None:
         email="Test@Example.COM",
         password="GoodPass123",
         full_name="Name",
-        phone_number="600 1234",
     )
     assert user.email == "test@example.com"
     assert user.is_verified is False
     assert user.auth_provider == "local"
-    assert user.phone == "+5926001234"
-    assert user.phone_verified_at is None
+    assert user.phone is None
+    assert user.email_verification_required_at is not None
+    assert requires_email_verification(user) is True
     assert tokens.access_token
 
 
@@ -55,6 +59,33 @@ def test_registration_duplicate_email_rejected(db_session: Session) -> None:
     with pytest.raises(HTTPException) as exc:
         register_user(db_session, email="Dup@example.com", password="GoodPass123", full_name="Name")
     assert exc.value.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "email",
+    ["missing-at.example.com", "@example.com", "person@", "person@localhost", "two@@example.com", "a b@example.com"],
+)
+def test_auth_email_schemas_reject_malformed_addresses(email: str) -> None:
+    for schema, extra in (
+        (RegisterRequest, {"full_name": "Name", "password": "GoodPass123"}),
+        (LoginRequest, {"password": "GoodPass123"}),
+        (ForgotPasswordRequest, {}),
+        (RequestVerificationRequest, {}),
+    ):
+        with pytest.raises(ValidationError, match="valid email"):
+            schema(email=email, **extra)
+
+
+def test_auth_email_schemas_trim_and_normalize_valid_modern_address() -> None:
+    value = "  First.Last+Tickets@Example.MUSEUM  "
+    assert RegisterRequest(email=value, full_name="Name", password="GoodPass123").email == "first.last+tickets@example.museum"
+    assert LoginRequest(email=value, password="GoodPass123").email == "first.last+tickets@example.museum"
+
+
+def test_registration_service_rejects_malformed_email_without_schema(db_session: Session) -> None:
+    with pytest.raises(HTTPException, match="valid email") as exc:
+        register_user(db_session, email="bad@@example.com", password="GoodPass123", full_name="Name")
+    assert exc.value.status_code == 422
 
 
 def test_login_success_and_invalid_password(db_session: Session) -> None:
@@ -98,9 +129,15 @@ def test_refresh_token_flow(db_session: Session) -> None:
 def test_email_verification_token_success_failure_and_expiry(db_session: Session) -> None:
     user = _seed_user(db_session, "verify")
     token = generate_email_verification_token(db_session, user=user)
+    stored = db_session.execute(
+        select(EmailVerificationToken).where(EmailVerificationToken.user_id == user.id)
+    ).scalar_one()
+    assert stored.token_hash != token
+    assert len(stored.token_hash) == 64
 
     assert verify_email_token(db_session, token=token) is True
-    assert verify_email_token(db_session, token=token) is False
+    assert verify_email_token(db_session, token=token) is True
+    assert user.email_verified_at is not None
 
     expired_token = generate_email_verification_token(db_session, user=user)
     row = db_session.execute(
@@ -111,6 +148,16 @@ def test_email_verification_token_success_failure_and_expiry(db_session: Session
     db_session.add(row)
     db_session.commit()
     assert verify_email_token(db_session, token=expired_token) is False
+    assert verify_email_token(db_session, token="not-a-real-token") is False
+
+
+def test_resend_invalidates_prior_unused_verification_token(db_session: Session) -> None:
+    user = _seed_user(db_session, "resend-token")
+    first = generate_email_verification_token(db_session, user=user)
+    second = generate_email_verification_token(db_session, user=user)
+    assert first != second
+    assert verify_email_token(db_session, token=first) is False
+    assert verify_email_token(db_session, token=second) is True
 
 
 def test_forgot_and_reset_password_success_failure_and_expiry(db_session: Session) -> None:
@@ -140,35 +187,32 @@ def test_change_password_success_and_failure(db_session: Session) -> None:
 
 def test_profile_update_behavior(db_session: Session) -> None:
     user = _seed_user(db_session, "profile")
-    updated = update_profile(db_session, user=user, full_name="Updated Name", phone_number="+15550001111")
+    user.phone = "+15550001111"
+    db_session.commit()
+    updated = update_profile(db_session, user=user, full_name="Updated Name")
     assert updated.full_name == "Updated Name"
     assert updated.phone == "+15550001111"
     assert normalize_email(updated.email) == updated.email
 
 
-def test_profile_phone_normalization_uniqueness_and_verification_reset(db_session: Session) -> None:
-    first = _seed_user(db_session, "phone-first")
-    second = _seed_user(db_session, "phone-second")
-    updated = update_profile(db_session, user=first, full_name=first.full_name, phone_number="600-9876")
-    assert updated.phone == "+5926009876"
-    updated.phone_verified_at = utc_now()
+def test_legacy_unverified_accounts_are_not_locked_but_new_accounts_are(db_session: Session) -> None:
+    legacy = User(
+        email="legacy-transition@example.com",
+        full_name="Legacy User",
+        hashed_password="unused",
+        is_active=True,
+        is_verified=False,
+        auth_provider="local",
+    )
+    db_session.add(legacy)
     db_session.commit()
+    assert requires_email_verification(legacy) is False
+    assert require_verified_email_access(legacy) is legacy
 
-    unchanged = update_profile(db_session, user=updated, full_name=updated.full_name, phone_number="+5926009876")
-    assert unchanged.phone_verified_at is not None
-    changed = update_profile(db_session, user=unchanged, full_name=unchanged.full_name, phone_number="600-9877")
-    assert changed.phone_verified_at is None
-
-    with pytest.raises(HTTPException) as exc:
-        update_profile(db_session, user=second, full_name=second.full_name, phone_number="600-9877")
-    assert exc.value.status_code == 409
-
-
-def test_invalid_phone_is_rejected_by_backend(db_session: Session) -> None:
-    user = _seed_user(db_session, "invalid-phone")
-    with pytest.raises(HTTPException) as exc:
-        update_profile(db_session, user=user, full_name=user.full_name, phone_number="12345")
-    assert exc.value.status_code == 422
+    new_user = _seed_user(db_session, "new-verification-required")
+    with pytest.raises(HTTPException, match="Verify your email") as exc:
+        require_verified_email_access(new_user)
+    assert exc.value.status_code == 403
 
 
 def test_expired_refresh_token_rejected(db_session: Session) -> None:

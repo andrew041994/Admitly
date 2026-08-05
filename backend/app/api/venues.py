@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_user_id
 from app.db.session import get_db
 from app.models.venue import Venue
 from app.schemas.venue import VenueSearchItemResponse

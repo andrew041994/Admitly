@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -8,6 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.api.rate_limit import apply_rate_limit, request_client_ip
+from app.core.config import settings
 from app.models.user import User
 from app.schemas.auth import (
     AuthResponse,
@@ -32,6 +35,8 @@ from app.services.auth import (
     register_user,
     reset_password_with_token,
     resolve_user_from_access_token,
+    require_verified_email_access,
+    requires_email_verification,
     verify_email_token,
 )
 from app.core.security import normalize_email
@@ -48,10 +53,10 @@ def _to_user_response(user: User) -> UserResponse:
         id=user.id,
         email=user.email,
         full_name=user.full_name,
-        phone_number=user.phone,
-        phone_is_verified=user.phone_verified_at is not None,
         is_active=user.is_active,
         is_verified=user.is_verified,
+        email_verified_at=user.email_verified_at,
+        requires_email_verification=requires_email_verification(user),
         is_admin=user.is_admin,
         auth_provider=user.auth_provider,
         created_at=user.created_at,
@@ -64,13 +69,48 @@ def _to_auth_response(user: User, tokens: AuthTokensResponse) -> AuthResponse:
     return AuthResponse(user=_to_user_response(user), tokens=tokens)
 
 
-def get_current_user(
+def get_authenticated_user(
     db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> User:
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
     return resolve_user_from_access_token(db, token=credentials.credentials)
+
+
+def get_current_user(current_user: User = Depends(get_authenticated_user)) -> User:
+    return require_verified_email_access(current_user)
+
+
+def get_current_user_id(current_user: User = Depends(get_current_user)) -> int:
+    """Return the verified Bearer-token principal's database user ID."""
+    return current_user.id
+
+
+def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Require current database-backed administrator authorization."""
+    if not current_user.is_admin:
+        logger.warning("Admin authorization denied", extra={"user_id": current_user.id})
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+    return current_user
+
+
+def get_current_admin_id(current_user: User = Depends(get_current_admin)) -> int:
+    return current_user.id
+
+
+def _deliver_verification_email(user: User, token: str) -> None:
+    try:
+        delivery_status = send_verification_email(user.email, token)
+        logger.info(
+            "Verification email delivery processed",
+            extra={"user_id": user.id, "delivery_status": delivery_status},
+        )
+    except Exception:
+        logger.exception(
+            "Verification email delivery failed",
+            extra={"user_id": user.id, "email_provider": "configured"},
+        )
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
@@ -80,8 +120,9 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
         email=payload.email,
         password=payload.password,
         full_name=payload.full_name,
-        phone_number=payload.phone_number,
     )
+    verification_token = generate_email_verification_token(db, user=user)
+    _deliver_verification_email(user, verification_token)
     return _to_auth_response(
         user,
         AuthTokensResponse(
@@ -127,27 +168,28 @@ def logout() -> LogoutResponse:
 
 
 @router.get("/me", response_model=UserResponse)
-def me(current_user: User = Depends(get_current_user)) -> UserResponse:
+def me(current_user: User = Depends(get_authenticated_user)) -> UserResponse:
     return _to_user_response(current_user)
 
 
 @router.post("/request-verification", response_model=VerifyResponse)
-def request_verification(payload: RequestVerificationRequest, db: Session = Depends(get_db)) -> VerifyResponse:
+def request_verification(
+    payload: RequestVerificationRequest,
+    db: Session = Depends(get_db),
+    client_ip: str = Depends(request_client_ip),
+) -> VerifyResponse:
     email = normalize_email(payload.email)
+    email_key = hashlib.sha256(email.encode("utf-8")).hexdigest()
+    apply_rate_limit(
+        scope="email_verification_resend",
+        key=f"{email_key}:{client_ip}",
+        limit=settings.rate_limit_verification_resend_count,
+        window_seconds=settings.rate_limit_verification_resend_window_seconds,
+    )
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if user is not None and user.is_active and not user.is_verified:
         token = generate_email_verification_token(db, user=user)
-        try:
-            delivery_status = send_verification_email(user.email, token)
-            logger.info(
-                "Verification email delivery processed",
-                extra={"user_id": user.id, "delivery_status": delivery_status},
-            )
-        except Exception:
-            logger.exception(
-                "Verification email delivery failed",
-                extra={"user_id": user.id, "email_provider": "configured"},
-            )
+        _deliver_verification_email(user, token)
     return VerifyResponse(success=True)
 
 

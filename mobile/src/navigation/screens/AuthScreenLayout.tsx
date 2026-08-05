@@ -52,7 +52,7 @@ export function AuthInput({
   placeholder: string;
   secureTextEntry?: boolean;
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
-  keyboardType?: 'default' | 'email-address' | 'phone-pad';
+  keyboardType?: 'default' | 'email-address';
   autoComplete?:
     | 'email'
     | 'name'
@@ -60,9 +60,8 @@ export function AuthInput({
     | 'password-new'
     | 'off'
     | 'username'
-    | 'one-time-code'
-    | 'tel';
-  textContentType?: 'name' | 'emailAddress' | 'password' | 'newPassword' | 'oneTimeCode' | 'telephoneNumber' | 'none';
+    | 'one-time-code';
+  textContentType?: 'name' | 'emailAddress' | 'password' | 'newPassword' | 'oneTimeCode' | 'none';
 }) {
   return (
     <TextInput

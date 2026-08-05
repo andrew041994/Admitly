@@ -1,10 +1,8 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.api.auth import get_current_user_id
 from app.db.session import get_db
-from app.services.auth import resolve_user_from_access_token
 from app.schemas.ticket_hold import CreateTicketHoldRequest, TicketHoldResponse
 from app.services.ticket_holds import (
     InsufficientAvailabilityError,
@@ -14,27 +12,6 @@ from app.services.ticket_holds import (
 )
 
 router = APIRouter(prefix="/ticket-holds", tags=["ticket-holds"])
-
-bearer_scheme = HTTPBearer(auto_error=False)
-
-
-def get_current_user_id(
-    db: Session = Depends(get_db),
-    x_user_id: int | None = Header(default=None),
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> int:
-    if credentials is not None:
-        user = resolve_user_from_access_token(db, token=credentials.credentials)
-        return user.id
-
-    if settings.env == "development" and settings.allow_dev_header_auth and x_user_id is not None:
-        return int(x_user_id)
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required.",
-    )
-
 
 @router.post("", response_model=TicketHoldResponse, status_code=status.HTTP_201_CREATED)
 def create_hold(

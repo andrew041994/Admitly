@@ -34,6 +34,13 @@
           "cameraPermission": "Admitly uses your camera to scan ticket QR codes for event check-in."
         }
       ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Admitly to save your location when you opt in to nearby event alerts."
+        }
+      ],
+      "expo-notifications",
       "expo-secure-store"
     ]
   }

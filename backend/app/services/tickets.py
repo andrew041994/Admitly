@@ -928,6 +928,15 @@ def can_actor_override_check_in(db: Session, *, user_id: int, event_id: int) -> 
     )
 
 
+def can_actor_view_check_in_activity(db: Session, *, user_id: int, event_id: int) -> bool:
+    return has_event_permission_by_id(
+        db,
+        user_id=user_id,
+        event_id=event_id,
+        action=EventPermissionAction.VIEW_CHECKIN_SUMMARY,
+    )
+
+
 def can_check_in_event_tickets(db: Session, *, user_id: int, event_id: int) -> bool:
     return can_actor_check_in_event(db, user_id=user_id, event_id=event_id)
 
@@ -1138,14 +1147,13 @@ def validate_ticket_for_check_in(
     qr_payload: str | None = None,
     ticket_code: str | None = None,
 ) -> TicketCheckInValidationResult:
-    lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
-    if not lookup:
+    if not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
         result = TicketCheckInValidationResult(
             valid=False,
-            status=CHECK_IN_STATUS_INVALID,
-            message="A ticket code or QR payload is required.",
+            status=CHECK_IN_STATUS_UNAUTHORIZED,
+            message="Not authorized to check in tickets for this event.",
             event_id=event_id,
-            reason_code=CHECK_IN_STATUS_INVALID,
+            reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
         )
         _record_check_in_attempt(
             db,
@@ -1160,20 +1168,14 @@ def validate_ticket_for_check_in(
         db.flush()
         return result
 
-    manual_lookup = False
-    try:
-        normalize_manual_code(lookup)
-        manual_lookup = True
-    except InvalidManualCodeError:
-        manual_lookup = False
-
-    if manual_lookup and not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
+    lookup = extract_ticket_lookup_value(ticket_code or qr_payload)
+    if not lookup:
         result = TicketCheckInValidationResult(
             valid=False,
-            status=CHECK_IN_STATUS_UNAUTHORIZED,
-            message="Not authorized to check in tickets for this event.",
+            status=CHECK_IN_STATUS_INVALID,
+            message="A ticket code or QR payload is required.",
             event_id=event_id,
-            reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
+            reason_code=CHECK_IN_STATUS_INVALID,
         )
         _record_check_in_attempt(
             db,
@@ -1207,15 +1209,6 @@ def validate_ticket_for_check_in(
             event_id=event_id,
             ticket=ticket,
             reason_code=CHECK_IN_STATUS_TRANSFER_PENDING,
-        )
-    elif not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
-        result = TicketCheckInValidationResult(
-            valid=False,
-            status=CHECK_IN_STATUS_UNAUTHORIZED,
-            message="Not authorized to check in tickets for this event.",
-            event_id=event_id,
-            ticket=ticket,
-            reason_code=CHECK_IN_STATUS_UNAUTHORIZED,
         )
     else:
         result = _evaluate_ticket_for_entry(ticket=ticket, event_id=event_id)
@@ -1380,8 +1373,8 @@ def get_event_check_in_summary(
     actor_user_id: int,
     event_id: int,
 ) -> TicketCheckInSummaryResult:
-    if not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
-        raise TicketAuthorizationError("Not authorized to check in tickets for this event.")
+    if not can_actor_view_check_in_activity(db, user_id=actor_user_id, event_id=event_id):
+        raise TicketAuthorizationError("Not authorized to view check-in summary for this event.")
 
     tickets = (
         db.execute(
@@ -1501,7 +1494,7 @@ def list_recent_check_in_attempts(
     event_id: int,
     limit: int = 50,
 ) -> list[TicketCheckInAttemptRow]:
-    if not can_actor_check_in_event(db, user_id=actor_user_id, event_id=event_id):
+    if not can_actor_view_check_in_activity(db, user_id=actor_user_id, event_id=event_id):
         raise TicketAuthorizationError("Not authorized to view check-in activity for this event.")
 
     rows = (

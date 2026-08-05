@@ -1,21 +1,12 @@
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
-
-from app.lib.phone_numbers import InvalidPhoneNumberError, normalize_phone_number
+from pydantic import BaseModel, ConfigDict
 
 
 class UpdateProfileRequest(BaseModel):
-    full_name: str
-    phone_number: str | None = None
+    model_config = ConfigDict(extra="forbid")
 
-    @field_validator("phone_number")
-    @classmethod
-    def validate_phone_number(cls, value: str | None) -> str | None:
-        try:
-            return normalize_phone_number(value)
-        except InvalidPhoneNumberError as exc:
-            raise ValueError(str(exc)) from exc
+    full_name: str
 
 
 class ChangePasswordRequest(BaseModel):
@@ -27,10 +18,10 @@ class AccountProfileResponse(BaseModel):
     id: int
     email: str
     full_name: str
-    phone_number: str | None
-    phone_is_verified: bool
     is_active: bool
     is_verified: bool
+    email_verified_at: datetime | None
+    requires_email_verification: bool
     my_tickets_count: int
     my_events_count: int
     staff_events_count: int

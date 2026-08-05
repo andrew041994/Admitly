@@ -18,7 +18,13 @@ from app.services.event_staff import (
     remove_event_staff,
     update_event_staff_role,
 )
-from app.services.tickets import check_in_ticket, issue_tickets_for_completed_order
+from app.services.tickets import (
+    TicketAuthorizationError,
+    check_in_ticket,
+    get_event_check_in_summary,
+    issue_tickets_for_completed_order,
+    validate_ticket_for_check_in,
+)
 
 
 
@@ -185,6 +191,42 @@ def test_permission_matrix(db_session: Session) -> None:
     assert has_event_permission_by_id(db_session, user_id=data["admin"].id, event_id=event_id, action=EventPermissionAction.MANAGE_EVENT_STAFF)
 
 
+def test_disabled_staff_loses_event_access_immediately(db_session: Session) -> None:
+    data = _seed_event(db_session)
+    assignment = db_session.execute(
+        select(EventStaff).where(
+            EventStaff.event_id == data["event"].id,
+            EventStaff.user_id == data["checkin"].id,
+        )
+    ).scalar_one()
+    assignment.is_active = False
+    db_session.flush()
+
+    assert not has_event_permission_by_id(
+        db_session,
+        user_id=data["checkin"].id,
+        event_id=data["event"].id,
+        action=EventPermissionAction.CHECKIN_TICKETS,
+    )
+
+
+def test_checkin_summary_uses_summary_permission_not_scanner_permission(db_session: Session) -> None:
+    data = _seed_event(db_session)
+    summary = get_event_check_in_summary(
+        db_session,
+        actor_user_id=data["manager"].id,
+        event_id=data["event"].id,
+    )
+    assert summary.event_id == data["event"].id
+
+    with pytest.raises(TicketAuthorizationError):
+        get_event_check_in_summary(
+            db_session,
+            actor_user_id=data["checkin"].id,
+            event_id=data["event"].id,
+        )
+
+
 def test_checkin_role_can_checkin_support_cannot(db_session: Session) -> None:
     data = _seed_event(db_session)
     order = db_session.execute(select(Order).where(Order.event_id == data["event"].id)).scalar_one()
@@ -206,6 +248,21 @@ def test_checkin_role_can_checkin_support_cannot(db_session: Session) -> None:
     )
     assert denied.valid is False
     assert denied.status == "unauthorized"
+
+
+def test_unauthorized_validation_does_not_disclose_ticket_metadata(db_session: Session) -> None:
+    data = _seed_event(db_session)
+    order = db_session.execute(select(Order).where(Order.event_id == data["event"].id)).scalar_one()
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+
+    denied = validate_ticket_for_check_in(
+        db_session,
+        actor_user_id=data["support"].id,
+        event_id=data["event"].id,
+        qr_payload=ticket.qr_payload,
+    )
+    assert denied.status == "unauthorized"
+    assert denied.ticket is None
 
 
 def test_manager_can_refund_but_cannot_cancel_event(db_session: Session) -> None:

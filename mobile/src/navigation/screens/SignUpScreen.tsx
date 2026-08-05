@@ -5,7 +5,7 @@ import { ThemedButton } from '../../components/ThemedButton';
 import { getErrorMessage, useSession } from '../../context/SessionContext';
 import { theme } from '../../theme';
 import { AuthError, AuthInput, AuthLink, AuthScreenLayout } from './AuthScreenLayout';
-import { normalizePhoneNumber } from '../../features/transfers/validation';
+import { normalizeEmailAddress } from '../../features/auth/emailValidation';
 
 type SignUpScreenProps = {
   onGoToSignIn: () => void;
@@ -15,7 +15,6 @@ export function SignUpScreen({ onGoToSignIn }: SignUpScreenProps) {
   const { signUp } = useSession();
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -23,14 +22,14 @@ export function SignUpScreen({ onGoToSignIn }: SignUpScreenProps) {
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSignUp() {
-    if (!fullName.trim() || !email.trim() || !phoneNumber.trim() || !password || !confirmPassword) {
+    if (!fullName.trim() || !email.trim() || !password || !confirmPassword) {
       setError('Please complete all fields.');
       return;
     }
 
-    const normalizedPhone = normalizePhoneNumber(phoneNumber);
-    if (!normalizedPhone) {
-      setError('Enter a valid Guyana number or an international number with country code.');
+    const normalizedEmail = normalizeEmailAddress(email);
+    if (!normalizedEmail) {
+      setError('Enter a valid email address, such as name@example.com.');
       return;
     }
 
@@ -43,7 +42,7 @@ export function SignUpScreen({ onGoToSignIn }: SignUpScreenProps) {
     setError(null);
 
     try {
-      await signUp(fullName, email, normalizedPhone, password);
+      await signUp(fullName, normalizedEmail, password);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -60,14 +59,6 @@ export function SignUpScreen({ onGoToSignIn }: SignUpScreenProps) {
         autoCapitalize="words"
         autoComplete="name"
         textContentType="name"
-      />
-      <AuthInput
-        value={phoneNumber}
-        onChangeText={setPhoneNumber}
-        placeholder="Phone number"
-        keyboardType="phone-pad"
-        autoComplete="tel"
-        textContentType="telephoneNumber"
       />
       <AuthInput
         value={email}

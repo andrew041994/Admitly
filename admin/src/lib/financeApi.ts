@@ -53,6 +53,14 @@ export async function fetchAdminFinanceOrders(dateFrom?: string, dateTo?: string
   return (await response.json()) as FinanceOrderRow[];
 }
 
-export function buildOrdersExportUrl(dateFrom?: string, dateTo?: string) {
-  return `/admin/finance/orders/export.csv${asQuery({ date_from: dateFrom, date_to: dateTo })}`;
+export async function downloadAdminFinanceOrders(dateFrom?: string, dateTo?: string) {
+  const response = await apiRequest(`/admin/finance/orders/export.csv${asQuery({ date_from: dateFrom, date_to: dateTo })}`);
+  const blobUrl = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = 'admitly-orders.csv';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(blobUrl);
 }

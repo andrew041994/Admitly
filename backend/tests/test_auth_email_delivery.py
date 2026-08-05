@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api import auth as auth_api
 from app.models import User
-from app.schemas.auth import ForgotPasswordRequest, RequestVerificationRequest
+from app.schemas.auth import ForgotPasswordRequest, RegisterRequest, RequestVerificationRequest
 from app.services.auth import register_user
 from app.services import email as email_service
 from app.services.email import EmailConfigurationError, send_email
@@ -40,7 +40,8 @@ def test_request_verification_for_existing_unverified_user_calls_email_sender(
 
     monkeypatch.setattr(auth_api, "send_verification_email", fake_send)
 
-    response = auth_api.request_verification(RequestVerificationRequest(email=user.email), db=db_session)
+    monkeypatch.setattr(auth_api, "apply_rate_limit", lambda **kwargs: None)
+    response = auth_api.request_verification(RequestVerificationRequest(email=user.email), db=db_session, client_ip="192.0.2.1")
 
     assert response.success is True
     assert len(calls) == 1
@@ -54,10 +55,42 @@ def test_request_verification_for_unknown_email_returns_success_without_sending(
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(auth_api, "send_verification_email", lambda to_email, token: calls.append((to_email, token)))
 
-    response = auth_api.request_verification(RequestVerificationRequest(email="unknown@example.com"), db=db_session)
+    monkeypatch.setattr(auth_api, "apply_rate_limit", lambda **kwargs: None)
+    response = auth_api.request_verification(RequestVerificationRequest(email="unknown@example.com"), db=db_session, client_ip="192.0.2.2")
 
     assert response.success is True
     assert calls == []
+
+
+def test_signup_creates_unverified_account_and_sends_verification_after_creation(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(auth_api, "send_verification_email", lambda email, token: calls.append((email, token)) or "sent_mock")
+
+    response = auth_api.register(
+        RegisterRequest(email=" New.User+Admitly@Example.COM ", password="GoodPass123", full_name="New User"),
+        db=db_session,
+    )
+
+    assert response.user.email == "new.user+admitly@example.com"
+    assert response.user.is_verified is False
+    assert response.user.requires_email_verification is True
+    assert len(calls) == 1
+    assert calls[0][0] == response.user.email
+    assert calls[0][1]
+
+
+def test_verification_resend_rate_limit_uses_hashed_email_key(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[dict] = []
+    monkeypatch.setattr(auth_api, "apply_rate_limit", lambda **kwargs: captured.append(kwargs))
+    auth_api.request_verification(
+        RequestVerificationRequest(email="private@example.com"), db=db_session, client_ip="192.0.2.3"
+    )
+    assert captured[0]["scope"] == "email_verification_resend"
+    assert "private@example.com" not in captured[0]["key"]
 
 
 def test_forgot_password_for_existing_active_user_calls_email_sender(
@@ -152,6 +185,22 @@ def test_password_reset_email_uses_clickable_web_link_and_plain_code_fallback(mo
     assert "If the app does not open, copy and paste this reset code into the Reset Password screen." in sent["body"]
     assert "reset-token-123" in sent["body"]
     assert "admitly://reset-password" not in sent["body"]
+
+
+def test_verification_email_uses_web_link_plain_code_and_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, str] = {}
+
+    def fake_send_email(to_email: str, subject: str, body: str) -> str:
+        sent.update(to_email=to_email, subject=subject, body=body)
+        return "sent_mock"
+
+    monkeypatch.setattr(email_service.settings, "frontend_base_url", "https://admitlyevents.com")
+    monkeypatch.setattr(email_service.settings, "verification_token_exp_hours", 24)
+    monkeypatch.setattr(email_service, "send_email", fake_send_email)
+    assert email_service.send_verification_email("user@example.com", "verify-token-123") == "sent_mock"
+    assert "https://admitlyevents.com/verify-email?token=verify-token-123" in sent["body"]
+    assert "expire in 24 hours" in sent["body"]
+    assert "did not create an Admitly account" in sent["body"]
 
 
 def test_sendgrid_missing_api_key_raises_safe_error(monkeypatch: pytest.MonkeyPatch) -> None:

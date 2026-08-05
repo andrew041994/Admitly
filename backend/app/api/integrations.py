@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_admin, get_current_user_id
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.integrations import (
@@ -35,7 +35,11 @@ from app.services.integrations import (
     update_webhook_endpoint,
 )
 
-router = APIRouter(prefix="/admin/integrations", tags=["integrations"])
+router = APIRouter(
+    prefix="/admin/integrations",
+    tags=["integrations"],
+    dependencies=[Depends(get_current_admin)],
+)
 public_router = APIRouter(prefix="/public/integrations", tags=["public-integrations"])
 
 

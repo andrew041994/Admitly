@@ -4,6 +4,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CreateTicketHoldRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     ticket_tier_id: int
     quantity: int = Field(gt=0)
 

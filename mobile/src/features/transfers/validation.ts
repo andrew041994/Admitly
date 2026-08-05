@@ -1,28 +1,15 @@
-export type TransferRecipientType = 'email' | 'phone';
-
 export const ACTIVE_TRANSFER_METHODS = ['email'] as const;
-export const PHONE_TRANSFER_LABEL = 'Phone transfer — coming after phone verification';
 
-export function normalizePhoneNumber(value: string): string | null {
-  const raw = value.trim();
-  if (!raw) return null;
-  if (!/^[+0-9().\-\s]+$/.test(raw)) return null;
-  const explicitInternational = raw.startsWith('+') || raw.startsWith('00');
-  let digits = raw.replace(/\D/g, '');
-  if (raw.startsWith('00')) digits = digits.slice(2);
-  else if (!explicitInternational) {
-    if (digits.length === 7) digits = `592${digits}`;
-    else if (digits.length === 10) digits = `1${digits}`;
-    else return null;
-  }
-  if (digits.length < 8 || digits.length > 15 || digits.startsWith('0')) return null;
-  return `+${digits}`;
-}
-
-export function normalizeTransferIdentifier(type: TransferRecipientType, value: string): string | null {
-  if (type === 'phone') return normalizePhoneNumber(value);
+export function normalizeTransferEmail(value: string): string | null {
   const normalized = value.trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) && normalized.length <= 255 ? normalized : null;
+  if (!normalized || normalized.length > 254 || normalized.includes(' ')) return null;
+  if ((normalized.match(/@/g) ?? []).length !== 1) return null;
+  const [local, domain] = normalized.split('@');
+  if (!local || local.length > 64 || !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local)) return null;
+  if (local.startsWith('.') || local.endsWith('.') || local.includes('..')) return null;
+  const labels = domain.split('.');
+  if (labels.length < 2 || labels.some((label) => !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label))) return null;
+  return normalized;
 }
 
 export function maskTransferIdentifier(value: string): string {

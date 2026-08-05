@@ -25,20 +25,20 @@ def test_push_token_registration_reregistration_and_delete(db_session: Session) 
     user = _seed_user(db_session, "reg")
 
     first = register_my_push_token(
-        PushTokenRegisterRequest(token="tok-1", platform="ios"),
+        PushTokenRegisterRequest(token="ExponentPushToken[test-one]", platform="ios"),
         db=db_session,
         user_id=user.id,
     )
-    assert first.is_active is True
+    assert first.device_registered is True
 
     second = register_my_push_token(
-        PushTokenRegisterRequest(token="tok-1", platform="android"),
+        PushTokenRegisterRequest(token="ExponentPushToken[test-one]", platform="android"),
         db=db_session,
         user_id=user.id,
     )
-    assert second.platform == "android"
+    assert second.device_registered is True
 
-    deleted = delete_my_push_token(PushTokenDeleteRequest(token="tok-1"), db=db_session, user_id=user.id)
+    deleted = delete_my_push_token(PushTokenDeleteRequest(token="ExponentPushToken[test-one]"), db=db_session, user_id=user.id)
     assert deleted.success is True
 
 

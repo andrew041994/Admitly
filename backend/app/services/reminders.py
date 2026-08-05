@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import logging
 
 from sqlalchemy import Select, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.enums import EventStatus, ReminderType, TicketStatus
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 POLL_WINDOW = timedelta(minutes=10)
 REMINDER_OFFSETS: dict[ReminderType, timedelta] = {
     ReminderType.HOURS_24_BEFORE: timedelta(hours=24),
+    ReminderType.HOURS_1_BEFORE: timedelta(hours=1),
     ReminderType.MINUTES_30_BEFORE: timedelta(minutes=30),
 }
 EVENT_DAY_REMINDER_LOCAL_TIME = time(hour=9)
@@ -59,6 +60,7 @@ def get_reminder_due_times_for_event(event: Event) -> dict[ReminderType, datetim
     return {
         ReminderType.HOURS_24_BEFORE: event_start - timedelta(hours=24),
         ReminderType.HOURS_3_BEFORE: today_due,
+        ReminderType.HOURS_1_BEFORE: event_start - timedelta(hours=1),
         ReminderType.MINUTES_30_BEFORE: event_start - timedelta(minutes=30),
     }
 
@@ -66,8 +68,19 @@ def get_reminder_due_times_for_event(event: Event) -> dict[ReminderType, datetim
 def get_reminder_windows(now: datetime | None = None) -> dict[ReminderType, tuple[datetime, datetime]]:
     reference_now = _to_aware(now) if now is not None else get_guyana_now()
     windows: dict[ReminderType, tuple[datetime, datetime]] = {}
-    for reminder_type in (ReminderType.HOURS_24_BEFORE, ReminderType.HOURS_3_BEFORE, ReminderType.MINUTES_30_BEFORE):
-        windows[reminder_type] = (reference_now, reference_now + POLL_WINDOW)
+    for reminder_type in (
+        ReminderType.HOURS_24_BEFORE,
+        ReminderType.HOURS_3_BEFORE,
+        ReminderType.HOURS_1_BEFORE,
+        ReminderType.MINUTES_30_BEFORE,
+    ):
+        if reminder_type == ReminderType.HOURS_1_BEFORE:
+            windows[reminder_type] = (
+                reference_now - timedelta(minutes=5),
+                reference_now + timedelta(minutes=5),
+            )
+        else:
+            windows[reminder_type] = (reference_now, reference_now + POLL_WINDOW)
     return windows
 
 
@@ -96,6 +109,9 @@ def _due_events_query(reminder_type: ReminderType, now: datetime) -> Select[tupl
     elif reminder_type == ReminderType.MINUTES_30_BEFORE:
         earliest_start = window_start + timedelta(minutes=30)
         latest_start = window_end + timedelta(minutes=30)
+    elif reminder_type == ReminderType.HOURS_1_BEFORE:
+        earliest_start = window_start + timedelta(hours=1)
+        latest_start = window_end + timedelta(hours=1)
     else:
         earliest_start = window_start
         latest_start = window_end + timedelta(days=1)
@@ -149,6 +165,7 @@ def dispatch_due_event_reminders(
         sent_per_type={
             ReminderType.HOURS_24_BEFORE: 0,
             ReminderType.HOURS_3_BEFORE: 0,
+            ReminderType.HOURS_1_BEFORE: 0,
             ReminderType.MINUTES_30_BEFORE: 0,
         }
     )
@@ -191,16 +208,24 @@ def dispatch_due_event_reminders(
                     continue
                 
 
-                log = EventReminderLog(
-                    event_id=event.id,
-                    user_id=user.id,
-                    reminder_type=reminder_type,
-                    sent_at=reference_now,
-                )
-                try:
-                    db.add(log)
-                    db.flush()
-                except IntegrityError:
+                inserted = db.execute(
+                    pg_insert(EventReminderLog)
+                    .values(
+                        event_id=event.id,
+                        user_id=user.id,
+                        reminder_type=reminder_type,
+                        sent_at=reference_now,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            EventReminderLog.event_id,
+                            EventReminderLog.user_id,
+                            EventReminderLog.reminder_type,
+                        ]
+                    )
+                    .returning(EventReminderLog.id)
+                ).scalar_one_or_none()
+                if inserted is None:
                     logger.info(
                         "Duplicate reminder log detected",
                         extra={"event_id": event.id, "user_id": user.id, "reminder_type": reminder_type.value},

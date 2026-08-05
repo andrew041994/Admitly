@@ -1,9 +1,17 @@
 import uuid
 from datetime import timedelta
 
+from app.core.security import create_token
+
 
 def unique_email(prefix: str = "user") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}@example.com"
+
+
+def auth_headers(user) -> dict[str, str]:
+    """Authenticate API tests through the same signed Bearer path as production."""
+    token = create_token(subject=str(user.id), token_type="access", expires_delta=timedelta(minutes=15))
+    return {"Authorization": f"Bearer {token}"}
 
 
 def transfer_ticket_to_user(db, *, ticket_id: int, from_user_id: int, to_user_id: int):

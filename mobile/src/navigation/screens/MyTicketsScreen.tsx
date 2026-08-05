@@ -18,7 +18,6 @@ import { theme } from '../../theme';
 
 type MyTicketsScreenProps = {
   onOpenTicket: (ticketId: number) => void;
-  onCompleteProfile: () => void;
 };
 
 function formatDate(iso: string): string {

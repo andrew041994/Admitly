@@ -4,15 +4,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CreatePendingOrderFromHoldsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     hold_ids: list[int] = Field(min_length=1)
     promo_code_text: str | None = None
 
 
 class OrderCancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     reason: str | None = None
 
 
 class OrderRefundRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     reason: str | None = None
 
 
@@ -53,11 +59,15 @@ class OrderResponse(BaseModel):
 
 
 class TicketSelectionItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     ticket_tier_id: int
     quantity: int = Field(gt=0)
 
 
 class CreateOrderFromSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     event_id: int
     items: list[TicketSelectionItemRequest] = Field(min_length=1)
     acknowledge_started_event: bool = False

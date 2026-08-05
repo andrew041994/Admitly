@@ -8,11 +8,15 @@ import {
   logout,
   refresh,
   register,
+  requestEmailVerification,
   requestPasswordReset,
   resetPassword,
+  verifyEmail as verifyEmailRequest,
 } from '../api/auth';
 import { ApiError, setApiAuthToken } from '../api/client';
 import { clearStoredSession, getStoredSession, setStoredSession } from '../storage/sessionStorage';
+import { normalizeEmailAddress } from '../features/auth/emailValidation';
+import { unregisterPushTokenForLogout } from '../features/notifications/pushRegistration';
 
 type SessionState = 'booting' | 'signedOut' | 'signedIn';
 
@@ -20,10 +24,12 @@ type SessionContextValue = {
   state: SessionState;
   user: AuthUser | null;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (fullName: string, email: string, phoneNumber: string, password: string) => Promise<void>;
+  signUp: (fullName: string, email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   requestPasswordReset: (email: string) => Promise<void>;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
+  resendVerification: () => Promise<void>;
+  verifyEmail: (token: string) => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | undefined>(undefined);
@@ -39,7 +45,7 @@ function getErrorMessage(error: unknown) {
 }
 
 function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
+  return normalizeEmailAddress(email) ?? email.trim().toLowerCase();
 }
 
 function toStoredSession(tokens: AuthTokens) {
@@ -163,14 +169,19 @@ export function SessionProvider({ children }: PropsWithChildren) {
         setUser(result.user);
         setState('signedIn');
       },
-      signUp: async (fullName: string, email: string, phoneNumber: string, password: string) => {
-        const result = await register(fullName.trim(), normalizeEmail(email), phoneNumber, password);
+      signUp: async (fullName: string, email: string, password: string) => {
+        const result = await register(fullName.trim(), normalizeEmail(email), password);
         await setStoredSession(toStoredSession(result.tokens));
         setApiAuthToken(result.tokens.access_token);
         setUser(result.user);
         setState('signedIn');
       },
       signOut: async () => {
+        try {
+          await unregisterPushTokenForLogout();
+        } catch {
+          // push-token cleanup must not block sign-out
+        }
         try {
           await logout();
         } catch {
@@ -187,6 +198,17 @@ export function SessionProvider({ children }: PropsWithChildren) {
       },
       resetPassword: async (token: string, newPassword: string) => {
         await resetPassword(token.trim(), newPassword);
+      },
+      resendVerification: async () => {
+        if (!user) throw new Error('Sign in to resend your verification email.');
+        await requestEmailVerification(user.email);
+      },
+      verifyEmail: async (token: string) => {
+        await verifyEmailRequest(token.trim());
+        if (user) {
+          const refreshedUser = await getCurrentUser();
+          setUser(refreshedUser);
+        }
       },
     }),
     [state, user],

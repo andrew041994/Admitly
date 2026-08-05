@@ -1,5 +1,7 @@
-import { NavigationContainer, DarkTheme, LinkingOptions } from '@react-navigation/native';
+import { NavigationContainer, DarkTheme, LinkingOptions, useNavigation } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import * as Notifications from 'expo-notifications';
 
 import { useSession } from '../context/SessionContext';
 import { theme } from '../theme';
@@ -15,6 +17,7 @@ import { HomeScreen } from './screens/HomeScreen';
 import { ResetPasswordScreen } from './screens/ResetPasswordScreen';
 import { SignInScreen } from './screens/SignInScreen';
 import { SignUpScreen } from './screens/SignUpScreen';
+import { VerifyEmailScreen } from './screens/VerifyEmailScreen';
 import { PurchaseResultScreen } from './screens/PurchaseResultScreen';
 import { MmgAgentCheckoutScreen } from './screens/MmgAgentCheckoutScreen';
 import { MyTicketsScreen } from './screens/MyTicketsScreen';
@@ -27,6 +30,9 @@ import { OrganizerDashboardScreen } from './screens/OrganizerDashboardScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { StaffManagementScreen } from './screens/StaffManagementScreen';
 import { StaffEventsScreen } from './screens/StaffEventsScreen';
+import { NotificationsScreen } from './screens/NotificationsScreen';
+import { registerPushTokenIfPermitted } from '../features/notifications/pushRegistration';
+import { getNotificationDestination } from '../features/notifications/routing';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 const AppStack = createNativeStackNavigator<AppStackParamList>();
@@ -40,6 +46,12 @@ const linking: LinkingOptions<AuthStackParamList> = {
       ForgotPassword: 'forgot-password',
       ResetPassword: {
         path: 'reset-password',
+        parse: {
+          token: (token: string) => token,
+        },
+      },
+      VerifyEmail: {
+        path: 'verify-email',
         parse: {
           token: (token: string) => token,
         },
@@ -60,38 +72,50 @@ const navTheme = {
   },
 };
 
-function AuthNavigator() {
+function AuthNavigator({ verificationOnly = false }: { verificationOnly?: boolean }) {
+  const { signOut, user } = useSession();
   return (
     <AuthStack.Navigator
-      initialRouteName="SignIn"
+      initialRouteName={verificationOnly ? 'VerifyEmail' : 'SignIn'}
       screenOptions={{
         headerStyle: { backgroundColor: theme.colors.surface },
         headerTintColor: theme.colors.primary,
         contentStyle: { backgroundColor: theme.colors.background },
       }}
     >
-      <AuthStack.Screen name="SignIn" options={{ headerShown: false }}>
+      {!verificationOnly ? <AuthStack.Screen name="SignIn" options={{ headerShown: false }}>
         {({ navigation }) => (
           <SignInScreen
             onGoToSignUp={() => navigation.navigate('SignUp')}
             onGoToForgotPassword={() => navigation.navigate('ForgotPassword')}
           />
         )}
-      </AuthStack.Screen>
-      <AuthStack.Screen name="SignUp" options={{ headerShown: false }}>
+      </AuthStack.Screen> : null}
+      {!verificationOnly ? <AuthStack.Screen name="SignUp" options={{ headerShown: false }}>
         {({ navigation }) => <SignUpScreen onGoToSignIn={() => navigation.navigate('SignIn')} />}
-      </AuthStack.Screen>
-      <AuthStack.Screen name="ForgotPassword" options={{ headerShown: false }}>
+      </AuthStack.Screen> : null}
+      {!verificationOnly ? <AuthStack.Screen name="ForgotPassword" options={{ headerShown: false }}>
         {({ navigation }) => (
           <ForgotPasswordScreen
             onGoToSignIn={() => navigation.navigate('SignIn')}
             onGoToResetPassword={() => navigation.navigate('ResetPassword')}
           />
         )}
-      </AuthStack.Screen>
-      <AuthStack.Screen name="ResetPassword" options={{ headerShown: false }}>
+      </AuthStack.Screen> : null}
+      {!verificationOnly ? <AuthStack.Screen name="ResetPassword" options={{ headerShown: false }}>
         {({ navigation, route }) => (
           <ResetPasswordScreen initialToken={route.params?.token} onGoToSignIn={() => navigation.navigate('SignIn')} />
+        )}
+      </AuthStack.Screen> : null}
+      <AuthStack.Screen name="VerifyEmail" options={{ headerShown: false }}>
+        {({ navigation, route }) => (
+          <VerifyEmailScreen
+            initialToken={route.params?.token}
+            onGoToSignIn={() => {
+              if (user) void signOut();
+              else navigation.navigate('SignIn');
+            }}
+          />
         )}
       </AuthStack.Screen>
     </AuthStack.Navigator>
@@ -115,23 +139,62 @@ function TicketSelectionRoute({ eventId, onOrderCreated }: { eventId: number; on
 function SignedInNavigator() {
   const { signOut, user } = useSession();
   const canAccessScanner = Boolean(user);
+  const navigation = useNavigation<NativeStackNavigationProp<AppStackParamList>>();
+
+  const openDestination = (destination: ReturnType<typeof getNotificationDestination>) => {
+    if (!destination) return;
+    if (destination.screen === 'TicketDetail') navigation.navigate('TicketDetail', destination.params);
+    else if (destination.screen === 'EventDetail') navigation.navigate('EventDetail', destination.params);
+    else navigation.navigate('MyTickets');
+  };
+
+  useEffect(() => {
+    void registerPushTokenIfPermitted().catch(() => undefined);
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      openDestination(getNotificationDestination(response.notification.request.content.data));
+    });
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) {
+        openDestination(getNotificationDestination(response.notification.request.content.data));
+        void Notifications.clearLastNotificationResponseAsync();
+      }
+    });
+    return () => subscription.remove();
+  }, []);
 
   return (
     <AppStack.Navigator
+      initialRouteName="Home"
       screenOptions={{
         headerStyle: { backgroundColor: theme.colors.surface },
         headerTintColor: theme.colors.primary,
         contentStyle: { backgroundColor: theme.colors.background },
       }}
     >
+      <AppStack.Screen name="VerifyEmail" options={{ headerShown: false }}>
+        {({ route }) => (
+          <VerifyEmailScreen initialToken={route.params?.token} onGoToSignIn={() => void signOut()} />
+        )}
+      </AppStack.Screen>
       <AppStack.Screen name="Home">
         {({ navigation }) => (
           <HomeScreen
             onOpenProfile={() => navigation.navigate('Profile')}
             onOpenMyTickets={() => navigation.navigate('MyTickets')}
+            onOpenNotifications={() => navigation.navigate('Notifications')}
             onSignOut={signOut}
             onOpenEvent={(eventId) => navigation.navigate('EventDetail', { eventId })}
             onGetTickets={(eventId) => navigation.navigate('TicketSelection', { eventId })}
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen name="Notifications" options={{ title: 'Notifications' }}>
+        {({ navigation }) => (
+          <NotificationsScreen
+            onOpenNotification={(notification) => openDestination(getNotificationDestination({
+              route_key: notification.route_key,
+              route_params: notification.route_params,
+            }))}
           />
         )}
       </AppStack.Screen>
@@ -182,13 +245,12 @@ function SignedInNavigator() {
         {({ navigation }) => (
           <MyTicketsScreen
             onOpenTicket={(ticketId) => navigation.navigate('TicketDetail', { ticketId })}
-            onCompleteProfile={() => navigation.navigate('Profile')}
           />
         )}
       </AppStack.Screen>
       <AppStack.Screen name="TicketDetail" options={{ title: 'Ticket' }}>
-        {({ route, navigation }) => (
-          <TicketDetailScreen ticketId={route.params.ticketId} onCompleteProfile={() => navigation.navigate('Profile')} />
+        {({ route }) => (
+          <TicketDetailScreen ticketId={route.params.ticketId} />
         )}
       </AppStack.Screen>
       <AppStack.Screen name="Scanner" options={{ headerShown: false }}>
@@ -234,11 +296,19 @@ function SignedInNavigator() {
 }
 
 export function RootNavigator() {
-  const { state } = useSession();
+  const { state, user } = useSession();
 
   return (
     <NavigationContainer theme={navTheme} linking={linking}>
-      {state === 'booting' ? <BootScreen /> : state === 'signedOut' ? <AuthNavigator /> : <SignedInNavigator />}
+      {state === 'booting' ? (
+        <BootScreen />
+      ) : state === 'signedOut' ? (
+        <AuthNavigator />
+      ) : user?.requires_email_verification ? (
+        <AuthNavigator verificationOnly />
+      ) : (
+        <SignedInNavigator />
+      )}
     </NavigationContainer>
   );
 }

@@ -4,7 +4,23 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.lib.phone_numbers import InvalidPhoneNumberError, normalize_phone_number
+from app.lib.email_addresses import InvalidEmailAddressError, normalize_and_validate_email
+
+
+class NormalizedEmailRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def validate_email(cls, value: object) -> object:
+        if not isinstance(value, str):
+            raise ValueError("Enter a valid email address.")
+        try:
+            return normalize_and_validate_email(value)
+        except InvalidEmailAddressError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class UserResponse(BaseModel):
@@ -13,10 +29,10 @@ class UserResponse(BaseModel):
     id: int
     email: str
     full_name: str
-    phone_number: str | None = None
-    phone_is_verified: bool = False
     is_active: bool
     is_verified: bool
+    email_verified_at: datetime | None
+    requires_email_verification: bool
     is_admin: bool
     auth_provider: str
     created_at: datetime
@@ -24,26 +40,12 @@ class UserResponse(BaseModel):
     last_login_at: datetime | None = None
 
 
-class RegisterRequest(BaseModel):
-    email: str
+class RegisterRequest(NormalizedEmailRequest):
     password: str
     full_name: str
-    phone_number: str
-
-    @field_validator("phone_number")
-    @classmethod
-    def validate_phone_number(cls, value: str) -> str:
-        try:
-            normalized = normalize_phone_number(value)
-        except InvalidPhoneNumberError as exc:
-            raise ValueError(str(exc)) from exc
-        if normalized is None:
-            raise ValueError("Phone number is required.")
-        return normalized
 
 
-class LoginRequest(BaseModel):
-    email: str
+class LoginRequest(NormalizedEmailRequest):
     password: str
 
 
@@ -76,12 +78,12 @@ class VerifyResponse(BaseModel):
     success: bool
 
 
-class RequestVerificationRequest(BaseModel):
-    email: str
+class RequestVerificationRequest(NormalizedEmailRequest):
+    pass
 
 
-class ForgotPasswordRequest(BaseModel):
-    email: str
+class ForgotPasswordRequest(NormalizedEmailRequest):
+    pass
 
 
 class ResetPasswordRequest(BaseModel):

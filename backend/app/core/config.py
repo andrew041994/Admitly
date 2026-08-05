@@ -8,7 +8,6 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="Admitly API", alias="APP_NAME")
     env: str = Field(default="development", alias="ENV")
-    allow_dev_header_auth: bool = Field(default=False, alias="ALLOW_DEV_HEADER_AUTH")
     database_url: str = Field(alias="DATABASE_URL")
 
     mmg_enabled: bool = Field(default=False, alias="MMG_ENABLED")
@@ -41,6 +40,8 @@ class Settings(BaseSettings):
 
     push_notifications_enabled: bool = Field(default=False, alias="PUSH_NOTIFICATIONS_ENABLED")
     push_provider: str = Field(default="noop", alias="PUSH_PROVIDER")
+    rate_limit_push_registration_count: int = Field(default=10, alias="RATE_LIMIT_PUSH_REGISTRATION_COUNT")
+    rate_limit_push_registration_window_seconds: int = Field(default=300, alias="RATE_LIMIT_PUSH_REGISTRATION_WINDOW_SECONDS")
 
     ticket_public_base_url: str = Field(default="https://admitly.app", alias="TICKET_PUBLIC_BASE_URL")
 
@@ -57,6 +58,8 @@ class Settings(BaseSettings):
     jwt_access_token_exp_minutes: int = Field(default=15, alias="JWT_ACCESS_TOKEN_EXP_MINUTES")
     jwt_refresh_token_exp_days: int = Field(default=30, alias="JWT_REFRESH_TOKEN_EXP_DAYS")
     verification_token_exp_hours: int = Field(default=24, alias="VERIFICATION_TOKEN_EXP_HOURS")
+    rate_limit_verification_resend_count: int = Field(default=3, alias="RATE_LIMIT_VERIFICATION_RESEND_COUNT")
+    rate_limit_verification_resend_window_seconds: int = Field(default=900, alias="RATE_LIMIT_VERIFICATION_RESEND_WINDOW_SECONDS")
     password_reset_token_exp_minutes: int = Field(default=60, alias="PASSWORD_RESET_TOKEN_EXP_MINUTES")
     rate_limit_order_create_count: int = Field(default=8, alias="RATE_LIMIT_ORDER_CREATE_COUNT")
     rate_limit_order_create_window_seconds: int = Field(default=60, alias="RATE_LIMIT_ORDER_CREATE_WINDOW_SECONDS")

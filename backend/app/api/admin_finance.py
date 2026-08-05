@@ -7,7 +7,7 @@ from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_admin, get_current_user_id
 from app.db.session import get_db
 from app.models.enums import PayoutStatus, ReconciliationStatus
 from app.models.user import User
@@ -24,7 +24,11 @@ from app.services.finance_reporting import (
     list_admin_settlement_rows,
 )
 
-router = APIRouter(prefix="/admin/finance", tags=["admin-finance"])
+router = APIRouter(
+    prefix="/admin/finance",
+    tags=["admin-finance"],
+    dependencies=[Depends(get_current_admin)],
+)
 
 
 def _require_admin(db: Session, *, user_id: int) -> None:

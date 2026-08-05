@@ -54,7 +54,7 @@ export function StaffManagementScreen() {
         ))}
       </View>
 
-      <TextInput style={styles.input} value={query} onChangeText={setQuery} placeholder="Search name/email/phone" placeholderTextColor={theme.colors.textSecondary} />
+      <TextInput style={styles.input} value={query} onChangeText={setQuery} placeholder="Search name or email" placeholderTextColor={theme.colors.textSecondary} />
       <Pressable style={styles.button} onPress={onSearch}><Text style={styles.buttonText}>Search users</Text></Pressable>
       <FlatList
         style={styles.searchResults}

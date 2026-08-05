@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.enums import EventStaffRole
@@ -49,10 +49,7 @@ def _get_staff_role(db: Session, *, event_id: int, user_id: int) -> EventStaffRo
         .where(
             EventStaff.event_id == event_id,
             EventStaff.user_id == user_id,
-            or_(
-                EventStaff.is_active.is_(True),
-                EventStaff.is_active.is_(None),
-            ),
+            EventStaff.is_active.is_(True),
         )
     ).scalar_one_or_none()
 
@@ -89,7 +86,7 @@ def has_event_permission(
     action: EventPermissionAction,
 ) -> bool:
     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-    if user is None:
+    if user is None or not user.is_active:
         return False
     if user.is_admin:
         return True
@@ -114,7 +111,7 @@ def has_event_permission_by_id(
         return False
 
     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-    if user is None:
+    if user is None or not user.is_active:
         return False
 
     if user.is_admin:
@@ -169,7 +166,7 @@ def get_event_staff_role(
     if event is None:
         return None
     user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
-    if user is None:
+    if user is None or not user.is_active:
         return None
     if user.is_admin or _is_event_owner(db, event=event, user_id=user_id):
         return EventStaffRole.OWNER

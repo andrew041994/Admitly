@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_user_id
 from app.db.session import get_db
 from app.models.enums import OrderStatus, PayoutStatus, ReconciliationStatus, TicketStatus
 from app.schemas.finance import (

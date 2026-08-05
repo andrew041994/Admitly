@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   ActivityIndicator,
   FlatList,
@@ -15,6 +16,7 @@ import {
 } from 'react-native';
 
 import { ApiError } from '../../api/client';
+import { getUnreadNotificationCount } from '../../api/notifications';
 import { DiscoveryFilters, EventDiscoveryDetail, EventDiscoveryItem, getDiscoverableEventDetail, listDiscoverableEvents } from '../../api/events';
 import { Screen } from '../../components/Screen';
 import { ThemedButton } from '../../components/ThemedButton';
@@ -26,6 +28,7 @@ type DateFilter = 'today' | 'this_week' | 'upcoming';
 type HomeScreenProps = {
   onOpenProfile: () => void;
   onOpenMyTickets: () => void;
+  onOpenNotifications: () => void;
   onSignOut: () => void;
   onOpenEvent: (eventId: number) => void;
   onGetTickets: (eventId: number) => void;
@@ -37,7 +40,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEvent, onGetTickets }: HomeScreenProps) {
+export function HomeScreen({ onOpenProfile, onOpenMyTickets, onOpenNotifications, onSignOut, onOpenEvent, onGetTickets }: HomeScreenProps) {
   const [events, setEvents] = useState<EventDiscoveryItem[]>([]);
   const [featuredEvents, setFeaturedEvents] = useState<EventDiscoveryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,6 +56,17 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
   const [eventDetailsById, setEventDetailsById] = useState<Record<number, EventDiscoveryDetail>>({});
   const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null);
   const [detailErrorById, setDetailErrorById] = useState<Record<number, string | null>>({});
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const refreshUnreadCount = useCallback(async () => {
+    try { setUnreadCount((await getUnreadNotificationCount()).unread_count); } catch { /* inbox remains available offline */ }
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    void refreshUnreadCount();
+    const interval = setInterval(() => void refreshUnreadCount(), 30000);
+    return () => clearInterval(interval);
+  }, [refreshUnreadCount]));
 
   useEffect(() => {
     const timeout = setTimeout(() => setQuery(searchInput.trim()), 300);
@@ -150,6 +164,15 @@ export function HomeScreen({ onOpenProfile, onOpenMyTickets, onSignOut, onOpenEv
           <Text style={styles.title}>Admitly</Text>
         </View>
         <View style={styles.headerLinks}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`}
+            onPress={onOpenNotifications}
+            style={styles.notificationButton}
+          >
+            <Text style={styles.notificationIcon}>🔔</Text>
+            {unreadCount > 0 ? <Text style={styles.notificationBadge}>{unreadCount > 99 ? '99+' : unreadCount}</Text> : null}
+          </Pressable>
           <Pressable onPress={onOpenMyTickets}><Text style={styles.profileLink}>My Tickets</Text></Pressable>
           <Pressable onPress={onOpenProfile}><Text style={styles.profileLink}>Profile</Text></Pressable>
         </View>
@@ -336,7 +359,10 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.heading,
     fontWeight: '700',
   },
-  headerLinks: { flexDirection: 'row', gap: theme.spacing.md },
+  headerLinks: { flexDirection: 'row', gap: theme.spacing.sm, alignItems: 'center' },
+  notificationButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  notificationIcon: { fontSize: 20 },
+  notificationBadge: { position: 'absolute', right: 0, top: 0, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 3, backgroundColor: theme.colors.error, color: '#fff', fontSize: 10, fontWeight: '700', textAlign: 'center', lineHeight: 18, overflow: 'hidden' },
   profileLink: { color: theme.colors.primary, fontWeight: '600' },
   searchWrap: {
     paddingHorizontal: theme.spacing.lg,

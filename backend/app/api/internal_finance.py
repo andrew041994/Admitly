@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.ticket_holds import get_current_user_id
+from app.api.auth import get_current_admin, get_current_user_id
 from app.db.session import get_db
 from app.models.enums import PayoutStatus
 from app.models.user import User
@@ -14,7 +14,11 @@ from app.services.finance_reporting import (
     mark_order_reconciled,
 )
 
-router = APIRouter(prefix="/internal/orders", tags=["internal-finance"])
+router = APIRouter(
+    prefix="/internal/orders",
+    tags=["internal-finance"],
+    dependencies=[Depends(get_current_admin)],
+)
 
 
 def _require_admin(db: Session, *, user_id: int) -> None:
