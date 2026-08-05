@@ -49,6 +49,7 @@ def _to_user_response(user: User) -> UserResponse:
         email=user.email,
         full_name=user.full_name,
         phone_number=user.phone,
+        phone_is_verified=user.phone_verified_at is not None,
         is_active=user.is_active,
         is_verified=user.is_verified,
         is_admin=user.is_admin,
@@ -74,7 +75,13 @@ def get_current_user(
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthResponse:
-    user, issued = register_user(db, email=payload.email, password=payload.password, full_name=payload.full_name)
+    user, issued = register_user(
+        db,
+        email=payload.email,
+        password=payload.password,
+        full_name=payload.full_name,
+        phone_number=payload.phone_number,
+    )
     return _to_auth_response(
         user,
         AuthTokensResponse(

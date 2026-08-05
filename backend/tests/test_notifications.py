@@ -24,8 +24,8 @@ from app.services.notifications import (
     notify_tickets_issued,
 )
 from app.services.orders import complete_paid_order, refund_completed_order
-from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
-from tests.utils import unique_email
+from app.services.tickets import issue_tickets_for_completed_order
+from tests.utils import transfer_ticket_to_user, unique_email
 
 
 
@@ -116,8 +116,8 @@ def test_ticket_transfer_triggers_notification(db_session: Session, monkeypatch:
 
     called = {"count": 0}
     monkeypatch.setattr(
-        "app.services.tickets.notify_ticket_transferred",
-        lambda db, t, from_user_id, to_user_id: called.__setitem__("count", called["count"] + 1),
+        "app.services.tickets.notify_ticket_transfer_invite_accepted",
+        lambda invite, ticket: called.__setitem__("count", called["count"] + 1),
     )
 
     transfer_ticket_to_user(db_session, ticket_id=ticket.id, from_user_id=buyer.id, to_user_id=recipient.id)

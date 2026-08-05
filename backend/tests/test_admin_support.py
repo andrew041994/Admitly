@@ -217,7 +217,7 @@ def test_resend_confirmation_action_dispatches_and_audits(db_session: Session, m
 def test_resend_transfer_invite_requires_pending(db_session: Session) -> None:
     order, admin, _ = _seed(db_session, suffix="invite")
     ticket = db_session.execute(select(Ticket).where(Ticket.order_id == order.id)).scalar_one()
-    db_session.add(TicketTransferInvite(ticket_id=ticket.id, sender_user_id=order.user_id, invite_token="abc", status=TransferInviteStatus.ACCEPTED))
+    db_session.add(TicketTransferInvite(ticket_id=ticket.id, sender_user_id=order.user_id, status=TransferInviteStatus.ACCEPTED))
     db_session.commit()
 
     with pytest.raises(Exception):

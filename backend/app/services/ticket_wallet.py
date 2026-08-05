@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session, joinedload, object_session
 from app.models.event import Event
 from app.models.enums import EventStatus, OrderStatus, TicketStatus
 from app.models.ticket import Ticket
-from app.services.tickets import get_active_pending_transfer_for_ticket
+from app.services.tickets import (
+    TicketAuthorizationError,
+    TicketTransferError,
+    get_active_pending_transfer_for_ticket,
+    validate_ticket_transfer_invitable,
+)
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -20,6 +25,8 @@ class WalletTicketView:
     display_status: str
     is_valid_for_entry: bool
     can_display_entry_code: bool
+    can_transfer: bool
+    transfer_unavailable_reason: str | None
 
 
 def _to_timestamp(value: datetime | None) -> float | None:
@@ -65,13 +72,22 @@ def _build_wallet_view(ticket: Ticket, *, now: datetime) -> WalletTicketView:
     is_upcoming = _is_event_upcoming(ticket, now)
     display_status = _derive_display_status(ticket)
     token_value = (ticket.qr_token or ticket.qr_payload or "").strip()
-    can_display_entry_code = bool(token_value)
+    can_display_entry_code = bool(token_value) and display_status == "active"
+    can_transfer = True
+    transfer_unavailable_reason = None
+    try:
+        validate_ticket_transfer_invitable(ticket, current_user_id=ticket.owner_user_id)
+    except (TicketAuthorizationError, TicketTransferError) as exc:
+        can_transfer = False
+        transfer_unavailable_reason = str(exc)
     return WalletTicketView(
         ticket=ticket,
         event_is_upcoming=is_upcoming,
         display_status=display_status,
         is_valid_for_entry=_is_valid_for_entry(ticket, display_status=display_status),
         can_display_entry_code=can_display_entry_code,
+        can_transfer=can_transfer,
+        transfer_unavailable_reason=transfer_unavailable_reason,
     )
 
 

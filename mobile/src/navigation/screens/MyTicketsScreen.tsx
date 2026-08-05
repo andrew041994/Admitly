@@ -2,13 +2,23 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../../api/client';
-import { WalletTicketCard, listMyTickets } from '../../api/tickets';
+import {
+  TicketTransfer,
+  WalletTicketCard,
+  acceptTicketTransfer,
+  cancelTicketTransfer,
+  declineTicketTransfer,
+  listMyTicketTransfers,
+  listMyTickets,
+} from '../../api/tickets';
 import { Screen } from '../../components/Screen';
 import { ThemedButton } from '../../components/ThemedButton';
+import { isPendingTransfer } from '../../features/transfers/validation';
 import { theme } from '../../theme';
 
 type MyTicketsScreenProps = {
   onOpenTicket: (ticketId: number) => void;
+  onCompleteProfile: () => void;
 };
 
 function formatDate(iso: string): string {
@@ -25,6 +35,8 @@ function statusLabel(status: string): string {
 
 export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
   const [tickets, setTickets] = useState<WalletTicketCard[]>([]);
+  const [transfers, setTransfers] = useState<TicketTransfer[]>([]);
+  const [actingId, setActingId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,8 +44,12 @@ export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
   const loadTickets = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true); else setLoading(true);
     try {
-      const data = await listMyTickets();
-      setTickets(data);
+      const [ticketData, transferData] = await Promise.all([
+        listMyTickets(),
+        listMyTicketTransfers(),
+      ]);
+      setTickets(ticketData);
+      setTransfers(transferData);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to load your tickets.');
@@ -42,6 +58,24 @@ export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
       setRefreshing(false);
     }
   }, []);
+
+  const pendingTransfers = transfers.filter((transfer) => isPendingTransfer(transfer.status));
+
+  async function act(transfer: TicketTransfer, action: 'accept' | 'decline' | 'cancel') {
+    if (actingId !== null) return;
+    setActingId(transfer.id);
+    setError(null);
+    try {
+      if (action === 'accept') await acceptTicketTransfer(transfer.id);
+      else if (action === 'decline') await declineTicketTransfer(transfer.id);
+      else await cancelTicketTransfer(transfer.id);
+      await loadTickets(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unable to update the transfer. Check your connection and try again.');
+    } finally {
+      setActingId(null);
+    }
+  }
 
   useEffect(() => {
     loadTickets();
@@ -60,7 +94,7 @@ export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
     return <Screen><View style={styles.stateWrap}><Text style={styles.errorText}>{error}</Text><ThemedButton label="Try again" onPress={() => loadTickets()} /></View></Screen>;
   }
 
-  if (tickets.length === 0) {
+  if (tickets.length === 0 && pendingTransfers.length === 0) {
     return (
       <Screen>
         <View style={styles.stateWrap}>
@@ -78,6 +112,27 @@ export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
         keyExtractor={(item) => item.key}
         contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadTickets(true)} tintColor={theme.colors.primary} />}
+        ListHeaderComponent={pendingTransfers.length ? (
+          <View style={styles.transferSection}>
+            <Text style={styles.sectionTitle}>Ticket transfers</Text>
+            {pendingTransfers.map((transfer) => (
+              <View key={transfer.id} style={styles.transferCard}>
+                <Text style={styles.title}>{transfer.event_title}</Text>
+                <Text style={styles.meta}>{transfer.ticket_tier_name} • {formatDate(transfer.starts_at)}</Text>
+                <Text style={styles.meta}>{transfer.direction === 'incoming' ? 'From an Admitly ticket owner' : `To ${transfer.recipient_identifier}`}</Text>
+                <Text style={styles.pending}>Pending acceptance</Text>
+                {transfer.direction === 'incoming' ? (
+                  <View style={styles.actionRow}>
+                    <View style={styles.action}><ThemedButton label="Accept" onPress={() => act(transfer, 'accept')} loading={actingId === transfer.id} disabled={actingId !== null} /></View>
+                    <View style={styles.action}><ThemedButton label="Decline" variant="secondary" onPress={() => act(transfer, 'decline')} disabled={actingId !== null} /></View>
+                  </View>
+                ) : (
+                  <ThemedButton label="Cancel transfer" variant="secondary" onPress={() => act(transfer, 'cancel')} loading={actingId === transfer.id} disabled={actingId !== null} />
+                )}
+              </View>
+            ))}
+          </View>
+        ) : null}
         renderItem={({ item }) => (
           <View>
             {item.items.length > 0 && <Text style={styles.sectionTitle}>{item.key}</Text>}
@@ -112,4 +167,9 @@ const styles = StyleSheet.create({
   stateTitle: { color: theme.colors.textPrimary, fontWeight: '700', fontSize: theme.typography.heading },
   stateText: { color: theme.colors.textSecondary, textAlign: 'center' },
   errorText: { color: theme.colors.error, textAlign: 'center' },
+  transferSection: { gap: theme.spacing.sm, marginBottom: theme.spacing.md },
+  transferCard: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.primaryMuted, borderRadius: theme.radius.lg, padding: theme.spacing.md, gap: theme.spacing.xs },
+  pending: { color: theme.colors.primary, fontWeight: '700', marginTop: theme.spacing.xs },
+  actionRow: { flexDirection: 'row', gap: theme.spacing.sm, marginTop: theme.spacing.sm },
+  action: { flex: 1 },
 });

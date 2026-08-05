@@ -64,14 +64,13 @@ from app.services.tickets import (
     list_tickets_for_order_owner,
     list_tickets_for_user,
     override_ticket_check_in,
-    transfer_ticket_to_user,
     validate_ticket_for_check_in,
     void_ticket,
     scan_ticket,
 )
 import app.services.tickets as tickets_service
 from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
-from tests.utils import unique_email
+from tests.utils import transfer_ticket_to_user, unique_email
 
 
 
@@ -867,8 +866,8 @@ def test_ticket_lifecycle_notification_hooks_are_called(db_session: Session, mon
         lambda ticket: calls.append(("issued", ticket.id)),
     )
     monkeypatch.setattr(
-        "app.services.tickets.notify_ticket_transferred",
-        lambda ticket, **_: calls.append(("transferred", ticket.id)),
+        "app.services.tickets.notify_ticket_transfer_invite_accepted",
+        lambda invite, ticket: calls.append(("transferred", ticket.id)),
     )
     monkeypatch.setattr(
         "app.services.tickets.notify_ticket_voided",
@@ -1416,7 +1415,11 @@ def test_scan_wrong_event(db_session: Session) -> None:
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
     scanner = _add_checkin_staff(db_session, event=event, owner_user_id=event.organizer.user_id, email=unique_email("scanner_wrong_event"))
 
-    payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id + 999)
+    payload = generate_signed_ticket_qr_payload(
+        ticket_id=ticket.id,
+        event_id=ticket.event_id + 999,
+        qr_token=ticket.qr_token or ticket.qr_payload,
+    )
 
     result = scan_ticket(db_session, payload=payload, user_id=scanner.id)
 

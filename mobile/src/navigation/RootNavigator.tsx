@@ -179,10 +179,17 @@ function SignedInNavigator() {
         {({ route, navigation }) => <PurchaseResultScreen title={route.params.title} message={route.params.message} onDone={() => navigation.navigate('Home')} />}
       </AppStack.Screen>
       <AppStack.Screen name="MyTickets" options={{ title: 'My Tickets' }}>
-        {({ navigation }) => <MyTicketsScreen onOpenTicket={(ticketId) => navigation.navigate('TicketDetail', { ticketId })} />}
+        {({ navigation }) => (
+          <MyTicketsScreen
+            onOpenTicket={(ticketId) => navigation.navigate('TicketDetail', { ticketId })}
+            onCompleteProfile={() => navigation.navigate('Profile')}
+          />
+        )}
       </AppStack.Screen>
       <AppStack.Screen name="TicketDetail" options={{ title: 'Ticket' }}>
-        {({ route }) => <TicketDetailScreen ticketId={route.params.ticketId} />}
+        {({ route, navigation }) => (
+          <TicketDetailScreen ticketId={route.params.ticketId} onCompleteProfile={() => navigation.navigate('Profile')} />
+        )}
       </AppStack.Screen>
       <AppStack.Screen name="Scanner" options={{ headerShown: false }}>
         {({ route, navigation }) => (

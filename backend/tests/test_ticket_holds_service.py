@@ -68,6 +68,12 @@ def _seed_ticket_tier(db: Session, start_at: datetime, quantity_total: int = 100
     return tier
 
 
+def _owner_id(db: Session, tier: TicketTier) -> int:
+    event = db.get(Event, tier.event_id)
+    assert event is not None
+    return event.organizer.user_id
+
+
 def test_hold_expiry_defaults_to_48_hours_when_event_far_away() -> None:
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     event_start = now + timedelta(days=4)
@@ -90,7 +96,7 @@ def test_hold_allowed_when_event_starts_within_8_hours(db_session: Session) -> N
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     tier = _seed_ticket_tier(db_session, start_at=now + timedelta(hours=8))
 
-    result = create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+    result = create_ticket_hold(db_session, user_id=_owner_id(db_session, tier), ticket_tier_id=tier.id, quantity=1, now=now)
 
     assert result.hold.id is not None
 
@@ -99,7 +105,7 @@ def test_hold_allowed_after_event_start_before_event_end(db_session: Session) ->
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=1), end_at=now + timedelta(hours=3))
 
-    result = create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+    result = create_ticket_hold(db_session, user_id=_owner_id(db_session, tier), ticket_tier_id=tier.id, quantity=1, now=now)
 
     assert result.hold.id is not None
     assert result.hold.expires_at <= (now + timedelta(hours=3)).astimezone(result.hold.expires_at.tzinfo)
@@ -110,7 +116,7 @@ def test_hold_rejected_after_event_end(db_session: Session) -> None:
     tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=5), end_at=now - timedelta(minutes=1))
 
     with pytest.raises(TicketHoldWindowClosedError):
-        create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+        create_ticket_hold(db_session, user_id=_owner_id(db_session, tier), ticket_tier_id=tier.id, quantity=1, now=now)
 
 
 def test_hold_rejected_when_event_cancelled(db_session: Session) -> None:
@@ -118,7 +124,7 @@ def test_hold_rejected_when_event_cancelled(db_session: Session) -> None:
     tier = _seed_ticket_tier(db_session, start_at=now - timedelta(hours=1), end_at=now + timedelta(hours=3), status=EventStatus.CANCELLED)
 
     with pytest.raises(ValueError, match="cancelled"):
-        create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+        create_ticket_hold(db_session, user_id=_owner_id(db_session, tier), ticket_tier_id=tier.id, quantity=1, now=now)
 
 
 def test_hold_rejected_when_event_has_cancelled_at(db_session: Session) -> None:
@@ -130,7 +136,7 @@ def test_hold_rejected_when_event_has_cancelled_at(db_session: Session) -> None:
     db_session.commit()
 
     with pytest.raises(ValueError, match="cancelled"):
-        create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+        create_ticket_hold(db_session, user_id=_owner_id(db_session, tier), ticket_tier_id=tier.id, quantity=1, now=now)
 
 
 def test_hold_expiry_for_started_event_is_not_after_event_end() -> None:
@@ -150,7 +156,7 @@ def test_expired_holds_do_not_count_against_availability(db_session: Session) ->
     expired = TicketHold(
         event_id=tier.event_id,
         ticket_tier_id=tier.id,
-        user_id=1,
+        user_id=_owner_id(db_session, tier),
         quantity=3,
         expires_at=now - timedelta(minutes=1),
     )
@@ -166,14 +172,14 @@ def test_completed_orders_count_pending_do_not(db_session: Session) -> None:
     tier = _seed_ticket_tier(db_session, start_at=now + timedelta(days=3), quantity_total=10)
 
     completed_order = Order(
-        user_id=1,
+        user_id=_owner_id(db_session, tier),
         event_id=tier.event_id,
         status=OrderStatus.COMPLETED,
         total_amount=200,
         currency="GYD",
     )
     pending_order = Order(
-        user_id=1,
+        user_id=_owner_id(db_session, tier),
         event_id=tier.event_id,
         status=OrderStatus.PENDING,
         total_amount=100,
@@ -197,14 +203,14 @@ def test_completed_orders_count_pending_do_not(db_session: Session) -> None:
 def test_expired_attached_pending_hold_does_not_reduce_availability(db_session: Session) -> None:
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     tier = _seed_ticket_tier(db_session, start_at=now + timedelta(days=3), quantity_total=10)
-    pending_order = Order(user_id=1, event_id=tier.event_id, status=OrderStatus.PENDING, total_amount=100, currency="GYD")
+    pending_order = Order(user_id=_owner_id(db_session, tier), event_id=tier.event_id, status=OrderStatus.PENDING, total_amount=100, currency="GYD")
     db_session.add(pending_order)
     db_session.flush()
     db_session.add(
         TicketHold(
             event_id=tier.event_id,
             ticket_tier_id=tier.id,
-            user_id=1,
+            user_id=_owner_id(db_session, tier),
             quantity=4,
             expires_at=now - timedelta(minutes=1),
             order_id=pending_order.id,
@@ -222,15 +228,15 @@ def test_hold_creation_rejects_quantity_over_availability(db_session: Session) -
     tier = _seed_ticket_tier(db_session, start_at=now + timedelta(days=3), quantity_total=2)
 
     with pytest.raises(InsufficientAvailabilityError):
-        create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=3, now=now)
+        create_ticket_hold(db_session, user_id=_owner_id(db_session, tier), ticket_tier_id=tier.id, quantity=3, now=now)
 
 
 def test_sequential_holds_prevent_oversell(db_session: Session) -> None:
     now = datetime(2026, 4, 6, 10, 0, tzinfo=timezone.utc)
     tier = _seed_ticket_tier(db_session, start_at=now + timedelta(days=3), quantity_total=2)
 
-    result = create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=2, now=now)
+    result = create_ticket_hold(db_session, user_id=_owner_id(db_session, tier), ticket_tier_id=tier.id, quantity=2, now=now)
     assert result.availability_remaining == 0
 
     with pytest.raises(InsufficientAvailabilityError):
-        create_ticket_hold(db_session, user_id=1, ticket_tier_id=tier.id, quantity=1, now=now)
+        create_ticket_hold(db_session, user_id=_owner_id(db_session, tier), ticket_tier_id=tier.id, quantity=1, now=now)

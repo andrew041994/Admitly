@@ -18,8 +18,6 @@ from app.schemas.ticket import (
     TicketCheckInValidateResponse,
     TicketDetailResponse,
     TicketResponse,
-    TicketTransferRequest,
-    TicketTransferPendingResponse,
     TicketVoidRequest,
     TicketQrResponse,
     TicketScanRequest,
@@ -41,7 +39,6 @@ from app.services.tickets import (
     TicketCheckInConflictError,
     TicketCrossEventError,
     TicketNotFoundError,
-    TicketTransferError,
     TicketVoidError,
     check_in_ticket,
     get_event_check_in_summary,
@@ -50,8 +47,6 @@ from app.services.tickets import (
     list_tickets_for_order_owner,
     list_recent_check_in_attempts,
     override_ticket_check_in,
-    build_transfer_claim_url,
-    create_ticket_transfer_invite,
     validate_ticket_for_check_in,
     void_ticket,
     resend_ticket_notification,
@@ -212,6 +207,8 @@ def _to_wallet_ticket_card(view: WalletTicketView) -> WalletTicketCardItemRespon
         display_status=view.display_status,
         is_valid_for_entry=view.is_valid_for_entry,
         can_display_entry_code=view.can_display_entry_code,
+        can_transfer=view.can_transfer,
+        transfer_unavailable_reason=view.transfer_unavailable_reason,
         event=WalletEventSummary(
             id=event.id,
             title=event.title,
@@ -302,44 +299,6 @@ def get_order_tickets(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     return [_to_ticket_response(db, t) for t in tickets]
-
-
-@router.post("/tickets/{ticket_id}/transfer", response_model=TicketTransferPendingResponse)
-def transfer_ticket(
-    ticket_id: int,
-    payload: TicketTransferRequest,
-    db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-) -> TicketTransferPendingResponse:
-    try:
-        invite = create_ticket_transfer_invite(
-            db,
-            ticket_id=ticket_id,
-            sender_user_id=user_id,
-            recipient_user_id=payload.to_user_id,
-            recipient_email=payload.recipient_email,
-            recipient_phone=payload.recipient_phone,
-            recipient_name=payload.recipient_name,
-        )
-    except TicketAuthorizationError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    except TicketNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except TicketTransferError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    return TicketTransferPendingResponse(
-        transfer_id=invite.id,
-        ticket_id=invite.ticket_id,
-        status=invite.status.value,
-        recipient_user_id=invite.recipient_user_id,
-        recipient_email=invite.recipient_email,
-        recipient_phone=invite.recipient_phone,
-        recipient_name=invite.recipient_name,
-        expires_at=invite.expires_at,
-        claim_url=build_transfer_claim_url(invite_token=invite.invite_token),
-        created_at=invite.created_at,
-    )
 
 
 @router.post("/tickets/{ticket_id}/void", response_model=TicketResponse)
@@ -628,7 +587,11 @@ def scan_ticket_qr(
                 return TicketScanResponse(status="invalid", message="Invalid QR payload.")
             from app.services.ticket_qr import generate_signed_ticket_qr_payload
 
-            normalized_payload = generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id)
+            normalized_payload = generate_signed_ticket_qr_payload(
+                ticket_id=ticket.id,
+                event_id=ticket.event_id,
+                qr_token=ticket.qr_token or ticket.qr_payload,
+            )
 
     if selected_event_id is not None:
         normalized_payload["event_id"] = selected_event_id

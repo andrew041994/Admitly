@@ -44,6 +44,8 @@ class WalletTicketCardItemResponse(BaseModel):
     display_status: str
     is_valid_for_entry: bool
     can_display_entry_code: bool
+    can_transfer: bool
+    transfer_unavailable_reason: str | None = None
     event: WalletEventSummary
     venue: WalletVenueSummary
     organizer: WalletOrganizerSummary

@@ -35,10 +35,18 @@ def _seed_user(db: Session, suffix: str, *, password: str = "GoodPass123", is_ac
 
 
 def test_registration_success_and_lowercasing(db_session: Session) -> None:
-    user, tokens = register_user(db_session, email="Test@Example.COM", password="GoodPass123", full_name="Name")
+    user, tokens = register_user(
+        db_session,
+        email="Test@Example.COM",
+        password="GoodPass123",
+        full_name="Name",
+        phone_number="600 1234",
+    )
     assert user.email == "test@example.com"
     assert user.is_verified is False
     assert user.auth_provider == "local"
+    assert user.phone == "+5926001234"
+    assert user.phone_verified_at is None
     assert tokens.access_token
 
 
@@ -136,6 +144,31 @@ def test_profile_update_behavior(db_session: Session) -> None:
     assert updated.full_name == "Updated Name"
     assert updated.phone == "+15550001111"
     assert normalize_email(updated.email) == updated.email
+
+
+def test_profile_phone_normalization_uniqueness_and_verification_reset(db_session: Session) -> None:
+    first = _seed_user(db_session, "phone-first")
+    second = _seed_user(db_session, "phone-second")
+    updated = update_profile(db_session, user=first, full_name=first.full_name, phone_number="600-9876")
+    assert updated.phone == "+5926009876"
+    updated.phone_verified_at = utc_now()
+    db_session.commit()
+
+    unchanged = update_profile(db_session, user=updated, full_name=updated.full_name, phone_number="+5926009876")
+    assert unchanged.phone_verified_at is not None
+    changed = update_profile(db_session, user=unchanged, full_name=unchanged.full_name, phone_number="600-9877")
+    assert changed.phone_verified_at is None
+
+    with pytest.raises(HTTPException) as exc:
+        update_profile(db_session, user=second, full_name=second.full_name, phone_number="600-9877")
+    assert exc.value.status_code == 409
+
+
+def test_invalid_phone_is_rejected_by_backend(db_session: Session) -> None:
+    user = _seed_user(db_session, "invalid-phone")
+    with pytest.raises(HTTPException) as exc:
+        update_profile(db_session, user=user, full_name=user.full_name, phone_number="12345")
+    assert exc.value.status_code == 422
 
 
 def test_expired_refresh_token_rejected(db_session: Session) -> None:

@@ -23,8 +23,9 @@ from app.services.reminders import (
     get_reminder_due_times_for_event,
     should_send_reminder_for_event,
 )
-from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user
-from tests.utils import unique_email
+from app.services.tickets import issue_tickets_for_completed_order
+from app.services.ticket_holds import get_guyana_now
+from tests.utils import transfer_ticket_to_user, unique_email
 
 
 
@@ -134,7 +135,7 @@ def test_today_reminder_due_time_uses_event_timezone_local_morning() -> None:
 
 
 def test_recipients_use_current_owner_after_transfer(db_session: Session) -> None:
-    now = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc)
+    now = get_guyana_now()
     order, buyer, event = _seed_order(db_session, suffix="transfer-owner", event_start_at=now + timedelta(hours=24, minutes=5))
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
 

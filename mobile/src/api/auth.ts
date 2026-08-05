@@ -5,6 +5,7 @@ export type AuthUser = {
   email: string;
   full_name: string;
   phone_number: string | null;
+  phone_is_verified: boolean;
   is_active: boolean;
   is_verified: boolean;
   is_admin: boolean;
@@ -35,11 +36,11 @@ export async function login(email: string, password: string): Promise<AuthRespon
   });
 }
 
-export async function register(fullName: string, email: string, password: string): Promise<AuthResponse> {
+export async function register(fullName: string, email: string, phoneNumber: string, password: string): Promise<AuthResponse> {
   return apiRequest<AuthResponse>({
     path: '/auth/register',
     method: 'POST',
-    body: JSON.stringify({ full_name: fullName, email, password }),
+    body: JSON.stringify({ full_name: fullName, email, phone_number: phoneNumber, password }),
   });
 }
 

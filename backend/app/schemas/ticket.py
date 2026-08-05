@@ -53,26 +53,6 @@ class TicketDetailResponse(TicketResponse):
     subtitle: str | None = None
 
 
-class TicketTransferRequest(BaseModel):
-    to_user_id: int | None = None
-    recipient_email: str | None = None
-    recipient_phone: str | None = None
-    recipient_name: str | None = None
-
-
-class TicketTransferPendingResponse(BaseModel):
-    transfer_id: int
-    ticket_id: int
-    status: str
-    recipient_user_id: int | None = None
-    recipient_email: str | None = None
-    recipient_phone: str | None = None
-    recipient_name: str | None = None
-    expires_at: datetime | None = None
-    claim_url: str
-    created_at: datetime
-
-
 class TicketCheckInRequest(BaseModel):
     qr_payload: str | None = None
     ticket_code: str | None = None

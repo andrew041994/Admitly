@@ -74,7 +74,8 @@ class TicketScanStatus(str, Enum):
 class TransferInviteStatus(str, Enum):
     PENDING = "pending"
     ACCEPTED = "accepted"
-    REVOKED = "revoked"
+    DECLINED = "declined"
+    CANCELED = "canceled"
     EXPIRED = "expired"
 
 

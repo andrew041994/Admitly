@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -23,6 +24,7 @@ from app.core.security import (
 from app.models.password_reset_token import PasswordResetToken
 from app.models.user import User
 from app.models.verification_token import EmailVerificationToken
+from app.lib.phone_numbers import InvalidPhoneNumberError, normalize_phone_number
 
 
 @dataclass
@@ -56,13 +58,28 @@ def _issue_auth_tokens(user: User) -> IssuedAuthTokens:
     )
 
 
-def register_user(db: Session, *, email: str, password: str, full_name: str) -> tuple[User, IssuedAuthTokens]:
+def register_user(
+    db: Session,
+    *,
+    email: str,
+    password: str,
+    full_name: str,
+    phone_number: str | None = None,
+) -> tuple[User, IssuedAuthTokens]:
     normalized = normalize_email(email)
     existing = db.execute(select(User).where(User.email == normalized)).scalar_one_or_none()
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered.")
 
     validate_password_strength(password)
+    try:
+        normalized_phone = normalize_phone_number(phone_number)
+    except InvalidPhoneNumberError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if normalized_phone is not None:
+        phone_owner = db.execute(select(User.id).where(User.phone == normalized_phone)).scalar_one_or_none()
+        if phone_owner is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number is already in use.")
     user = User(
         email=normalized,
         full_name=full_name.strip(),
@@ -71,9 +88,15 @@ def register_user(db: Session, *, email: str, password: str, full_name: str) -> 
         is_verified=False,
         is_admin=False,
         auth_provider="local",
+        phone=normalized_phone,
+        phone_verified_at=None,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Account identity is already in use.") from exc
     db.refresh(user)
     return user, _issue_auth_tokens(user)
 
@@ -178,10 +201,26 @@ def resolve_user_from_access_token(db: Session, *, token: str) -> User:
 
 
 def update_profile(db: Session, *, user: User, full_name: str, phone_number: str | None) -> User:
+    try:
+        normalized_phone = normalize_phone_number(phone_number)
+    except InvalidPhoneNumberError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if normalized_phone is not None:
+        existing_user_id = db.execute(
+            select(User.id).where(User.phone == normalized_phone, User.id != user.id)
+        ).scalar_one_or_none()
+        if existing_user_id is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number is already in use.")
     user.full_name = full_name.strip()
-    user.phone = phone_number.strip() if phone_number else None
+    if user.phone != normalized_phone:
+        user.phone_verified_at = None
+    user.phone = normalized_phone
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number is already in use.") from exc
     db.refresh(user)
     return user
 

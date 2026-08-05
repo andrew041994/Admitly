@@ -20,8 +20,8 @@ from app.services.reporting import (
     validate_event_reporting_access,
     EventReportingAuthorizationError,
 )
-from app.services.tickets import issue_tickets_for_completed_order, transfer_ticket_to_user, void_ticket, check_in_ticket_for_event
-from tests.utils import unique_email
+from app.services.tickets import issue_tickets_for_completed_order, void_ticket, check_in_ticket_for_event
+from tests.utils import transfer_ticket_to_user, unique_email
 
 
 

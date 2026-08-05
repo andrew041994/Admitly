@@ -48,7 +48,7 @@ def _render_template(template_type: MessageTemplateType, context: dict[str, str]
             email_body=f"You have been invited to claim ticket #{context['ticket_id']}.",
             push_title="Ticket transfer invite",
             push_body=f"You have been invited to claim ticket #{context['ticket_id']}.",
-            push_data={"type": "ticket_transfer_invite_created", "ticket_id": context["ticket_id"], "invite_token": context.get("invite_token", "")},
+            push_data={"type": "ticket_transfer_invite_created", "ticket_id": context["ticket_id"]},
         )
     if template_type == MessageTemplateType.TRANSFER_ACCEPTED:
         return RenderedMessage(

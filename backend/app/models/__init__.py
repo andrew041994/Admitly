@@ -21,6 +21,7 @@ from app.models.ticket_check_in_attempt import TicketCheckInAttempt
 from app.models.ticket_hold import TicketHold
 from app.models.ticket_scan_log import TicketScanLog
 from app.models.ticket_transfer_invite import TicketTransferInvite
+from app.models.ticket_transfer_recipient_resolution import TicketTransferRecipientResolution
 from app.models.ticket_tier import TicketTier
 from app.models.support_case_note import SupportCaseNote
 from app.models.admin_action_audit import AdminActionAudit
@@ -59,6 +60,7 @@ __all__ = [
     "TicketHold",
     "TicketScanLog",
     "TicketTransferInvite",
+    "TicketTransferRecipientResolution",
     "SupportCase",
     "SupportCaseNote",
     "AdminActionAudit",

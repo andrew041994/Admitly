@@ -19,6 +19,7 @@ export function ThemedButton({
 }: ThemedButtonProps) {
   return (
     <Pressable
+      accessibilityRole="button"
       onPress={onPress}
       disabled={disabled || loading}
       style={({ pressed }) => [

@@ -21,9 +21,8 @@ from app.services.tickets import (
     TicketTransferError,
     check_in_ticket_for_event,
     issue_tickets_for_completed_order,
-    transfer_ticket_to_user,
 )
-from tests.utils import unique_email
+from tests.utils import transfer_ticket_to_user, unique_email
 
 
 

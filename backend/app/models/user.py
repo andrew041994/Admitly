@@ -27,7 +27,8 @@ class User(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    phone: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), unique=True, index=True, nullable=True)
+    phone_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -77,8 +78,11 @@ class User(TimestampMixin, Base):
     accepted_transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
         back_populates="accepted_by", foreign_keys="TicketTransferInvite.accepted_by_user_id"
     )
-    revoked_transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
-        back_populates="revoked_by", foreign_keys="TicketTransferInvite.revoked_by_user_id"
+    declined_transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
+        back_populates="declined_by", foreign_keys="TicketTransferInvite.declined_by_user_id"
+    )
+    canceled_transfer_invites: Mapped[list["TicketTransferInvite"]] = relationship(
+        back_populates="canceled_by", foreign_keys="TicketTransferInvite.canceled_by_user_id"
     )
     email_verification_tokens: Mapped[list["EmailVerificationToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
@@ -90,3 +94,8 @@ class User(TimestampMixin, Base):
     @validates("email")
     def _normalize_email(self, key: str, email: str) -> str:
         return (email or "").strip().lower()
+
+    @validates("phone")
+    def _empty_phone_is_missing(self, key: str, phone: str | None) -> str | None:
+        normalized = (phone or "").strip()
+        return normalized or None

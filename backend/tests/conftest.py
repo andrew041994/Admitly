@@ -10,13 +10,15 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.session import get_db
-from app.main import app
-
-DATABASE_URL = "postgresql://neondb_owner:npg_jKSZablLD72J@ep-proud-truth-any41xfp-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-
+DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("TEST_DATABASE_URL must point to an isolated test database.")
 os.environ["DATABASE_URL"] = DATABASE_URL
+os.environ.setdefault("ENV", "development")
+os.environ.setdefault("ALLOW_DEV_HEADER_AUTH", "true")
 
+from app.db.session import get_db  # noqa: E402
+from app.main import app  # noqa: E402
 
 
 engine = create_engine(DATABASE_URL)

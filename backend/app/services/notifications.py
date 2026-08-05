@@ -24,6 +24,11 @@ from app.services.ticket_qr import get_ticket_public_url
 logger = logging.getLogger(__name__)
 
 
+def _mask_log_email(value: str) -> str:
+    local, _, domain = value.partition("@")
+    return f"{local[:1]}***@{domain}" if domain else "***"
+
+
 class NotificationEventType(str, Enum):
     ORDER_COMPLETED = "order_completed"
     REFUND_PROCESSED = "refund_processed"
@@ -101,12 +106,12 @@ def _send_email(message: EmailMessage) -> str:
     if provider == "mock":
         logger.info(
             "mock_email_sent",
-            extra={"to_email": message.to_email, "subject": message.subject},
+            extra={"to_email": _mask_log_email(message.to_email), "subject": message.subject},
         )
         return "sent_mock"
     logger.warning(
         "email_provider_not_implemented",
-        extra={"provider": provider, "to_email": message.to_email},
+        extra={"provider": provider, "to_email": _mask_log_email(message.to_email)},
     )
     return "skipped_unconfigured"
 
@@ -297,7 +302,6 @@ def notify_ticket_transfer_invite_created(db: Session, invite: TicketTransferInv
     recipient_email = invite.recipient_email
     if not recipient_email and invite.recipient_user_id:
         recipient_email = _user_email(db, invite.recipient_user_id)
-    claim_url = f"{settings.ticket_public_base_url.rstrip('/')}/tickets/transfers/{invite.invite_token}"
     result = dispatch_templated_message(
         db,
         template_type=MessageTemplateType.TRANSFER_INVITE,
@@ -308,9 +312,8 @@ def notify_ticket_transfer_invite_created(db: Session, invite: TicketTransferInv
         related_entity_id=invite.id,
         context={
             "ticket_id": str(invite.ticket_id),
-            "invite_token": invite.invite_token,
-            "claim_url": claim_url,
         },
+        idempotency_key=f"transfer:{invite.id}:created",
     )
     return NotificationDispatchResult(success=result.success, channel_results=result.channel_results)
 
@@ -343,7 +346,7 @@ def notify_ticket_transfer_invite_accepted(
     return {"sender": sender, "recipient": recipient}
 
 
-def notify_ticket_transfer_invite_revoked(db: Session, invite: TicketTransferInvite) -> NotificationDispatchResult:
+def notify_ticket_transfer_canceled(db: Session, invite: TicketTransferInvite) -> NotificationDispatchResult:
     recipient_email = invite.recipient_email
     if not recipient_email and invite.recipient_user_id:
         recipient_email = _user_email(db, invite.recipient_user_id)
@@ -351,16 +354,50 @@ def notify_ticket_transfer_invite_revoked(db: Session, invite: TicketTransferInv
         db,
         email=EmailMessage(
             to_email=recipient_email,
-            subject=f"Transfer invite revoked for ticket #{invite.ticket_id}",
-            body=f"Ticket transfer invite for ticket #{invite.ticket_id} has been revoked.",
+            subject=f"Transfer canceled for ticket #{invite.ticket_id}",
+            body=f"The pending transfer for ticket #{invite.ticket_id} was canceled.",
         ) if recipient_email else None,
         push=PushMessage(
             user_id=invite.recipient_user_id,
-            title="Transfer invite revoked",
-            body=f"Invite for ticket #{invite.ticket_id} was revoked.",
-            data={"type": "ticket_transfer_invite_revoked", "ticket_id": str(invite.ticket_id), "invite_id": str(invite.id)},
+            title="Transfer canceled",
+            body=f"The transfer for ticket #{invite.ticket_id} was canceled.",
+            data={"type": "ticket_transfer_canceled", "ticket_id": str(invite.ticket_id), "transfer_id": str(invite.id)},
         ) if invite.recipient_user_id else None,
     )
+
+
+def notify_ticket_transfer_invite_declined(db: Session, invite: TicketTransferInvite) -> NotificationDispatchResult:
+    return _dispatch(
+        db,
+        push=PushMessage(
+            user_id=invite.sender_user_id,
+            title="Transfer declined",
+            body=f"The transfer for ticket #{invite.ticket_id} was declined.",
+            data={"type": "ticket_transfer_declined", "ticket_id": str(invite.ticket_id), "transfer_id": str(invite.id)},
+        ),
+    )
+
+
+def notify_ticket_transfer_expired(db: Session, invite: TicketTransferInvite) -> dict[str, NotificationDispatchResult]:
+    sender = _dispatch(
+        db,
+        push=PushMessage(
+            user_id=invite.sender_user_id,
+            title="Transfer expired",
+            body=f"The transfer for ticket #{invite.ticket_id} expired.",
+            data={"type": "ticket_transfer_expired", "ticket_id": str(invite.ticket_id), "transfer_id": str(invite.id)},
+        ),
+    )
+    recipient = _dispatch(
+        db,
+        push=PushMessage(
+            user_id=invite.recipient_user_id,
+            title="Transfer expired",
+            body=f"The transfer for ticket #{invite.ticket_id} expired.",
+            data={"type": "ticket_transfer_expired", "ticket_id": str(invite.ticket_id), "transfer_id": str(invite.id)},
+        ) if invite.recipient_user_id else None,
+    )
+    return {"sender": sender, "recipient": recipient}
 
 
 def notify_order_cancelled(order: Order, *, actor_user_id: int) -> None:

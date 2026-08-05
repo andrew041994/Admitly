@@ -20,7 +20,7 @@ type SessionContextValue = {
   state: SessionState;
   user: AuthUser | null;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (fullName: string, email: string, password: string) => Promise<void>;
+  signUp: (fullName: string, email: string, phoneNumber: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   requestPasswordReset: (email: string) => Promise<void>;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
@@ -163,8 +163,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
         setUser(result.user);
         setState('signedIn');
       },
-      signUp: async (fullName: string, email: string, password: string) => {
-        const result = await register(fullName.trim(), normalizeEmail(email), password);
+      signUp: async (fullName: string, email: string, phoneNumber: string, password: string) => {
+        const result = await register(fullName.trim(), normalizeEmail(email), phoneNumber, password);
         await setStoredSession(toStoredSession(result.tokens));
         setApiAuthToken(result.tokens.access_token);
         setUser(result.user);

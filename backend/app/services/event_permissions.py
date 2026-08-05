@@ -138,7 +138,8 @@ def has_event_permission_by_id(
         if end_at.tzinfo is None:
             end_at = end_at.replace(tzinfo=now.tzinfo)
 
-        if end_at.date() == now.date() and end_at < now:
+        local_end_at = end_at.astimezone(now.tzinfo)
+        if local_end_at.date() == now.date() and local_end_at < now:
             return False
 
     return True

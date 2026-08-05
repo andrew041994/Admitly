@@ -104,21 +104,26 @@ def generate_ticket_qr_data_uri(ticket: Ticket) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def _sign_ticket_payload(ticket_id: int, event_id: int) -> str:
-    msg = f"{ticket_id}:{event_id}".encode("utf-8")
+def _sign_ticket_payload(ticket_id: int, event_id: int, qr_token: str) -> str:
+    msg = f"{ticket_id}:{event_id}:{qr_token}".encode("utf-8")
     signature = hmac.new(settings.jwt_secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
     return signature
 
 
 def generate_ticket_qr_payload(ticket: Ticket) -> dict[str, int | str]:
-    return generate_signed_ticket_qr_payload(ticket_id=ticket.id, event_id=ticket.event_id)
+    return generate_signed_ticket_qr_payload(
+        ticket_id=ticket.id,
+        event_id=ticket.event_id,
+        qr_token=get_ticket_qr_identity(ticket),
+    )
 
 
-def generate_signed_ticket_qr_payload(*, ticket_id: int, event_id: int) -> dict[str, int | str]:
+def generate_signed_ticket_qr_payload(*, ticket_id: int, event_id: int, qr_token: str) -> dict[str, int | str]:
     return {
         "ticket_id": ticket_id,
         "event_id": event_id,
-        "hash": _sign_ticket_payload(ticket_id, event_id),
+        "qr_token": qr_token,
+        "hash": _sign_ticket_payload(ticket_id, event_id, qr_token),
     }
 
 
@@ -130,7 +135,13 @@ def validate_ticket_qr_signature(payload: dict[str, object]) -> bool:
     ticket_id = payload.get("ticket_id")
     event_id = payload.get("event_id")
     provided_hash = payload.get("hash")
-    if not isinstance(ticket_id, int) or not isinstance(event_id, int) or not isinstance(provided_hash, str):
+    qr_token = payload.get("qr_token")
+    if (
+        not isinstance(ticket_id, int)
+        or not isinstance(event_id, int)
+        or not isinstance(qr_token, str)
+        or not isinstance(provided_hash, str)
+    ):
         return False
-    expected = _sign_ticket_payload(ticket_id, event_id)
+    expected = _sign_ticket_payload(ticket_id, event_id, qr_token)
     return hmac.compare_digest(expected, provided_hash)

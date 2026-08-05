@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { getAccountProfile } from '../../api/account';
+import { getAccountProfile, updateAccountProfile } from '../../api/account';
 import { ApiError } from '../../api/client';
+import { ThemedButton } from '../../components/ThemedButton';
+import { normalizePhoneNumber } from '../../features/transfers/validation';
 import { theme } from '../../theme';
 
 type Props = {
@@ -16,10 +18,39 @@ type Props = {
 export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffManagement, onOpenStaffEvents, onSignOut }: Props) {
   const [profile, setProfile] = useState<Awaited<ReturnType<typeof getAccountProfile>> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
 
   useEffect(() => {
-    getAccountProfile().then(setProfile).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load profile.'));
+    getAccountProfile().then((data) => {
+      setProfile(data);
+      setPhoneNumber(data.phone_number ?? '');
+    }).catch((err) => setError(err instanceof ApiError ? err.message : 'Unable to load profile.'));
   }, []);
+
+  async function savePhone() {
+    if (!profile) return;
+    const normalized = normalizePhoneNumber(phoneNumber);
+    if (!normalized) {
+      setError('Enter a valid Guyana number or an international number with country code.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setSaved(null);
+    try {
+      await updateAccountProfile(profile.full_name, normalized);
+      const refreshed = await getAccountProfile();
+      setProfile(refreshed);
+      setPhoneNumber(refreshed.phone_number ?? '');
+      setSaved('Phone number saved. Phone transfers remain unavailable until phone verification is introduced.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unable to save phone number.');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (!profile && !error) {
     return <ActivityIndicator color={theme.colors.primary} style={{ marginTop: 36 }} />;
@@ -33,7 +64,18 @@ export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffMa
         <View style={styles.card}>
           <Text style={styles.name}>{profile.full_name}</Text>
           <Text style={styles.meta}>{profile.email}</Text>
-          <Text style={styles.meta}>{profile.phone_number ?? 'No phone number added'}</Text>
+          <TextInput
+            accessibilityLabel="Phone number"
+            value={phoneNumber}
+            onChangeText={setPhoneNumber}
+            keyboardType="phone-pad"
+            placeholder="Phone number"
+            placeholderTextColor={theme.colors.textSecondary}
+            style={styles.input}
+          />
+          <Text style={styles.meta}>{profile.phone_is_verified ? 'Phone verified' : 'Phone not verified'}</Text>
+          <ThemedButton label="Save phone" onPress={savePhone} loading={saving} disabled={saving} />
+          {saved ? <Text style={styles.success}>{saved}</Text> : null}
           <Text style={styles.meta}>My tickets: {profile.my_tickets_count}</Text>
           <Text style={styles.meta}>My events: {profile.my_events_count}</Text>
           <Text style={styles.meta}>Staff events: {profile.staff_events_count}</Text>
@@ -87,4 +129,6 @@ const styles = StyleSheet.create({
   signOut: { marginTop: theme.spacing.md },
   signOutText: { color: theme.colors.primary, fontWeight: '700' },
   error: { color: theme.colors.error },
+  success: { color: '#98e067' },
+  input: { color: theme.colors.textPrimary, borderColor: theme.colors.border, borderWidth: 1, borderRadius: theme.radius.sm, paddingHorizontal: theme.spacing.sm, paddingVertical: 10 },
 });
