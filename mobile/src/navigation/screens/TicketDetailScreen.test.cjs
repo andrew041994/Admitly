@@ -5,6 +5,16 @@ const test = require('node:test');
 
 const source = fs.readFileSync(path.join(__dirname, 'TicketDetailScreen.tsx'), 'utf8');
 
+test('ticket detail content scrolls past the QR with keyboard-safe bottom space', () => {
+  assert.match(source, /<Screen>\s*<ScrollView/);
+  assert.match(source, /contentContainerStyle=\{styles\.container\}/);
+  assert.match(source, /keyboardShouldPersistTaps="handled"/);
+  assert.match(source, /keyboardDismissMode="on-drag"/);
+  assert.match(source, /paddingBottom: theme\.spacing\.xl/);
+  assert.ok(source.indexOf('style={styles.qrWrap}') < source.indexOf('style={styles.transferCard}'));
+  assert.match(source, /qr: \{ width: 220, height: 220/);
+});
+
 test('recipient lookup and final transfer creation are separate mobile actions', () => {
   const lookupHandler = source.slice(source.indexOf('async function continueToConfirmation'), source.indexOf('async function submitTransfer'));
   const createHandler = source.slice(source.indexOf('async function submitTransfer'), source.indexOf('if (loadError)'));

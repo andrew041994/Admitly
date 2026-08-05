@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { ApiError } from '../../api/client';
 import {
@@ -121,7 +121,12 @@ export function TicketDetailScreen({ ticketId }: TicketDetailScreenProps) {
 
   return (
     <Screen>
-      <View style={styles.container}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        showsVerticalScrollIndicator={false}
+      >
         <Text style={styles.title}>{ticket.event.title}</Text>
         <Text style={styles.meta}>{formatDate(ticket.event.start_at)}</Text>
         <Text style={styles.meta}>{ticket.venue.name ?? ticket.venue.address_summary ?? 'Venue TBA'}</Text>
@@ -181,13 +186,13 @@ export function TicketDetailScreen({ ticketId }: TicketDetailScreenProps) {
           {transferError ? <Text accessibilityRole="alert" style={styles.error}>{transferError}</Text> : null}
           {transferMessage ? <Text style={styles.success}>{transferMessage}</Text> : null}
         </View>
-      </View>
+      </ScrollView>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { gap: theme.spacing.sm },
+  container: { gap: theme.spacing.sm, paddingBottom: theme.spacing.xl },
   title: { color: theme.colors.textPrimary, fontSize: theme.typography.heading, fontWeight: '700' },
   meta: { color: theme.colors.textSecondary },
   manualCodeWrap: { marginVertical: theme.spacing.md, alignItems: 'center', gap: theme.spacing.xs, backgroundColor: theme.colors.surface, borderRadius: theme.radius.lg, borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing.lg },

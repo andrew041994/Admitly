@@ -30,6 +30,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "https://admitly.onrender.com",
+        "https://www.admitlyevents.com",
+        "https://admitlyevents.com"
     ],
     allow_credentials=True,
     allow_methods=["*"],
