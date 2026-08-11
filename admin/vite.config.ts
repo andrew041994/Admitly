@@ -16,7 +16,7 @@ const distribution = process.env.VITE_SENTRY_DIST?.trim() || (buildCommit ? buil
 export default defineConfig({
   plugins: [react()],
   define: {
-    __ADMITLY_RELEASE__: JSON.stringify(release),
-    __ADMITLY_DIST__: JSON.stringify(distribution),
+    'import.meta.env.VITE_ADMITLY_RELEASE': JSON.stringify(release),
+    'import.meta.env.VITE_ADMITLY_DIST': JSON.stringify(distribution),
   },
 });

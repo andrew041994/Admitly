@@ -1,4 +1,10 @@
 /// <reference types="vite/client" />
 
-declare const __ADMITLY_RELEASE__: string;
-declare const __ADMITLY_DIST__: string;
+interface ImportMetaEnv {
+  readonly VITE_ADMITLY_RELEASE?: string;
+  readonly VITE_ADMITLY_DIST?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
