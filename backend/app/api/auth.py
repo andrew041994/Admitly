@@ -48,6 +48,24 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+def _apply_auth_rate_limits(
+    *, scope: str, identity_key: str, client_ip: str, limit: int, window_seconds: int
+) -> None:
+    # Limit both distributed attacks on one identity and one source rotating identities.
+    apply_rate_limit(
+        scope=f"{scope}_identity",
+        key=identity_key,
+        limit=limit,
+        window_seconds=window_seconds,
+    )
+    apply_rate_limit(
+        scope=f"{scope}_ip",
+        key=client_ip,
+        limit=limit,
+        window_seconds=window_seconds,
+    )
+
+
 def _to_user_response(user: User) -> UserResponse:
     return UserResponse(
         id=user.id,
@@ -114,7 +132,19 @@ def _deliver_verification_email(user: User, token: str) -> None:
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def register(
+    payload: RegisterRequest,
+    db: Session = Depends(get_db),
+    client_ip: str = Depends(request_client_ip),
+) -> AuthResponse:
+    email_key = hashlib.sha256(normalize_email(payload.email).encode("utf-8")).hexdigest()
+    _apply_auth_rate_limits(
+        scope="auth_signup",
+        identity_key=email_key,
+        client_ip=client_ip,
+        limit=settings.rate_limit_signup_count,
+        window_seconds=settings.rate_limit_signup_window_seconds,
+    )
     user, issued = register_user(
         db,
         email=payload.email,
@@ -135,7 +165,19 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def login(
+    payload: LoginRequest,
+    db: Session = Depends(get_db),
+    client_ip: str = Depends(request_client_ip),
+) -> AuthResponse:
+    email_key = hashlib.sha256(normalize_email(payload.email).encode("utf-8")).hexdigest()
+    _apply_auth_rate_limits(
+        scope="auth_login",
+        identity_key=email_key,
+        client_ip=client_ip,
+        limit=settings.rate_limit_login_count,
+        window_seconds=settings.rate_limit_login_window_seconds,
+    )
     user, issued = authenticate_user(db, email=payload.email, password=payload.password)
     return _to_auth_response(
         user,
@@ -149,7 +191,19 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
 
 
 @router.post("/refresh", response_model=AuthResponse)
-def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def refresh(
+    payload: RefreshRequest,
+    db: Session = Depends(get_db),
+    client_ip: str = Depends(request_client_ip),
+) -> AuthResponse:
+    token_key = hashlib.sha256(payload.refresh_token.encode("utf-8")).hexdigest()
+    _apply_auth_rate_limits(
+        scope="auth_refresh",
+        identity_key=token_key,
+        client_ip=client_ip,
+        limit=settings.rate_limit_login_count,
+        window_seconds=settings.rate_limit_login_window_seconds,
+    )
     user, issued = refresh_auth_tokens(db, refresh_token=payload.refresh_token)
     return _to_auth_response(
         user,
@@ -180,9 +234,10 @@ def request_verification(
 ) -> VerifyResponse:
     email = normalize_email(payload.email)
     email_key = hashlib.sha256(email.encode("utf-8")).hexdigest()
-    apply_rate_limit(
+    _apply_auth_rate_limits(
         scope="email_verification_resend",
-        key=f"{email_key}:{client_ip}",
+        identity_key=email_key,
+        client_ip=client_ip,
         limit=settings.rate_limit_verification_resend_count,
         window_seconds=settings.rate_limit_verification_resend_window_seconds,
     )
@@ -194,7 +249,19 @@ def request_verification(
 
 
 @router.post("/verify", response_model=VerifyResponse)
-def verify(payload: VerifyRequest, db: Session = Depends(get_db)) -> VerifyResponse:
+def verify(
+    payload: VerifyRequest,
+    db: Session = Depends(get_db),
+    client_ip: str = Depends(request_client_ip),
+) -> VerifyResponse:
+    token_key = hashlib.sha256(payload.token.encode("utf-8")).hexdigest()
+    _apply_auth_rate_limits(
+        scope="auth_verification_submit",
+        identity_key=token_key,
+        client_ip=client_ip,
+        limit=settings.rate_limit_password_reset_count,
+        window_seconds=settings.rate_limit_password_reset_window_seconds,
+    )
     success = verify_email_token(db, token=payload.token)
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification token.")
@@ -202,8 +269,20 @@ def verify(payload: VerifyRequest, db: Session = Depends(get_db)) -> VerifyRespo
 
 
 @router.post("/forgot-password", response_model=VerifyResponse)
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> VerifyResponse:
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+    client_ip: str = Depends(request_client_ip),
+) -> VerifyResponse:
     email = normalize_email(payload.email)
+    email_key = hashlib.sha256(email.encode("utf-8")).hexdigest()
+    _apply_auth_rate_limits(
+        scope="auth_password_reset_request",
+        identity_key=email_key,
+        client_ip=client_ip,
+        limit=settings.rate_limit_password_reset_count,
+        window_seconds=settings.rate_limit_password_reset_window_seconds,
+    )
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if user is not None and user.is_active:
         token = generate_password_reset_token(db, user=user)
@@ -222,7 +301,19 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
 
 
 @router.post("/reset-password", response_model=VerifyResponse)
-def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)) -> VerifyResponse:
+def reset_password(
+    payload: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+    client_ip: str = Depends(request_client_ip),
+) -> VerifyResponse:
+    token_key = hashlib.sha256(payload.token.encode("utf-8")).hexdigest()
+    _apply_auth_rate_limits(
+        scope="auth_password_reset_submit",
+        identity_key=token_key,
+        client_ip=client_ip,
+        limit=settings.rate_limit_password_reset_count,
+        window_seconds=settings.rate_limit_password_reset_window_seconds,
+    )
     success = reset_password_with_token(db, token=payload.token, new_password=payload.new_password)
     if not success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token.")

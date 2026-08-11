@@ -7,6 +7,7 @@ from decimal import Decimal
 from sqlalchemy import Select, and_, case, func, select
 from sqlalchemy.orm import Session
 
+from app.models.admin_action_audit import AdminActionAudit
 from app.models.dispute import Dispute
 from app.models.enums import DisputeStatus, OrderStatus, PayoutStatus, PricingSource, ReconciliationStatus, RefundStatus
 from app.models.event import Event
@@ -691,9 +692,18 @@ def mark_order_reconciled(
     if actor is None or not actor.is_admin:
         raise FinanceReportingAuthorizationError("Only admins can mark orders reconciled.")
 
+    previous_status = order.reconciliation_status.value
     if order.reconciliation_status == ReconciliationStatus.RECONCILED:
         if note:
             order.reconciliation_note = note.strip()
+            db.add(AdminActionAudit(
+                actor_user_id=actor_user_id,
+                target_type="order",
+                target_id=str(order.id),
+                action_type="update_reconciliation_note",
+                reason=note.strip(),
+                metadata_json={"reconciliation_status": previous_status},
+            ))
         db.flush()
         return order
 
@@ -701,6 +711,14 @@ def mark_order_reconciled(
     order.reconciled_at = get_guyana_now()
     order.reconciled_by_user_id = actor_user_id
     order.reconciliation_note = note.strip() if note else None
+    db.add(AdminActionAudit(
+        actor_user_id=actor_user_id,
+        target_type="order",
+        target_id=str(order.id),
+        action_type="mark_order_reconciled",
+        reason=order.reconciliation_note,
+        metadata_json={"from": previous_status, "to": ReconciliationStatus.RECONCILED.value},
+    ))
     db.flush()
     return order
 
@@ -722,9 +740,18 @@ def mark_order_payout_status(
         raise FinanceReportingAuthorizationError("Only admins can update payout status.")
 
     now = get_guyana_now()
+    previous_status = order.payout_status.value
     if order.payout_status == payout_status:
         if note:
             order.payout_note = note.strip()
+            db.add(AdminActionAudit(
+                actor_user_id=actor_user_id,
+                target_type="order",
+                target_id=str(order.id),
+                action_type="update_payout_note",
+                reason=note.strip(),
+                metadata_json={"payout_status": previous_status},
+            ))
         db.flush()
         return order
 
@@ -734,5 +761,13 @@ def mark_order_payout_status(
         order.payout_included_at = now
     if payout_status == PayoutStatus.PAID:
         order.payout_paid_at = now
+    db.add(AdminActionAudit(
+        actor_user_id=actor_user_id,
+        target_type="order",
+        target_id=str(order.id),
+        action_type="update_payout_status",
+        reason=order.payout_note,
+        metadata_json={"from": previous_status, "to": payout_status.value},
+    ))
     db.flush()
     return order

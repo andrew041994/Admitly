@@ -1,6 +1,7 @@
 from datetime import datetime
+from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class EventFinanceSummaryResponse(BaseModel):
@@ -85,3 +86,18 @@ class InternalOrderFinanceResponse(BaseModel):
     payout_included_at: datetime | None
     payout_paid_at: datetime | None
     payout_note: str | None
+
+
+class ManualMMGVerificationRequest(BaseModel):
+    payment_reference: str = Field(min_length=1, max_length=255)
+    confirmed_amount: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
+    confirmed_currency: str = Field(min_length=3, max_length=3)
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class ManualMMGVerificationResponse(BaseModel):
+    order_id: int
+    order_reference: str
+    status: str
+    payment_verification_status: str
+    payment_reference: str

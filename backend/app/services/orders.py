@@ -279,6 +279,8 @@ def complete_paid_order(
 ) -> Order:
     if order.payment_verification_status != "verified":
         raise OrderNotPayableError("Order payment is not verified.")
+    if payment_reference and order.payment_reference and payment_reference != order.payment_reference:
+        raise OrderNotPayableError("Payment reference does not match the order.")
     if order.status != OrderStatus.COMPLETED:
         validate_order_still_payable(order, now=paid_at or get_guyana_now())
 
@@ -293,7 +295,8 @@ def complete_paid_order(
         order.reconciliation_status = ReconciliationStatus.UNRECONCILED
         order.payout_status = PayoutStatus.ELIGIBLE
 
-    order.paid_at = _to_aware(paid_at) if paid_at is not None else get_guyana_now()
+    if became_completed or order.paid_at is None:
+        order.paid_at = _to_aware(paid_at) if paid_at is not None else get_guyana_now()
     db.flush()
 
     tickets = issue_tickets_for_completed_order(db, order)
@@ -443,6 +446,8 @@ def refund_completed_order(
         raise OrderRefundError("Only verified-paid orders can be refunded.")
     if order.refund_status == "refunded" or order.refunded_at is not None:
         raise OrderRefundError("Order has already been refunded.")
+    if order.payment_provider == "mmg":
+        raise OrderRefundError("MMG refunds must use the reviewed provider refund workflow.")
     db.refresh(order, attribute_names=["tickets", "event", "order_items"])
     if any(ticket.status == TicketStatus.CHECKED_IN for ticket in order.tickets):
         raise OrderRefundError("Orders with checked-in tickets cannot be fully refunded.")

@@ -75,14 +75,6 @@ export type CompleteMmgAgentResponse = {
   message: string;
 };
 
-export type DevTestCheckoutResponse = {
-  order_id: number;
-  payment_reference: string;
-  status: string;
-  payment_verification_status: string;
-  message: string;
-};
-
 export async function createOrderFromSelection(
   eventId: number,
   items: PurchaseSelectionItem[],
@@ -113,8 +105,4 @@ export async function completeMmgAgentPayment(orderId: number, submittedReferenc
 
 export async function getOrder(orderId: number): Promise<Order> {
   return apiRequest<Order>({ path: `/orders/${orderId}`, method: 'GET' });
-}
-
-export async function completeDevTestCheckout(orderId: number): Promise<DevTestCheckoutResponse> {
-  return apiRequest<DevTestCheckoutResponse>({ path: `/orders/${orderId}/payments/dev-test/complete`, method: 'POST' });
 }

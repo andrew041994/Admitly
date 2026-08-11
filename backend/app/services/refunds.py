@@ -8,6 +8,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.dispute import Dispute
+from app.models.admin_action_audit import AdminActionAudit
 from app.models.enums import (
     BalanceAdjustmentType,
     DisputeStatus,
@@ -152,6 +153,7 @@ def request_refund(
         reason=reason,
         status=RefundStatus.PENDING,
         admin_notes=note.strip() if note else None,
+        payment_provider=order.payment_provider,
     )
     db.add(refund)
     db.flush()
@@ -165,6 +167,7 @@ def _process_refund_locked(
     order: Order,
     actor_user_id: int,
     admin_notes: str | None,
+    provider_confirmed: bool = False,
 ) -> Refund:
     if refund.status not in {RefundStatus.PENDING, RefundStatus.APPROVED}:
         raise RefundValidationError("Only pending/approved refunds can be processed.")
@@ -177,11 +180,24 @@ def _process_refund_locked(
         admin_override=True,
     )
 
+    if order.payment_provider == "mmg" and not provider_confirmed:
+        refund.status = RefundStatus.APPROVED
+        refund.approved_by_user_id = actor_user_id
+        refund.admin_notes = admin_notes.strip() if admin_notes else refund.admin_notes
+        refund.payment_provider = "mmg"
+        refund.provider_status = "awaiting_provider_confirmation"
+        db.flush()
+        return refund
+
     now = _now()
     refund.status = RefundStatus.PROCESSED
     refund.approved_by_user_id = actor_user_id
     refund.admin_notes = admin_notes.strip() if admin_notes else refund.admin_notes
     refund.processed_at = now
+    if order.payment_provider == "mmg":
+        refund.payment_provider = "mmg"
+        refund.provider_status = "verified"
+        refund.provider_verified_at = now
 
     db.add(
         FinancialEntry(
@@ -270,6 +286,7 @@ def process_refund_for_order(
         status=RefundStatus.APPROVED,
         approved_by_user_id=actor_user_id,
         admin_notes=admin_notes.strip() if admin_notes else None,
+        payment_provider=order.payment_provider,
     )
     db.add(refund)
     db.flush()
@@ -395,6 +412,12 @@ def resolve_dispute(
 
     order: Order | None = None
     if refund_amount is not None:
+        order = (
+            db.execute(
+                select(Order).where(Order.id == dispute.order_id).with_for_update()
+            )
+            .scalar_one()
+        )
         reason = refund_reason or RefundReason.OTHER
         refund = Refund(
             order_id=dispute.order_id,
@@ -404,21 +427,71 @@ def resolve_dispute(
             status=RefundStatus.APPROVED,
             approved_by_user_id=actor_user_id,
             admin_notes="Dispute resolution refund",
+            payment_provider=order.payment_provider,
         )
         db.add(refund)
         db.flush()
-        order = (
-            db.execute(
-                select(Order).where(Order.id == dispute.order_id).with_for_update()
-            )
-            .scalar_one()
-        )
         db.refresh(order, attribute_names=["event", "tickets"])
         _process_refund_locked(db, refund=refund, order=order, actor_user_id=actor_user_id, admin_notes=admin_notes)
 
     db.flush()
     notify_dispute_resolved(db, dispute=dispute, order=order)
     return dispute
+
+
+def confirm_mmg_refund_processed(
+    db: Session,
+    *,
+    refund_id: int,
+    actor_user_id: int,
+    provider_refund_reference: str,
+    reason: str,
+) -> Refund:
+    _assert_admin(db, actor_user_id=actor_user_id)
+    normalized_reference = provider_refund_reference.strip()
+    normalized_reason = reason.strip()
+    if not normalized_reference:
+        raise RefundValidationError("Provider refund reference is required.")
+    if not normalized_reason:
+        raise RefundValidationError("Provider confirmation reason is required.")
+
+    refund = db.execute(
+        select(Refund).where(Refund.id == refund_id).with_for_update()
+    ).scalar_one_or_none()
+    if refund is None:
+        raise RefundNotFoundError("Refund not found.")
+    if refund.status != RefundStatus.APPROVED:
+        raise RefundValidationError("Only approved refunds can be provider-confirmed.")
+    order = db.execute(
+        select(Order).where(Order.id == refund.order_id).with_for_update()
+    ).scalar_one()
+    if order.payment_provider != "mmg" or refund.payment_provider != "mmg":
+        raise RefundValidationError("Refund is not for an MMG payment.")
+    db.refresh(order, attribute_names=["event", "tickets"])
+
+    refund.provider_refund_reference = normalized_reference
+    refund.provider_status = "verified"
+    refund.provider_submitted_at = refund.provider_submitted_at or _now()
+    result = _process_refund_locked(
+        db,
+        refund=refund,
+        order=order,
+        actor_user_id=actor_user_id,
+        admin_notes=refund.admin_notes,
+        provider_confirmed=True,
+    )
+    db.add(
+        AdminActionAudit(
+            actor_user_id=actor_user_id,
+            target_type="refund",
+            target_id=str(refund.id),
+            action_type="confirm_mmg_refund_processed",
+            reason=normalized_reason,
+            metadata_json={"provider_refund_reference": normalized_reference},
+        )
+    )
+    db.flush()
+    return result
 
 
 def reject_dispute(db: Session, *, dispute_id: int, actor_user_id: int, admin_notes: str) -> Dispute:

@@ -22,7 +22,6 @@
     },
     "extra": {
       "apiBaseUrl": "https://admitly.onrender.com",
-      "enableDevTestCheckout": "true",
       "eas": {
         "projectId": "3b821e35-7259-4d68-b0ad-feb62b2a44b5"
       }
@@ -41,7 +40,8 @@
         }
       ],
       "expo-notifications",
-      "expo-secure-store"
+      "expo-secure-store",
+      "@sentry/react-native"
     ]
   }
 }

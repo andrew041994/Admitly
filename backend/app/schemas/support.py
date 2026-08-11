@@ -83,6 +83,17 @@ class SupportMessageLogResponse(BaseModel):
     created_at: datetime
 
 
+class SupportPaymentAttemptResponse(BaseModel):
+    id: int
+    provider: str
+    payment_method: str
+    status: str
+    verification_status: str
+    authenticity_status: str
+    provider_reference: str | None
+    created_at: datetime
+
+
 class SupportSnapshotResponse(BaseModel):
     order_id: int
     order_reference: str
@@ -111,3 +122,4 @@ class SupportSnapshotResponse(BaseModel):
     timeline: list[SupportTimelineItemResponse]
     admin_audits: list[AdminAuditResponse]
     message_history: list[SupportMessageLogResponse]
+    payment_attempts: list[SupportPaymentAttemptResponse]

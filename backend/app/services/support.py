@@ -12,6 +12,7 @@ from app.models.admin_action_audit import AdminActionAudit
 from app.models.dispute import Dispute
 from app.models.enums import OrderStatus, PricingSource, SupportCasePriority, SupportCaseStatus, TransferInviteStatus
 from app.models.order import Order
+from app.models.payment_attempt import PaymentAttempt
 from app.models.promo_code_redemption import PromoCodeRedemption
 from app.models.refund import Refund
 from app.models.support_case import SupportCase
@@ -246,6 +247,21 @@ def build_order_support_timeline(db: Session, order_id: int) -> list[dict[str, A
         rows.append({"timestamp": order.payment_submitted_at, "type": "payment", "title": "Payment submitted", "description": f"Payment reference {order.payment_reference or 'n/a'} submitted.", "actor": None, "metadata": None})
     if order.paid_at:
         rows.append({"timestamp": order.paid_at, "type": "payment", "title": "Payment captured", "description": "Order marked paid.", "actor": None, "metadata": None})
+    payment_attempts = db.execute(
+        select(PaymentAttempt).where(PaymentAttempt.order_id == order_id)
+    ).scalars().all()
+    for attempt in payment_attempts:
+        rows.append({
+            "timestamp": attempt.created_at,
+            "type": "payment_attempt",
+            "title": f"{attempt.provider} {attempt.payment_method} attempt",
+            "description": f"Status {attempt.status}; verification {attempt.verification_status}; authenticity {attempt.authenticity_status}.",
+            "actor": None,
+            "metadata": {
+                "payment_attempt_id": attempt.id,
+                "provider_reference": attempt.provider_reference,
+            },
+        })
     if order.refunded_at:
         rows.append({"timestamp": order.refunded_at, "type": "refund", "title": "Order refunded", "description": f"Refund status {order.refund_status}.", "actor": f"user:{order.refunded_by_user_id}" if order.refunded_by_user_id else None, "metadata": None})
 

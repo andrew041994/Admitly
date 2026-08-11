@@ -7,6 +7,8 @@ pydantic==2.11.3
 pydantic-settings==2.8.1
 email-validator==2.2.0
 python-dotenv==1.1.0
+redis==5.2.1
+sentry-sdk[fastapi]==2.27.0
 
 qrcode==8.2
 Pillow==10.4.0

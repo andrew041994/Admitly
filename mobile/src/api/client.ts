@@ -5,12 +5,14 @@ let authToken: string | null = null;
 export class ApiError extends Error {
   status: number;
   detail: unknown;
+  requestId: string | null;
 
-  constructor(message: string, status: number, detail?: unknown) {
-    super(message);
+  constructor(message: string, status: number, detail?: unknown, requestId: string | null = null) {
+    super(`${message}${requestId ? ` (Reference: ${requestId})` : ''}`);
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
+    this.requestId = requestId;
   }
 }
 
@@ -57,7 +59,7 @@ export async function apiRequest<T>({ path, headers, body, ...init }: ApiOptions
       // ignore body parsing errors and keep generic message
     }
 
-    throw new ApiError(message, response.status, parsedDetail);
+    throw new ApiError(message, response.status, parsedDetail, response.headers.get('X-Request-ID'));
   }
 
   return (await response.json()) as T;

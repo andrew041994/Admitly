@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user_id
+from app.api.rate_limit import apply_rate_limit
 from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.notification import (
@@ -27,7 +28,6 @@ from app.services.notification_center import (
     utc_now,
 )
 from app.services.notifications import deactivate_push_token, register_push_token
-from app.services.rate_limit import RateLimitExceededError, enforce_rate_limit
 
 router = APIRouter(prefix="/me", tags=["notifications"])
 
@@ -150,15 +150,12 @@ def register_my_push_token(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> PushTokenRegisterResponse:
-    try:
-        enforce_rate_limit(
-            scope="push-token-registration",
-            key=str(user_id),
-            limit=settings.rate_limit_push_registration_count,
-            window_seconds=settings.rate_limit_push_registration_window_seconds,
-        )
-    except RateLimitExceededError as exc:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+    apply_rate_limit(
+        scope="push_token_registration",
+        key=str(user_id),
+        limit=settings.rate_limit_push_registration_count,
+        window_seconds=settings.rate_limit_push_registration_window_seconds,
+    )
     register_push_token(
         db,
         user_id=user_id,

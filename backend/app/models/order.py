@@ -5,7 +5,7 @@ import secrets
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, event
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from app.db.base import Base
@@ -33,6 +33,13 @@ if TYPE_CHECKING:
 
 class Order(TimestampMixin, Base):
     __tablename__ = "orders"
+    __table_args__ = (
+        UniqueConstraint(
+            "payment_provider",
+            "payment_reference",
+            name="uq_orders_payment_provider_reference",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(

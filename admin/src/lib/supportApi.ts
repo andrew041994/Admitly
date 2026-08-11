@@ -54,6 +54,17 @@ export interface SupportMessageLog {
   created_at: string;
 }
 
+export interface SupportPaymentAttempt {
+  id: number;
+  provider: string;
+  payment_method: string;
+  status: string;
+  verification_status: string;
+  authenticity_status: string;
+  provider_reference: string | null;
+  created_at: string;
+}
+
 export interface SupportSnapshot {
   order_id: number;
   event_id: number;
@@ -81,6 +92,7 @@ export interface SupportSnapshot {
   timeline: SupportTimelineItem[];
   admin_audits: AdminAuditItem[];
   message_history: SupportMessageLog[];
+  payment_attempts: SupportPaymentAttempt[];
 }
 
 export interface SupportCasePatchPayload {

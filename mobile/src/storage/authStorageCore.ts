@@ -34,46 +34,65 @@ export function createAuthStorage({ secureStorage, legacyStorage, keys }: AuthSt
     ]);
   }
 
-  async function migrateCredential(secureKey: string, legacyKey: string): Promise<string | null> {
-    const secureValue = await secureStorage.getItem(secureKey);
-    const legacyValue = await legacyStorage.getItem(legacyKey);
-
-    if (secureValue !== null) {
-      if (legacyValue !== null) {
-        await legacyStorage.removeItem(legacyKey);
-      }
-      return secureValue;
+  async function restoreSecureCredential(key: string, previousValue: string | null): Promise<void> {
+    if (previousValue === null) {
+      await secureStorage.removeItem(key);
+    } else {
+      await secureStorage.setItem(key, previousValue);
     }
-
-    if (legacyValue === null) {
-      return null;
-    }
-
-    await secureStorage.setItem(secureKey, legacyValue);
-    const verifiedValue = await secureStorage.getItem(secureKey);
-    if (verifiedValue !== legacyValue) {
-      throw new Error(`Secure credential verification failed for ${secureKey}`);
-    }
-
-    await legacyStorage.removeItem(legacyKey);
-    return verifiedValue;
   }
 
   async function migrateLegacyCredentials(): Promise<StoredSession | null> {
-    try {
-      const accessToken = await migrateCredential(keys.secureAccessToken, keys.legacyAccessToken);
-      const refreshToken = await migrateCredential(keys.secureRefreshToken, keys.legacyRefreshToken);
+    const previousAccessToken = await secureStorage.getItem(keys.secureAccessToken);
+    const previousRefreshToken = await secureStorage.getItem(keys.secureRefreshToken);
 
-      if (!accessToken) {
-        if (refreshToken) {
-          await clearAllCredentials();
-        }
-        return null;
+    if (previousAccessToken !== null && previousRefreshToken !== null) {
+      await Promise.all([
+        legacyStorage.removeItem(keys.legacyAccessToken),
+        legacyStorage.removeItem(keys.legacyRefreshToken),
+      ]);
+      return { accessToken: previousAccessToken, refreshToken: previousRefreshToken };
+    }
+
+    const legacyAccessToken = previousAccessToken === null
+      ? await legacyStorage.getItem(keys.legacyAccessToken)
+      : null;
+    const legacyRefreshToken = previousRefreshToken === null
+      ? await legacyStorage.getItem(keys.legacyRefreshToken)
+      : null;
+    const accessToken = previousAccessToken ?? legacyAccessToken;
+    const refreshToken = previousRefreshToken ?? legacyRefreshToken;
+
+    if (!accessToken) {
+      return null;
+    }
+
+    try {
+      if (previousAccessToken === null) {
+        await secureStorage.setItem(keys.secureAccessToken, accessToken);
+      }
+      if (previousRefreshToken === null && refreshToken !== null) {
+        await secureStorage.setItem(keys.secureRefreshToken, refreshToken);
       }
 
+      const [verifiedAccessToken, verifiedRefreshToken] = await Promise.all([
+        secureStorage.getItem(keys.secureAccessToken),
+        secureStorage.getItem(keys.secureRefreshToken),
+      ]);
+      if (verifiedAccessToken !== accessToken || verifiedRefreshToken !== refreshToken) {
+        throw new Error('Secure credential migration verification failed');
+      }
+
+      await Promise.all([
+        legacyStorage.removeItem(keys.legacyAccessToken),
+        legacyStorage.removeItem(keys.legacyRefreshToken),
+      ]);
       return { accessToken, refreshToken };
     } catch {
-      await clearAllCredentials();
+      await Promise.allSettled([
+        restoreSecureCredential(keys.secureAccessToken, previousAccessToken),
+        restoreSecureCredential(keys.secureRefreshToken, previousRefreshToken),
+      ]);
       return null;
     }
   }
@@ -93,6 +112,7 @@ export function createAuthStorage({ secureStorage, legacyStorage, keys }: AuthSt
   }
 
   async function writeCredential(secureKey: string, legacyKey: string, value: string | null): Promise<void> {
+    const previousValue = await secureStorage.getItem(secureKey);
     try {
       if (value === null) {
         await secureStorage.removeItem(secureKey);
@@ -105,7 +125,7 @@ export function createAuthStorage({ secureStorage, legacyStorage, keys }: AuthSt
       }
       await legacyStorage.removeItem(legacyKey);
     } catch (error) {
-      await clearAllCredentials();
+      await Promise.allSettled([restoreSecureCredential(secureKey, previousValue)]);
       throw error;
     }
   }
@@ -119,6 +139,10 @@ export function createAuthStorage({ secureStorage, legacyStorage, keys }: AuthSt
   }
 
   async function setStoredSession(session: StoredSession): Promise<void> {
+    const [previousAccessToken, previousRefreshToken] = await Promise.all([
+      secureStorage.getItem(keys.secureAccessToken),
+      secureStorage.getItem(keys.secureRefreshToken),
+    ]);
     try {
       await secureStorage.setItem(keys.secureAccessToken, session.accessToken);
       if (session.refreshToken) {
@@ -140,7 +164,10 @@ export function createAuthStorage({ secureStorage, legacyStorage, keys }: AuthSt
         legacyStorage.removeItem(keys.legacyRefreshToken),
       ]);
     } catch (error) {
-      await clearAllCredentials();
+      await Promise.allSettled([
+        restoreSecureCredential(keys.secureAccessToken, previousAccessToken),
+        restoreSecureCredential(keys.secureRefreshToken, previousRefreshToken),
+      ]);
       throw error;
     }
   }

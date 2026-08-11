@@ -21,6 +21,9 @@ class PaymentAttempt(Base):
     payment_method: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     verification_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    authenticity_status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="not_applicable", server_default="not_applicable"
+    )
     provider_reference: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     request_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_payload: Mapped[str | None] = mapped_column(Text, nullable=True)

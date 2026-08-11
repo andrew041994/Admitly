@@ -21,6 +21,11 @@ class MMGVerificationResult(str, Enum):
     REJECTED = "rejected"
 
 
+class MMGCallbackAuthenticity(str, Enum):
+    VERIFIED_MOCK = "verified_mock"
+    UNVERIFIED = "unverified"
+
+
 @dataclass(slots=True)
 class MMGCheckoutResult:
     payment_reference: str
@@ -37,6 +42,8 @@ class MMGAgentVerificationOutcome:
 class MMGCallbackPayload:
     payment_reference: str
     paid: bool
+    provider_status: str
+    authenticity: MMGCallbackAuthenticity
 
 
 def _require_live_config() -> None:
@@ -55,8 +62,17 @@ def _require_live_config() -> None:
 
 
 def validate_mmg_provider_config() -> None:
+    if settings.mmg_provider_mode not in {"mock", "live"}:
+        raise MMGProviderError("MMG_PROVIDER_MODE must be 'mock' or 'live'.")
     if settings.mmg_provider_mode == "live":
         _require_live_config()
+    else:
+        _require_mock_allowed()
+
+
+def _require_mock_allowed() -> None:
+    if settings.is_production:
+        raise MMGProviderError("Mock MMG behavior is disabled in production.")
 
 
 def _mock_checkout_url(reference: str) -> str:
@@ -75,6 +91,8 @@ def create_checkout_for_order(
         _require_live_config()
         # TODO: replace with real MMG checkout session creation once docs/credentials are available.
         raise MMGProviderError("MMG live checkout is not implemented yet.")
+
+    _require_mock_allowed()
 
     reference = existing_reference or f"MMG-CHK-{order_id}"
     checkout_url = existing_checkout_url or _mock_checkout_url(reference)
@@ -115,6 +133,8 @@ def verify_agent_payment_reference(
             message="Live verification not wired yet; pending manual verification.",
         )
 
+    _require_mock_allowed()
+
     if submitted_reference.endswith("-PENDING"):
         return MMGAgentVerificationOutcome(
             status=MMGVerificationResult.PENDING,
@@ -133,13 +153,47 @@ def verify_agent_payment_reference(
 
 
 def parse_checkout_callback(payload: dict) -> MMGCallbackPayload:
-    reference = str(payload.get("payment_reference") or payload.get("reference") or "").strip()
+    if not isinstance(payload, dict):
+        raise MMGProviderError("Callback payload must be an object.")
+    raw_reference = payload.get("payment_reference") or payload.get("reference")
+    if not isinstance(raw_reference, str):
+        raise MMGProviderError("Callback payload missing payment reference.")
+    reference = raw_reference.strip()
     if not reference:
         raise MMGProviderError("Callback payload missing payment reference.")
+    if len(reference) > 255:
+        raise MMGProviderError("Callback payment reference is too long.")
 
-    raw_paid = payload.get("paid", payload.get("status"))
-    paid = str(raw_paid).lower() in {"1", "true", "paid", "success", "verified"}
-    return MMGCallbackPayload(payment_reference=reference, paid=paid)
+    if "paid" in payload:
+        raw_paid = payload["paid"]
+        if not isinstance(raw_paid, bool):
+            raise MMGProviderError("Callback paid value must be boolean.")
+        paid = raw_paid
+        provider_status = "paid" if paid else "pending"
+    else:
+        raw_status = payload.get("status")
+        if not isinstance(raw_status, str):
+            raise MMGProviderError("Callback payload missing payment status.")
+        normalized_status = raw_status.strip().lower()
+        if normalized_status in {"paid", "success", "verified"}:
+            paid = True
+            provider_status = "paid"
+        elif normalized_status in {"pending", "failed", "cancelled", "canceled"}:
+            paid = False
+            provider_status = "cancelled" if normalized_status in {"cancelled", "canceled"} else normalized_status
+        else:
+            raise MMGProviderError("Callback payment status is not recognized.")
+
+    authenticity = MMGCallbackAuthenticity.UNVERIFIED
+    if settings.mmg_provider_mode == "mock":
+        _require_mock_allowed()
+        authenticity = MMGCallbackAuthenticity.VERIFIED_MOCK
+    return MMGCallbackPayload(
+        payment_reference=reference,
+        paid=paid,
+        provider_status=provider_status,
+        authenticity=authenticity,
+    )
 
 
 @dataclass(slots=True)
@@ -153,8 +207,9 @@ def initiate_refund_with_provider(*, order_id: int, payment_reference: str | Non
     if settings.mmg_provider_mode == "live":
         _require_live_config()
         # TODO: replace with real MMG refund initiation once provider refund APIs are available.
-        return MMGRefundOutcome(status="pending", provider_reference=payment_reference, message="Refund queued.")
+        raise MMGProviderError("MMG live refunds are not implemented yet.")
 
+    _require_mock_allowed()
     return MMGRefundOutcome(status="refunded", provider_reference=payment_reference, message="Mock refund recorded.")
 
 
@@ -162,6 +217,7 @@ def verify_refund_status(*, provider_reference: str | None) -> MMGRefundOutcome:
     if settings.mmg_provider_mode == "live":
         _require_live_config()
         # TODO: replace with real MMG refund status lookup when available.
-        return MMGRefundOutcome(status="pending", provider_reference=provider_reference)
+        raise MMGProviderError("MMG live refund lookup is not implemented yet.")
 
+    _require_mock_allowed()
     return MMGRefundOutcome(status="refunded", provider_reference=provider_reference)

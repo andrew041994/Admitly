@@ -77,7 +77,7 @@ def _require_mmg_enabled() -> None:
 
 
 def _require_dev_test_checkout_enabled() -> None:
-    if not settings.enable_dev_test_checkout:
+    if settings.is_production or not settings.enable_dev_test_checkout:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Dev test checkout is disabled.",
@@ -320,6 +320,7 @@ def cancel_order(
     except OrderCancellationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    db.commit()
     return _to_order_response(order)
 
 
@@ -344,6 +345,7 @@ def refund_order(
     except OrderRefundError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    db.commit()
     return _to_order_response(order)
 
 
@@ -372,6 +374,7 @@ def initiate_mmg_checkout(
     except PaymentError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
+    db.commit()
     return CreateOrderMMGCheckoutResponse(
         order_id=snapshot.order_id,
         order_reference=snapshot.order_reference,
@@ -409,6 +412,7 @@ def initiate_mmg_agent_checkout(
     except PaymentError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
+    db.commit()
     return CreateOrderMMGAgentResponse(
         order_id=snapshot.order_id,
         order_reference=snapshot.order_reference,
@@ -452,6 +456,7 @@ def complete_agent_payment(
     except PaymentError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
+    db.commit()
     return CompleteMMGAgentPaymentResponse(
         order_id=snapshot.order_id,
         order_reference=snapshot.order_reference,

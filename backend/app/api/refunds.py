@@ -14,6 +14,7 @@ from app.schemas.refunds import (
     DisputeResolveRequest,
     DisputeResponse,
     RefundApproveRequest,
+    RefundProviderConfirmRequest,
     RefundRejectRequest,
     RefundRequestCreate,
     RefundResponse,
@@ -28,6 +29,7 @@ from app.services.refunds import (
     list_refunds,
     list_user_refunds,
     approve_refund,
+    confirm_mmg_refund_processed,
     reject_dispute,
     reject_refund,
     request_refund,
@@ -53,6 +55,11 @@ def _to_refund_response(refund) -> RefundResponse:
         reason=refund.reason.value,
         admin_notes=refund.admin_notes,
         processed_at=refund.processed_at,
+        payment_provider=refund.payment_provider,
+        provider_refund_reference=refund.provider_refund_reference,
+        provider_status=refund.provider_status,
+        provider_submitted_at=refund.provider_submitted_at,
+        provider_verified_at=refund.provider_verified_at,
         created_at=refund.created_at,
     )
 
@@ -181,6 +188,32 @@ def admin_reject_refund(
     _require_admin(db, user_id=user_id)
     try:
         refund = reject_refund(db, refund_id=refund_id, actor_user_id=user_id, admin_notes=payload.admin_notes)
+        db.commit()
+    except RefundAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except RefundNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RefundValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return _to_refund_response(refund)
+
+
+@router.post("/admin/refunds/{refund_id}/confirm-provider", response_model=RefundResponse)
+def admin_confirm_mmg_refund(
+    refund_id: int,
+    payload: RefundProviderConfirmRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_admin_id),
+) -> RefundResponse:
+    _require_admin(db, user_id=user_id)
+    try:
+        refund = confirm_mmg_refund_processed(
+            db,
+            refund_id=refund_id,
+            actor_user_id=user_id,
+            provider_refund_reference=payload.provider_refund_reference,
+            reason=payload.reason,
+        )
         db.commit()
     except RefundAuthorizationError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

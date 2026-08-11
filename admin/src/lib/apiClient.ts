@@ -9,11 +9,13 @@ type RequestOptions = Omit<RequestInit, 'headers'> & {
 export class ApiError extends Error {
   status: number;
   detail: string;
+  requestId: string | null;
 
-  constructor(status: number, detail: string) {
-    super(detail || `API request failed (${status})`);
+  constructor(status: number, detail: string, requestId: string | null = null) {
+    super(`${detail || `API request failed (${status})`}${requestId ? ` (Reference: ${requestId})` : ''}`);
     this.status = status;
     this.detail = detail || `API request failed (${status})`;
+    this.requestId = requestId;
   }
 }
 
@@ -44,7 +46,7 @@ export async function apiRequest(path: string, options: RequestOptions = {}) {
       clearAdminSession();
       window.dispatchEvent(new CustomEvent('admin-auth-required', { detail }));
     }
-    throw new ApiError(response.status, detail);
+    throw new ApiError(response.status, detail, response.headers.get('X-Request-ID'));
   }
 
   return response;

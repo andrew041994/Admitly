@@ -10,8 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.enums import OrderStatus
+from app.models.admin_action_audit import AdminActionAudit
 from app.models.order import Order
 from app.models.payment_attempt import PaymentAttempt
+from app.models.user import User
 from app.core.config import settings
 from app.services.orders import (
     OrderNotPayableError,
@@ -20,6 +22,7 @@ from app.services.orders import (
 )
 from app.services.payments.mmg import (
     MMGProviderError,
+    MMGCallbackAuthenticity,
     MMGVerificationResult,
     create_agent_payment_reference,
     create_checkout_for_order,
@@ -73,6 +76,7 @@ def _record_payment_attempt(
     request_payload: dict | None = None,
     response_payload: dict | None = None,
     provider: str = "mmg",
+    authenticity_status: str = "not_applicable",
 ) -> None:
     db.add(
         PaymentAttempt(
@@ -81,6 +85,7 @@ def _record_payment_attempt(
             payment_method=payment_method,
             status=status,
             verification_status=verification_status,
+            authenticity_status=authenticity_status,
             provider_reference=provider_reference,
             request_payload=json.dumps(request_payload) if request_payload else None,
             response_payload=json.dumps(response_payload) if response_payload else None,
@@ -170,7 +175,7 @@ def create_mmg_checkout_for_order(db: Session, *, order_id: int, user_id: int) -
 
 
 def _ensure_dev_test_checkout_enabled() -> None:
-    if not settings.enable_dev_test_checkout:
+    if settings.is_production or not settings.enable_dev_test_checkout:
         raise PaymentError("Dev test checkout is unavailable.")
 
 
@@ -370,13 +375,68 @@ def submit_mmg_agent_payment(
     )
 
 
-def mark_agent_payment_verified(db: Session, *, order_id: int, payment_reference: str | None = None) -> Order:
-    order = _load_order_for_payment(db, order_id=order_id)
-    if order.payment_method != "mmg_agent":
-        raise PaymentMethodMismatchError("Order is not configured for MMG agent payments.")
+def manually_verify_mmg_payment(
+    db: Session,
+    *,
+    order_id: int,
+    actor_user_id: int,
+    payment_reference: str,
+    confirmed_amount: Decimal,
+    confirmed_currency: str,
+    reason: str,
+) -> Order:
+    normalized_reason = reason.strip()
+    if not normalized_reason:
+        raise PaymentError("A manual verification reason is required.")
+    actor = db.execute(select(User).where(User.id == actor_user_id)).scalar_one_or_none()
+    if actor is None or not actor.is_admin:
+        raise PaymentAuthorizationError("Admin access required for manual payment verification.")
 
+    order = _load_order_for_payment(db, order_id=order_id)
+    if order.payment_provider != "mmg" or order.payment_method not in {"mmg_agent", "mmg_checkout"}:
+        raise PaymentMethodMismatchError("Order is not configured for MMG payments.")
+    if not order.payment_reference or payment_reference.strip() != order.payment_reference:
+        raise PaymentMethodMismatchError("Payment reference does not match the order.")
+    if Decimal(confirmed_amount) != Decimal(order.total_amount):
+        raise PaymentMethodMismatchError("Confirmed payment amount does not match the order total.")
+    if confirmed_currency.strip().upper() != order.currency.upper():
+        raise PaymentMethodMismatchError("Confirmed payment currency does not match the order currency.")
+    if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
+        return order
+
+    validate_order_still_payable(order)
     order.payment_verification_status = "verified"
-    complete_paid_order(db, order, paid_at=get_guyana_now(), payment_reference=payment_reference)
+    complete_paid_order(
+        db,
+        order,
+        paid_at=get_guyana_now(),
+        payment_reference=order.payment_reference,
+    )
+    db.add(
+        AdminActionAudit(
+            actor_user_id=actor_user_id,
+            target_type="order",
+            target_id=str(order.id),
+            action_type="manually_verify_mmg_payment",
+            reason=normalized_reason,
+            metadata_json={
+                "payment_reference": order.payment_reference,
+                "payment_method": order.payment_method,
+                "confirmed_amount": f"{Decimal(confirmed_amount):.2f}",
+                "confirmed_currency": confirmed_currency.strip().upper(),
+            },
+        )
+    )
+    _record_payment_attempt(
+        db,
+        order=order,
+        payment_method=order.payment_method,
+        status=order.status.value,
+        verification_status=order.payment_verification_status,
+        provider_reference=order.payment_reference,
+        response_payload={"manual_review_reason": normalized_reason},
+        authenticity_status="manual_review",
+    )
     db.flush()
     return order
 
@@ -393,18 +453,35 @@ def handle_mmg_callback(db: Session, *, payload: dict) -> OrderPaymentSnapshot:
         raise PaymentError("Order not found for payment reference.")
     db.refresh(order, attribute_names=["ticket_holds", "order_items", "tickets"])
 
-    if parsed.paid:
+    if order.payment_provider != "mmg" or order.payment_method != "mmg_checkout":
+        raise PaymentMethodMismatchError("Payment reference is not for an MMG checkout order.")
+
+    if parsed.authenticity == MMGCallbackAuthenticity.UNVERIFIED:
+        logger.warning(
+            "Unverified MMG callback recorded without changing payment state",
+            extra={"order_id": order.id, "payment_reference": order.payment_reference},
+        )
+    elif parsed.paid:
         if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
             logger.info("Duplicate paid callback ignored for finalized order", extra={"order_id": order.id})
         else:
+            validate_order_still_payable(order)
             order.payment_verification_status = "verified"
             complete_paid_order(db, order, paid_at=get_guyana_now(), payment_reference=parsed.payment_reference)
     else:
         if order.status == OrderStatus.COMPLETED and order.payment_verification_status == "verified":
             logger.info("Out-of-order unpaid callback ignored for finalized order", extra={"order_id": order.id})
-        else:
+        elif order.status in {OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.FAILED}:
+            logger.info(
+                "Out-of-order callback ignored for terminal order",
+                extra={"order_id": order.id, "order_status": order.status.value},
+            )
+        elif parsed.provider_status == "pending":
             order.status = OrderStatus.PAYMENT_SUBMITTED
             order.payment_verification_status = "pending_verification"
+        else:
+            order.status = OrderStatus.FAILED
+            order.payment_verification_status = "rejected"
 
     _record_payment_attempt(
         db,
@@ -413,7 +490,12 @@ def handle_mmg_callback(db: Session, *, payload: dict) -> OrderPaymentSnapshot:
         status=order.status.value,
         verification_status=order.payment_verification_status,
         provider_reference=order.payment_reference or parsed.payment_reference,
-        response_payload=payload,
+        response_payload={
+            "provider_status": parsed.provider_status,
+            "paid_claimed": parsed.paid,
+            "authenticity": parsed.authenticity.value,
+        },
+        authenticity_status=parsed.authenticity.value,
     )
     db.flush()
     return OrderPaymentSnapshot(
@@ -460,7 +542,7 @@ __all__ = [
     "create_mmg_agent_checkout_for_order",
     "complete_dev_test_checkout_for_order",
     "submit_mmg_agent_payment",
-    "mark_agent_payment_verified",
+    "manually_verify_mmg_payment",
     "handle_mmg_callback",
     "mark_refund_recorded",
     "refresh_refund_status",

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RefundRequestCreate(BaseModel):
@@ -13,6 +13,11 @@ class RefundRequestCreate(BaseModel):
 class RefundApproveRequest(BaseModel):
     amount: float | None = None
     admin_notes: str | None = None
+
+
+class RefundProviderConfirmRequest(BaseModel):
+    provider_refund_reference: str = Field(min_length=1, max_length=255)
+    reason: str = Field(min_length=3, max_length=1000)
 
 
 class RefundRejectRequest(BaseModel):
@@ -28,6 +33,11 @@ class RefundResponse(BaseModel):
     reason: str
     admin_notes: str | None
     processed_at: datetime | None
+    payment_provider: str | None
+    provider_refund_reference: str | None
+    provider_status: str
+    provider_submitted_at: datetime | None
+    provider_verified_at: datetime | None
     created_at: datetime
 
 

@@ -12,6 +12,7 @@ import { EventApprovalsPage } from '../pages/EventApprovalsPage';
 import { LoginPage } from '../pages/LoginPage';
 import { ResetPasswordRedirectPage } from '../pages/ResetPasswordRedirectPage';
 import { VerifyEmailRedirectPage } from '../pages/VerifyEmailRedirectPage';
+import { LegalPage } from '../pages/LegalPage';
 
 function RequireAdmin() {
   const session = getAdminSession();
@@ -39,6 +40,11 @@ export function AppRouter() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/reset-password" element={<ResetPasswordRedirectPage />} />
       <Route path="/verify-email" element={<VerifyEmailRedirectPage />} />
+      <Route path="/privacy" element={<LegalPage />} />
+      <Route path="/refund-policy" element={<LegalPage />} />
+      <Route path="/terms" element={<LegalPage />} />
+      <Route path="/organizer-terms" element={<LegalPage />} />
+      <Route path="/buyer-terms" element={<LegalPage />} />
       <Route element={<RequireAdmin />}>
         <Route index element={<Navigate to="/support" replace />} />
         <Route path="/support" element={<SupportPage />} />

@@ -31,6 +31,7 @@ from app.services.refunds import (
     RefundAuthorizationError,
     RefundValidationError,
     approve_refund,
+    confirm_mmg_refund_processed,
     get_order_remaining_refundable,
     reject_refund,
     request_refund,
@@ -229,6 +230,52 @@ def test_paid_out_refund_creates_balance_offset(db_session: Session) -> None:
     adjustments = db_session.execute(select(OrganizerBalanceAdjustment).where(OrganizerBalanceAdjustment.refund_id == refund.id)).scalars().all()
     assert len(adjustments) == 1
     assert Decimal(adjustments[0].amount) == Decimal("-10.00")
+
+
+def test_mmg_refund_requires_separate_provider_confirmation(db_session: Session) -> None:
+    data = _seed(db_session)
+    order = data["paid_order"]
+    order.payment_provider = "mmg"
+    order.payment_method = "mmg_checkout"
+    order.payment_reference = f"MMG-{order.id}"
+    db_session.flush()
+
+    refund = request_refund(
+        db_session,
+        user_id=data["buyer"].id,
+        order_id=order.id,
+        reason=RefundReason.USER_REQUEST,
+        amount=Decimal("25.00"),
+        note=None,
+    )
+    approved = approve_refund(
+        db_session,
+        refund_id=refund.id,
+        actor_user_id=data["admin"].id,
+        amount=None,
+        admin_notes="Approved pending MMG confirmation",
+    )
+
+    assert approved.status == RefundStatus.APPROVED
+    assert approved.provider_status == "awaiting_provider_confirmation"
+    assert approved.processed_at is None
+    assert db_session.execute(
+        select(FinancialEntry).where(FinancialEntry.refund_id == approved.id)
+    ).scalars().all() == []
+
+    processed = confirm_mmg_refund_processed(
+        db_session,
+        refund_id=approved.id,
+        actor_user_id=data["admin"].id,
+        provider_refund_reference=f"MMG-REFUND-{approved.id}",
+        reason="Matched completed refund in provider portal.",
+    )
+    assert processed.status == RefundStatus.PROCESSED
+    assert processed.provider_status == "verified"
+    assert processed.provider_verified_at is not None
+    assert len(db_session.execute(
+        select(FinancialEntry).where(FinancialEntry.refund_id == processed.id)
+    ).scalars().all()) == 1
 
 
 def test_dispute_creation_uniqueness_and_resolve_with_refund(db_session: Session) -> None:

@@ -10,6 +10,7 @@ from app.models.admin_action_audit import AdminActionAudit
 from app.models.dispute import Dispute
 from app.models.enums import SupportCasePriority, SupportCaseStatus
 from app.models.order import Order
+from app.models.payment_attempt import PaymentAttempt
 from app.models.refund import Refund
 from app.models.support_case_note import SupportCaseNote
 from app.models.ticket import Ticket
@@ -23,6 +24,7 @@ from app.schemas.support import (
     SupportCasePatchRequest,
     SupportCaseResponse,
     SupportMessageLogResponse,
+    SupportPaymentAttemptResponse,
     SupportNoteCreateRequest,
     SupportSnapshotResponse,
     SupportTimelineItemResponse,
@@ -115,6 +117,11 @@ def get_support_snapshot(
         .where(Ticket.order_id == order_id)
     ).scalars().all()
     message_history = list_message_history(db, related_entity_type="order", related_entity_id=order_id)
+    payment_attempts = db.execute(
+        select(PaymentAttempt)
+        .where(PaymentAttempt.order_id == order_id)
+        .order_by(PaymentAttempt.created_at.desc(), PaymentAttempt.id.desc())
+    ).scalars().all()
 
     return SupportSnapshotResponse(
         order_id=order.id,
@@ -168,6 +175,19 @@ def get_support_snapshot(
                 created_at=item.created_at,
             )
             for item in message_history
+        ],
+        payment_attempts=[
+            SupportPaymentAttemptResponse(
+                id=item.id,
+                provider=item.provider,
+                payment_method=item.payment_method,
+                status=item.status,
+                verification_status=item.verification_status,
+                authenticity_status=item.authenticity_status,
+                provider_reference=item.provider_reference,
+                created_at=item.created_at,
+            )
+            for item in payment_attempts
         ],
     )
 

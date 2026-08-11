@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 from app.db.base import Base
-from app.models import Event, OrganizerProfile, Order, OrderItem, TicketHold, TicketTier, User, Venue
+from app.models import AdminActionAudit, Event, OrganizerProfile, Order, OrderItem, PaymentAttempt, TicketHold, TicketTier, User, Venue
 from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus
 from app.services.orders import OrderNotPayableError, validate_order_still_payable
 from app.services.payments import (
@@ -17,9 +17,10 @@ from app.services.payments import (
     create_mmg_agent_checkout_for_order,
     create_mmg_checkout_for_order,
     handle_mmg_callback,
-    mark_agent_payment_verified,
+    manually_verify_mmg_payment,
     submit_mmg_agent_payment,
 )
+from app.services.payments.mmg import MMGProviderError
 from app.services.ticket_holds import get_ticket_type_availability
 from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
 from tests.utils import unique_email
@@ -27,10 +28,11 @@ from tests.utils import unique_email
 
 
 @pytest.fixture(autouse=True)
-def mmg_config() -> None:
-    settings.mmg_enabled = True
-    settings.mmg_provider_mode = "mock"
-    settings.mmg_agent_auto_verify_enabled = True
+def mmg_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "env", "test")
+    monkeypatch.setattr(settings, "mmg_enabled", True)
+    monkeypatch.setattr(settings, "mmg_provider_mode", "mock")
+    monkeypatch.setattr(settings, "mmg_agent_auto_verify_enabled", True)
 
 
 def _seed_order_with_hold(db: Session, *, user_email: str | None = None) -> tuple[Order, TicketTier, User]:
@@ -213,11 +215,25 @@ def test_mmg_agent_submit_pending_and_rejected_paths(db_session: Session) -> Non
 
 def test_manual_agent_verify_hook_and_callback_scaffold(db_session: Session) -> None:
     order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("manual"))
+    user.is_admin = True
+    db_session.flush()
     initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
 
-    mark_agent_payment_verified(db_session, order_id=order.id, payment_reference=initiated.payment_reference)
+    manually_verify_mmg_payment(
+        db_session,
+        order_id=order.id,
+        actor_user_id=user.id,
+        payment_reference=initiated.payment_reference,
+        confirmed_amount=order.total_amount,
+        confirmed_currency=order.currency,
+        reason="Matched against provider portal.",
+    )
     db_session.refresh(order)
     assert order.status == OrderStatus.COMPLETED
+    audit = db_session.query(AdminActionAudit).filter_by(
+        target_type="order", target_id=str(order.id), action_type="manually_verify_mmg_payment"
+    ).one()
+    assert audit.actor_user_id == user.id
 
     checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email=unique_email("cb"))
     create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
@@ -226,6 +242,37 @@ def test_manual_agent_verify_hook_and_callback_scaffold(db_session: Session) -> 
         payload={"payment_reference": checkout_order.payment_reference, "status": "paid"},
     )
     assert callback.status == "completed"
+
+
+def test_manual_verification_rejects_amount_or_currency_mismatch(db_session: Session) -> None:
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("manual_mismatch"))
+    user.is_admin = True
+    db_session.flush()
+    initiated = create_mmg_agent_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+
+    with pytest.raises(PaymentError, match="amount"):
+        manually_verify_mmg_payment(
+            db_session,
+            order_id=order.id,
+            actor_user_id=user.id,
+            payment_reference=initiated.payment_reference,
+            confirmed_amount=Decimal("199.99"),
+            confirmed_currency="GYD",
+            reason="Provider portal review.",
+        )
+    with pytest.raises(PaymentError, match="currency"):
+        manually_verify_mmg_payment(
+            db_session,
+            order_id=order.id,
+            actor_user_id=user.id,
+            payment_reference=initiated.payment_reference,
+            confirmed_amount=order.total_amount,
+            confirmed_currency="USD",
+            reason="Provider portal review.",
+        )
+    db_session.refresh(order)
+    assert order.status == OrderStatus.AWAITING_PAYMENT
+    assert order.tickets == []
 
 
 def test_paid_callback_is_idempotent_and_does_not_double_issue_tickets(db_session: Session) -> None:
@@ -261,6 +308,22 @@ def test_unpaid_callback_after_completion_is_ignored(db_session: Session) -> Non
     assert replay.payment_verification_status == "verified"
     assert replay.status == "completed"
     assert len(checkout_order.tickets) == 2
+
+
+def test_callback_cannot_reopen_a_terminal_order(db_session: Session) -> None:
+    checkout_order, _, checkout_user = _seed_order_with_hold(db_session, user_email=unique_email("terminal"))
+    create_mmg_checkout_for_order(db_session, order_id=checkout_order.id, user_id=checkout_user.id)
+    checkout_order.status = OrderStatus.CANCELLED
+    checkout_order.payment_verification_status = "rejected"
+    db_session.flush()
+
+    snapshot = handle_mmg_callback(
+        db_session,
+        payload={"payment_reference": checkout_order.payment_reference, "status": "pending"},
+    )
+
+    assert snapshot.status == OrderStatus.CANCELLED.value
+    assert snapshot.payment_verification_status == "rejected"
 
 
 def test_duplicate_agent_submit_after_completion_is_safe(db_session: Session) -> None:
@@ -300,6 +363,55 @@ def test_callback_cannot_complete_order_after_hold_expiration(db_session: Sessio
     assert checkout_order.status == OrderStatus.AWAITING_PAYMENT
 
 
+def test_live_callback_is_unverified_and_cannot_complete_order(db_session: Session) -> None:
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("unverified_callback"))
+    create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+    settings.mmg_provider_mode = "live"
+    settings.mmg_base_url = "https://provider.invalid"
+    settings.mmg_merchant_id = "merchant"
+    settings.mmg_api_key = "key"
+    settings.mmg_api_secret = "secret"
+    settings.mmg_callback_url = "https://api.invalid/payments/mmg/callback"
+
+    snapshot = handle_mmg_callback(
+        db_session,
+        payload={"payment_reference": order.payment_reference, "status": "paid"},
+    )
+
+    db_session.refresh(order)
+    assert snapshot.status == OrderStatus.AWAITING_PAYMENT.value
+    assert snapshot.payment_verification_status == "pending"
+    assert order.tickets == []
+    attempt = db_session.query(PaymentAttempt).order_by(PaymentAttempt.id.desc()).first()
+    assert attempt is not None
+    assert attempt.authenticity_status == "unverified"
+    assert "provider.invalid" not in (attempt.response_payload or "")
+
+
+def test_mock_mmg_behavior_is_blocked_in_production(db_session: Session) -> None:
+    settings.env = "production"
+    order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("mock_prod"))
+
+    with pytest.raises(MMGProviderError, match="disabled in production"):
+        create_mmg_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"payment_reference": ["not", "a", "string"], "status": "paid"},
+        {"payment_reference": "ref", "paid": "true"},
+        {"payment_reference": "ref", "status": "mystery"},
+    ],
+)
+def test_malformed_callbacks_fail_closed(payload: dict) -> None:
+    from app.services.payments.mmg import MMGProviderError, parse_checkout_callback
+
+    with pytest.raises(MMGProviderError):
+        parse_checkout_callback(payload)
+
+
 def test_live_mode_missing_config_fails_clearly(db_session: Session) -> None:
     settings.mmg_provider_mode = "live"
     settings.mmg_base_url = None
@@ -331,17 +443,13 @@ def test_dev_test_checkout_disabled_by_default(db_session: Session) -> None:
         complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
 
 
-def test_dev_test_checkout_enabled_flag_allows_checkout_in_production_env(db_session: Session) -> None:
+def test_dev_test_checkout_enabled_flag_cannot_override_production_guard(db_session: Session) -> None:
     settings.enable_dev_test_checkout = True
     settings.env = "production"
     order, _, user = _seed_order_with_hold(db_session, user_email=unique_email("dev_prod_guard"))
 
-    snapshot = complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
-    db_session.refresh(order)
-
-    assert snapshot.status == "completed"
-    assert snapshot.payment_verification_status == "verified"
-    assert order.status == OrderStatus.COMPLETED
+    with pytest.raises(PaymentError, match="Dev test checkout is unavailable"):
+        complete_dev_test_checkout_for_order(db_session, order_id=order.id, user_id=user.id)
     settings.env = "development"
     settings.enable_dev_test_checkout = False
 

@@ -6,7 +6,12 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.mmg import MMGCallbackResponse
 from app.services.orders import OrderNotPayableError
-from app.services.payments import MMGProviderError, PaymentError, handle_mmg_callback
+from app.services.payments import (
+    MMGProviderError,
+    PaymentError,
+    PaymentMethodMismatchError,
+    handle_mmg_callback,
+)
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -17,6 +22,11 @@ def mmg_callback(
     db: Session = Depends(get_db),
     client_ip: str = Depends(request_client_ip),
 ) -> MMGCallbackResponse:
+    if not settings.mmg_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="MMG payments are currently disabled.",
+        )
     reference = str(payload.get("payment_reference") or payload.get("reference") or "unknown")
     apply_rate_limit(
         scope="mmg_callback",
@@ -30,9 +40,12 @@ def mmg_callback(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except OrderNotPayableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PaymentMethodMismatchError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except PaymentError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
+    db.commit()
     return MMGCallbackResponse(
         order_id=snapshot.order_id,
         status=snapshot.status,

@@ -1,5 +1,4 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.admin_support import router as admin_support_router
 from app.api.admin_finance import router as admin_finance_router
@@ -22,21 +21,15 @@ from app.api.users import router as users_router
 from app.api.ticket_transfer_invites import router as ticket_transfer_invites_router
 from app.api.venues import router as venues_router
 from app.core.config import settings
+from app.core.cors import install_cors
+from app.core.observability import configure_logging, configure_sentry, install_request_observability
 
+configure_logging()
+configure_sentry()
 app = FastAPI(title=settings.app_name)
+install_request_observability(app)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://admitly.onrender.com",
-        "https://www.admitlyevents.com",
-        "https://admitlyevents.com"
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+install_cors(app, settings)
 
 app.include_router(health_router)
 app.include_router(events_router)

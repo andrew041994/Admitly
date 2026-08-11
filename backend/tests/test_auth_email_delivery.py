@@ -89,8 +89,12 @@ def test_verification_resend_rate_limit_uses_hashed_email_key(
     auth_api.request_verification(
         RequestVerificationRequest(email="private@example.com"), db=db_session, client_ip="192.0.2.3"
     )
-    assert captured[0]["scope"] == "email_verification_resend"
+    assert [entry["scope"] for entry in captured] == [
+        "email_verification_resend_identity",
+        "email_verification_resend_ip",
+    ]
     assert "private@example.com" not in captured[0]["key"]
+    assert captured[1]["key"] == "192.0.2.3"
 
 
 def test_forgot_password_for_existing_active_user_calls_email_sender(

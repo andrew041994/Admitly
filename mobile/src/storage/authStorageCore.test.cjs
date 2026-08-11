@@ -31,12 +31,15 @@ const keys = {
 function createMemoryStorage(initialValues = {}, options = {}) {
   const values = new Map(Object.entries(initialValues));
   const writes = [];
+  const reads = [];
 
   return {
     values,
     writes,
+    reads,
     adapter: {
       async getItem(key) {
+        reads.push(key);
         return values.get(key) ?? null;
       },
       async setItem(key, value) {
@@ -107,7 +110,7 @@ test('existing secure credentials win and duplicate legacy values are removed', 
   assert.equal(legacy.values.size, 0);
 });
 
-test('failed migration clears partial secure and legacy credentials', async () => {
+test('failed migration rolls back partial secure writes and preserves legacy credentials', async () => {
   const { storage, secure, legacy } = setup({}, {
     [keys.legacyAccessToken]: 'legacy-access',
     [keys.legacyRefreshToken]: 'legacy-refresh',
@@ -115,7 +118,40 @@ test('failed migration clears partial secure and legacy credentials', async () =
 
   assert.equal(await storage.migrateLegacyCredentials(), null);
   assert.equal(secure.values.size, 0);
+  assert.equal(legacy.values.get(keys.legacyAccessToken), 'legacy-access');
+  assert.equal(legacy.values.get(keys.legacyRefreshToken), 'legacy-refresh');
+});
+
+test('migration does not read legacy credentials when the secure session is complete', async () => {
+  const { storage, legacy } = setup({
+    [keys.secureAccessToken]: 'secure-access',
+    [keys.secureRefreshToken]: 'secure-refresh',
+  }, {
+    [keys.legacyAccessToken]: 'stale-access',
+    [keys.legacyRefreshToken]: 'stale-refresh',
+  });
+
+  assert.deepEqual(await storage.getStoredSession(), {
+    accessToken: 'secure-access',
+    refreshToken: 'secure-refresh',
+  });
+  assert.deepEqual(legacy.reads, []);
   assert.equal(legacy.values.size, 0);
+});
+
+test('failed fresh session write preserves the prior legacy session', async () => {
+  const { storage, secure, legacy } = setup({}, {
+    [keys.legacyAccessToken]: 'legacy-access',
+    [keys.legacyRefreshToken]: 'legacy-refresh',
+  }, { failSetKey: keys.secureRefreshToken });
+
+  await assert.rejects(
+    storage.setStoredSession({ accessToken: 'new-access', refreshToken: 'new-refresh' }),
+    /set failed/,
+  );
+  assert.equal(secure.values.size, 0);
+  assert.equal(legacy.values.get(keys.legacyAccessToken), 'legacy-access');
+  assert.equal(legacy.values.get(keys.legacyRefreshToken), 'legacy-refresh');
 });
 
 test('session restoration reads credentials from secure storage', async () => {

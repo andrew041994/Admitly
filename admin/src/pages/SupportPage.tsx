@@ -256,6 +256,7 @@ export function SupportPage() {
                 <p>Verification: {snapshot.payment_verification_status}</p>
                 <p>Submitted: {formatDate(snapshot.payment_submitted_at)}</p>
                 <p>Paid: {formatDate(snapshot.paid_at)}</p>
+                <p>Attempts: {snapshot.payment_attempts.length}</p>
               </div>
               <div>
                 <h4>Refunds & disputes</h4>
@@ -273,6 +274,21 @@ export function SupportPage() {
                 <p>Discount: {formatMoney(snapshot.discount_amount, snapshot.currency)}</p>
               </div>
             </div>
+          </div>
+
+          <div className="card">
+            <h3>Payment attempts</h3>
+            {snapshot.payment_attempts.length === 0 ? <p>No payment attempts recorded.</p> : (
+              <ul className="timeline-list">
+                {snapshot.payment_attempts.map((attempt) => (
+                  <li key={attempt.id}>
+                    <strong>{attempt.provider} / {attempt.payment_method}</strong>
+                    <div>{attempt.status} · {attempt.verification_status} · authenticity: {attempt.authenticity_status}</div>
+                    <div>Reference: {attempt.provider_reference || '—'} · {formatDate(attempt.created_at)}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <div className="card">

@@ -18,11 +18,19 @@ os.environ.setdefault("ENV", "development")
 
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
+from app.services.rate_limit import clear_rate_limit_state  # noqa: E402
 
 
 engine = create_engine(DATABASE_URL)
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
+
+
+@pytest.fixture(autouse=True)
+def reset_local_rate_limits():
+    clear_rate_limit_state()
+    yield
+    clear_rate_limit_state()
 
 
 @pytest.fixture(scope="function")
