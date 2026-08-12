@@ -13,6 +13,9 @@ import { LoginPage } from '../pages/LoginPage';
 import { ResetPasswordRedirectPage } from '../pages/ResetPasswordRedirectPage';
 import { VerifyEmailRedirectPage } from '../pages/VerifyEmailRedirectPage';
 import { LegalPage } from '../pages/LegalPage';
+import { LandingPage } from '../pages/LandingPage';
+import { EventsPage } from '../pages/EventsPage';
+import { EventDetailPage } from '../pages/EventDetailPage';
 
 function RequireAdmin() {
   const session = getAdminSession();
@@ -37,6 +40,9 @@ function RequireAdmin() {
 export function AppRouter() {
   return (
     <Routes>
+      <Route index element={<LandingPage />} />
+      <Route path="/events" element={<EventsPage />} />
+      <Route path="/events/:eventId" element={<EventDetailPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/reset-password" element={<ResetPasswordRedirectPage />} />
       <Route path="/verify-email" element={<VerifyEmailRedirectPage />} />
@@ -46,7 +52,6 @@ export function AppRouter() {
       <Route path="/organizer-terms" element={<LegalPage />} />
       <Route path="/buyer-terms" element={<LegalPage />} />
       <Route element={<RequireAdmin />}>
-        <Route index element={<Navigate to="/support" replace />} />
         <Route path="/support" element={<SupportPage />} />
         <Route path="/finance" element={<FinancePage />} />
         <Route path="/check-in" element={<CheckInPage />} />
@@ -54,7 +59,7 @@ export function AppRouter() {
         <Route path="/messaging" element={<MessagingPage />} />
         <Route path="/event-approvals" element={<EventApprovalsPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/support" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

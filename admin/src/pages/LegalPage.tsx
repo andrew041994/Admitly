@@ -89,7 +89,7 @@ export function LegalPage() {
   return (
     <main className="legal-page">
       <article className="legal-card">
-        <Link to="/terms" className="legal-brand">Admitly</Link>
+        <Link to="/" className="legal-brand">Admitly</Link>
         <h1>{legalDocument.title}</h1>
         <p className="legal-updated">Effective and last updated: {updated}</p>
         <p>{legalDocument.intro}</p>
@@ -99,7 +99,7 @@ export function LegalPage() {
             <p>{section.body}</p>
           </section>
         ))}
-        <section>
+        <section id="questions">
           <h2>Questions</h2>
           <p>Contact Admitly through the support channel in the application and include the relevant account or order reference.</p>
         </section>

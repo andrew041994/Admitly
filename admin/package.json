@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test scripts/public-routes.test.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
     "build": "npm run typecheck && vite build --config vite.config.ts && node scripts/assert-release-injection.cjs",
     "preview": "vite preview"
