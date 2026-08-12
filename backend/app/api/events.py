@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models.event import Event
 from app.models.admin_action_audit import AdminActionAudit
+from app.models.creator_age_identity_verification_history import CreatorAgeIdentityVerificationHistory
 from app.models.event_staff import EventStaff
 from app.models.enums import EventRefundBatchStatus, EventStaffRole
 from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility
@@ -33,6 +34,8 @@ from app.models.user import User
 from app.models.venue import Venue
 from app.schemas.event import (
     AdminEventApprovalItemResponse,
+    CreatorAgeIdentityHistoryResponse,
+    CreatorAgeIdentityRevocationRequest,
     EventCreatorAgeIdentityVerificationRequest,
     EventCancelRequest,
     EventCreateRequest,
@@ -98,6 +101,10 @@ from app.services.event_reschedules import (
     reschedule_event,
 )
 from app.services.reporting import get_event_reporting_summary, get_event_tier_summary
+from app.services.creator_verification import (
+    revoke_creator_account_verification,
+    verify_creator_account,
+)
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -517,6 +524,7 @@ def _to_discovery_detail(event: Event, db: Session) -> EventDiscoveryDetailRespo
 
 
 def _to_admin_approval_item(event: Event) -> AdminEventApprovalItemResponse:
+    creator = event.organizer.user
     return AdminEventApprovalItemResponse(
         id=event.id,
         title=event.title,
@@ -534,6 +542,18 @@ def _to_admin_approval_item(event: Event) -> AdminEventApprovalItemResponse:
         creator_age_identity_verified_user_id=event.creator_age_identity_verified_user_id,
         creator_age_identity_verified_by_user_id=event.creator_age_identity_verified_by_user_id,
         creator_age_identity_verified_at=event.creator_age_identity_verified_at,
+        creator_age_identity_verification_snapshot_at=event.creator_age_identity_verification_snapshot_at,
+        creator_account_verification_status=creator.creator_age_identity_verification_status,
+        creator_account_verified_at=creator.creator_age_identity_verified_at,
+        creator_account_verified_by_user_id=creator.creator_age_identity_verified_by_user_id,
+        creator_account_revoked_at=creator.creator_age_identity_revoked_at,
+        creator_account_revoked_by_user_id=creator.creator_age_identity_revoked_by_user_id,
+        creator_account_verification_note=creator.creator_age_identity_verification_note,
+        creator_account_revocation_reason=creator.creator_age_identity_revocation_reason,
+        creator_verification_manual_review_required=(
+            creator.creator_age_identity_verification_status == "revoked"
+            and event.approval_status == EventApprovalStatus.APPROVED
+        ),
     )
 
 
@@ -703,14 +723,13 @@ def list_pending_event_approvals(
     events = (
         db.execute(
             select(Event)
-            .options(joinedload(Event.organizer), joinedload(Event.venue))
+            .options(joinedload(Event.organizer).joinedload(OrganizerProfile.user), joinedload(Event.venue))
+            .join(OrganizerProfile, OrganizerProfile.id == Event.organizer_id)
+            .join(User, User.id == OrganizerProfile.user_id)
             .where(
                 or_(
                     Event.approval_status == EventApprovalStatus.PENDING,
-                    Event.creator_age_identity_verification_status != "verified",
-                    Event.creator_age_identity_verified_user_id.is_(None),
-                    Event.creator_age_identity_verified_by_user_id.is_(None),
-                    Event.creator_age_identity_verified_at.is_(None),
+                    User.creator_age_identity_verification_status != "verified",
                 )
             )
             .where(Event.status != EventStatus.CANCELLED)
@@ -730,33 +749,34 @@ def approve_event_for_discovery(
     user_id: int = Depends(get_current_admin_id),
 ) -> AdminEventApprovalItemResponse:
     _require_admin(db, user_id=user_id)
-    event = db.execute(
-        select(Event)
-        .options(joinedload(Event.organizer), joinedload(Event.venue))
-        .where(Event.id == event_id)
-    ).scalar_one_or_none()
+    event = db.execute(select(Event).where(Event.id == event_id).with_for_update()).scalar_one_or_none()
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
 
-    creator_user_id = event.organizer.user_id
-    if (
-        event.creator_age_identity_verification_status != "verified"
-        or event.creator_age_identity_verified_user_id != creator_user_id
-        or event.creator_age_identity_verified_by_user_id is None
-        or event.creator_age_identity_verified_at is None
-    ):
+    db.refresh(event, attribute_names=["organizer", "venue"])
+    creator = db.execute(select(User).where(User.id == event.organizer.user_id).with_for_update()).scalar_one()
+    if creator.creator_age_identity_verification_status != "verified":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Creator age and identity verification must be recorded before event approval.",
+            detail="Creator account age and identity verification must be active before event approval.",
         )
 
     if event.approval_status != EventApprovalStatus.APPROVED:
+        # Preserve immutable evidence of the account verification relied on at approval.
+        event.creator_age_identity_verification_status = "verified"
+        event.creator_age_identity_verified_user_id = creator.id
+        event.creator_age_identity_verified_by_user_id = creator.creator_age_identity_verified_by_user_id
+        event.creator_age_identity_verified_at = creator.creator_age_identity_verified_at
+        event.creator_age_identity_verification_note = creator.creator_age_identity_verification_note
+        event.creator_age_identity_verification_snapshot_at = datetime.now(UTC)
         event.approval_status = EventApprovalStatus.APPROVED
         db.add(event)
         db.commit()
         db.refresh(event)
         enqueue_nearby_event_after_commit(db, event_id=event.id)
 
+    db.refresh(event, attribute_names=["organizer", "venue"])
+    db.refresh(event.organizer, attribute_names=["user"])
     return _to_admin_approval_item(event)
 
 
@@ -780,39 +800,95 @@ def record_event_creator_age_identity_verification(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
     db.refresh(event, attribute_names=["organizer", "venue"])
 
-    creator_user_id = event.organizer.user_id
-    already_verified = (
-        event.creator_age_identity_verification_status == "verified"
-        and event.creator_age_identity_verified_user_id == creator_user_id
-        and event.creator_age_identity_verified_by_user_id is not None
-        and event.creator_age_identity_verified_at is not None
+    creator = verify_creator_account(
+        db,
+        creator_user_id=event.organizer.user_id,
+        actor_user_id=user_id,
+        note=payload.note,
     )
-    if not already_verified:
-        verified_at = datetime.now(UTC)
+    # A legacy event that was already approved without a complete snapshot can be
+    # repaired from the newly verified account without changing its approval state.
+    if event.approval_status == EventApprovalStatus.APPROVED and event.creator_age_identity_verification_status != "verified":
         event.creator_age_identity_verification_status = "verified"
-        event.creator_age_identity_verified_user_id = creator_user_id
-        event.creator_age_identity_verified_by_user_id = user_id
-        event.creator_age_identity_verified_at = verified_at
-        event.creator_age_identity_verification_note = payload.note
-        db.add(
-            AdminActionAudit(
-                actor_user_id=user_id,
-                target_type="event",
-                target_id=str(event.id),
-                action_type="verify_event_creator_age_identity",
-                reason=payload.note,
-                metadata_json={
-                    "creator_user_id": creator_user_id,
-                    "verification_status": "verified",
-                    "verified_at": verified_at.isoformat(),
-                },
-            )
-        )
+        event.creator_age_identity_verified_user_id = creator.id
+        event.creator_age_identity_verified_by_user_id = creator.creator_age_identity_verified_by_user_id
+        event.creator_age_identity_verified_at = creator.creator_age_identity_verified_at
+        event.creator_age_identity_verification_note = creator.creator_age_identity_verification_note
+        event.creator_age_identity_verification_snapshot_at = datetime.now(UTC)
         db.add(event)
         db.commit()
         db.refresh(event)
-
+    db.refresh(event, attribute_names=["organizer", "venue"])
+    db.refresh(event.organizer, attribute_names=["user"])
     return _to_admin_approval_item(event)
+
+
+@router.post(
+    "/admin/creators/{creator_user_id}/age-identity-verification",
+    response_model=AdminEventApprovalItemResponse,
+)
+def verify_event_creator_account(
+    creator_user_id: int,
+    event_id: int,
+    payload: EventCreatorAgeIdentityVerificationRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_admin_id),
+) -> AdminEventApprovalItemResponse:
+    _require_admin(db, user_id=user_id)
+    event = db.execute(
+        select(Event)
+        .options(joinedload(Event.organizer).joinedload(OrganizerProfile.user), joinedload(Event.venue))
+        .where(Event.id == event_id)
+    ).scalar_one_or_none()
+    if event is None or event.organizer.user_id != creator_user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Creator event not found.")
+    verify_creator_account(db, creator_user_id=creator_user_id, actor_user_id=user_id, note=payload.note)
+    db.refresh(event.organizer, attribute_names=["user"])
+    return _to_admin_approval_item(event)
+
+
+@router.post(
+    "/admin/creators/{creator_user_id}/age-identity-verification/revoke",
+    response_model=AdminEventApprovalItemResponse,
+)
+def revoke_event_creator_verification(
+    creator_user_id: int,
+    event_id: int,
+    payload: CreatorAgeIdentityRevocationRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_admin_id),
+) -> AdminEventApprovalItemResponse:
+    _require_admin(db, user_id=user_id)
+    event = db.execute(
+        select(Event)
+        .options(joinedload(Event.organizer).joinedload(OrganizerProfile.user), joinedload(Event.venue))
+        .where(Event.id == event_id)
+    ).scalar_one_or_none()
+    if event is None or event.organizer.user_id != creator_user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Creator event not found.")
+    revoke_creator_account_verification(
+        db, creator_user_id=creator_user_id, actor_user_id=user_id, reason=payload.reason
+    )
+    db.refresh(event.organizer, attribute_names=["user"])
+    return _to_admin_approval_item(event)
+
+
+@router.get(
+    "/admin/creators/{creator_user_id}/age-identity-verification/history",
+    response_model=list[CreatorAgeIdentityHistoryResponse],
+)
+def get_event_creator_verification_history(
+    creator_user_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_admin_id),
+) -> list[CreatorAgeIdentityHistoryResponse]:
+    _require_admin(db, user_id=user_id)
+    rows = db.execute(
+        select(CreatorAgeIdentityVerificationHistory)
+        .where(CreatorAgeIdentityVerificationHistory.user_id == creator_user_id)
+        .order_by(CreatorAgeIdentityVerificationHistory.created_at.desc(), CreatorAgeIdentityVerificationHistory.id.desc())
+    ).scalars().all()
+    return [CreatorAgeIdentityHistoryResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
 @router.get("/discover/{event_id}", response_model=EventDiscoveryDetailResponse)

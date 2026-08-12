@@ -27,7 +27,7 @@ export const listNotifications = () => apiJson<{ items: WebNotification[]; next_
 export const markNotificationRead = (id: number) => apiJson<WebNotification>(`/me/notifications/${id}/read`, { method: 'POST' });
 export const markAllNotificationsRead = () => apiJson<{ updated_count: number }>('/me/notifications/read-all', { method: 'POST' });
 
-export type AccountProfile = { id: number; email: string; full_name: string; is_active: boolean; is_verified: boolean; email_verified_at: string | null; requires_email_verification: boolean; my_tickets_count: number; my_events_count: number; staff_events_count: number };
+export type AccountProfile = { id: number; email: string; full_name: string; is_active: boolean; is_verified: boolean; email_verified_at: string | null; requires_email_verification: boolean; my_tickets_count: number; my_events_count: number; staff_events_count: number; creator_age_identity_verification_status: 'pending' | 'verified' | 'revoked' };
 export const getAccount = () => apiJson<AccountProfile>('/account/profile');
 export const updateProfile = (fullName: string) => apiJson('/account/profile', { method: 'PATCH', body: JSON.stringify({ full_name: fullName }) });
 export const changePassword = (currentPassword: string, newPassword: string) => apiJson<{ success: boolean; reauthentication_required: boolean }>('/account/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) });

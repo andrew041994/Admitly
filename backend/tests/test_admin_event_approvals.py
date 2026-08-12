@@ -97,10 +97,9 @@ def test_pending_approval_list_and_approve_updates_state(db_session: Session) ->
         db=db_session,
         user_id=admin.id,
     )
-    assert verified.creator_age_identity_verification_status == "verified"
-    assert verified.creator_age_identity_verified_user_id == verified.creator_user_id
-    assert verified.creator_age_identity_verified_by_user_id == admin.id
-    assert verified.creator_age_identity_verified_at is not None
+    assert verified.creator_account_verification_status == "verified"
+    assert verified.creator_account_verified_by_user_id == admin.id
+    assert verified.creator_account_verified_at is not None
 
     updated = approve_event_for_discovery(event_id=pending.id, db=db_session, user_id=admin.id)
     assert updated.id == pending.id
@@ -112,13 +111,13 @@ def test_pending_approval_list_and_approve_updates_state(db_session: Session) ->
 
     audit = db_session.execute(
         select(AdminActionAudit).where(
-            AdminActionAudit.target_type == "event",
-            AdminActionAudit.target_id == str(pending.id),
-            AdminActionAudit.action_type == "verify_event_creator_age_identity",
+            AdminActionAudit.target_type == "user",
+            AdminActionAudit.target_id == str(verified.creator_user_id),
+            AdminActionAudit.action_type == "verify_creator_age_identity",
         )
     ).scalar_one()
     assert audit.actor_user_id == admin.id
-    assert audit.metadata_json["creator_user_id"] == verified.creator_user_id
+    assert audit.metadata_json["new_status"] == "verified"
     assert "document" not in audit.metadata_json
 
     repeated = record_event_creator_age_identity_verification(
@@ -127,11 +126,11 @@ def test_pending_approval_list_and_approve_updates_state(db_session: Session) ->
         db=db_session,
         user_id=admin.id,
     )
-    assert repeated.creator_age_identity_verified_at == verified.creator_age_identity_verified_at
+    assert repeated.creator_account_verified_at == verified.creator_account_verified_at
     audit_count = db_session.query(AdminActionAudit).filter(
-        AdminActionAudit.target_type == "event",
-        AdminActionAudit.target_id == str(pending.id),
-        AdminActionAudit.action_type == "verify_event_creator_age_identity",
+        AdminActionAudit.target_type == "user",
+        AdminActionAudit.target_id == str(verified.creator_user_id),
+        AdminActionAudit.action_type == "verify_creator_age_identity",
     ).count()
     assert audit_count == 1
 

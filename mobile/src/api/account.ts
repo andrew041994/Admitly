@@ -11,6 +11,7 @@ export type AccountProfile = {
   my_tickets_count: number;
   my_events_count: number;
   staff_events_count: number;
+  creator_age_identity_verification_status: 'pending' | 'verified' | 'revoked';
 };
 
 export type StaffEvent = {

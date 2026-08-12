@@ -50,6 +50,10 @@ def _seed_event(
     approval_status: EventApprovalStatus = EventApprovalStatus.APPROVED,
     creator_verified: bool = True,
 ) -> Event:
+    organizer_user.creator_age_identity_verification_status = "verified" if creator_verified else "pending"
+    organizer_user.creator_age_identity_verified_at = datetime.now(UTC) if creator_verified else None
+    organizer_user.creator_age_identity_verified_by_user_id = organizer_user.id if creator_verified else None
+    db.add(organizer_user)
     organizer = db.query(OrganizerProfile).filter(OrganizerProfile.user_id == organizer_user.id).one_or_none()
     if organizer is None:
         organizer = OrganizerProfile(user_id=organizer_user.id, business_name=organizer_user.full_name, display_name=organizer_user.full_name)

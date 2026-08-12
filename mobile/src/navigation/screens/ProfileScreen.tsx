@@ -35,6 +35,10 @@ export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffMa
           <Text style={styles.name}>{profile.full_name}</Text>
           <Text style={styles.meta}>{profile.email}</Text>
           <Text style={styles.meta}>{profile.is_verified ? 'Email verified' : 'Email verification pending'}</Text>
+          <Text style={styles.meta}>Age verification: {profile.creator_age_identity_verification_status === 'verified' ? 'Verified' : 'Required before event approval'}</Text>
+          <Text style={styles.meta}>{profile.creator_age_identity_verification_status === 'verified'
+            ? 'You do not need to submit ID again for future events unless Admitly asks you to reverify.'
+            : 'Government ID is reviewed separately by Admitly; it is not uploaded in the app.'}</Text>
           <Text style={styles.meta}>My tickets: {profile.my_tickets_count}</Text>
           <Text style={styles.meta}>My events: {profile.my_events_count}</Text>
           <Text style={styles.meta}>Staff events: {profile.staff_events_count}</Text>

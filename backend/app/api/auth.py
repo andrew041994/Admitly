@@ -82,6 +82,7 @@ def _to_user_response(user: User) -> UserResponse:
         created_at=user.created_at,
         updated_at=user.updated_at,
         last_login_at=user.last_login_at,
+        creator_age_identity_verification_status=user.creator_age_identity_verification_status,
     )
 
 

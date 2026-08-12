@@ -38,6 +38,7 @@ class UserResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_login_at: datetime | None = None
+    creator_age_identity_verification_status: str
 
 
 class RegisterRequest(NormalizedEmailRequest):

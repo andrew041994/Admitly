@@ -30,6 +30,7 @@ class AccountProfileResponse(BaseModel):
     my_tickets_count: int
     my_events_count: int
     staff_events_count: int
+    creator_age_identity_verification_status: str
 
 
 class AccountStaffEventResponse(BaseModel):

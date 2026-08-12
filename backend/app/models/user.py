@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
@@ -26,6 +26,12 @@ if TYPE_CHECKING:
 
 class User(TimestampMixin, Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "creator_age_identity_verification_status IN ('pending', 'verified', 'revoked')",
+            name="ck_users_creator_age_identity_verification_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
@@ -40,6 +46,19 @@ class User(TimestampMixin, Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     auth_provider: Mapped[str] = mapped_column(String(32), default="local", nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    creator_age_identity_verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    creator_age_identity_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    creator_age_identity_verified_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
+    creator_age_identity_verification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    creator_age_identity_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    creator_age_identity_revoked_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
+    creator_age_identity_revocation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     auth_sessions: Mapped[list["AuthSession"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

@@ -44,15 +44,16 @@ This SOP describes the supported operator workflow. It does not grant new produc
 
 ### Event-creator age and identity verification
 
-1. Direct the creator to send a valid government-issued ID to the designated Admitly verification email recorded in the private operations inventory. Do not publish the address in source unless it is approved as a public support address.
-2. In the email account, compare the identity to the authenticated account/event creator and confirm the creator is at least 18. Do not copy an ID number unless a specific lawful necessity has been approved and documented.
-3. In **Event Approvals**, inspect the correct event and creator user ID. Add only an optional non-document note, confirm the ID was reviewed and deleted, and choose **Record 18+ identity verification**.
-4. Verify the event now shows `verified`, the creator snapshot matches the event creator, the verifier admin and UTC timestamp are present, and an admin audit record exists.
-5. Permanently delete the ID image and message attachment from the verification mailbox as soon as verification is complete, including the mailbox trash/deleted-items location according to the provider's controls. Record completion in the restricted operational evidence log without copying the image or ID number.
+1. In **Event Approvals**, check the creator account's current verification state and history. If it is already `verified`, do not request ID again unless a documented fraud, security, legal, verification-error, or identity concern justifies reverification.
+2. If verification is pending or justified reverification is required, direct the creator to send a valid government-issued ID to the designated Admitly verification email recorded in the private operations inventory.
+3. In the email account, compare identity to the authenticated creator account and confirm the creator is at least 18. Do not record date of birth or any ID/document number.
+4. In **Event Approvals**, confirm the ID was reviewed and deleted, add only an optional non-document note, and choose **Verify creator account as 18+**. Confirm status, verifier, UTC timestamp, history, and admin audit are present.
+5. Permanently delete the ID message and attachment from the verification mailbox as soon as review is complete, including trash/deleted items according to provider controls. Record completion in restricted operational evidence without copying document data.
 6. Never download or copy the image into support cases, S3, application storage, database fields, logs, local folders, issue trackers, or chat. The application intentionally has no ID upload endpoint.
-7. If age or identity cannot be verified, do not record `verified` and do not approve or publish the event. Record a minimal support outcome without document details and request corrected evidence through the designated email process if appropriate.
+7. Future events from the verified account reuse that verification but still require normal event review and approval. Approval writes an event-level snapshot of the account verification relied upon.
+8. If verification cannot be completed, leave the account pending and the event unapproved. If verification must be revoked, enter a mandatory safe reason. Revocation blocks future approvals but does not cancel, unpublish, refund, or otherwise mutate previously approved events; review those events separately.
 
-The application retains only the event ID, verified creator user ID, verification status, verifier administrator ID, verification timestamp, optional safe note, and corresponding admin audit. It does not retain the ID image or require an ID number.
+The application retains only account verification status/timestamps/admin IDs/safe notes, immutable verification history and admin audit records, plus event approval-time verification evidence. It does not retain the ID image, date of birth, or government ID number.
 
 ## Workflow 3: order or ticket issue
 

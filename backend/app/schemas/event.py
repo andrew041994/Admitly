@@ -77,6 +77,15 @@ class AdminEventApprovalItemResponse(BaseModel):
     creator_age_identity_verified_user_id: int | None
     creator_age_identity_verified_by_user_id: int | None
     creator_age_identity_verified_at: datetime | None
+    creator_age_identity_verification_snapshot_at: datetime | None
+    creator_account_verification_status: str
+    creator_account_verified_at: datetime | None
+    creator_account_verified_by_user_id: int | None
+    creator_account_revoked_at: datetime | None
+    creator_account_revoked_by_user_id: int | None
+    creator_account_verification_note: str | None
+    creator_account_revocation_reason: str | None
+    creator_verification_manual_review_required: bool
 
 
 class EventCreatorAgeIdentityVerificationRequest(BaseModel):
@@ -88,6 +97,29 @@ class EventCreatorAgeIdentityVerificationRequest(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+
+class CreatorAgeIdentityRevocationRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("A revocation reason is required.")
+        return normalized
+
+
+class CreatorAgeIdentityHistoryResponse(BaseModel):
+    id: int
+    user_id: int
+    action: str
+    actor_user_id: int
+    previous_status: str
+    new_status: str
+    note: str | None
+    created_at: datetime
 
 
 class EventRefundBatchResponse(BaseModel):

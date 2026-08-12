@@ -13,6 +13,7 @@ export type AuthUser = {
   created_at: string;
   updated_at: string;
   last_login_at: string | null;
+  creator_age_identity_verification_status: 'pending' | 'verified' | 'revoked';
 };
 
 export type AuthTokens = {

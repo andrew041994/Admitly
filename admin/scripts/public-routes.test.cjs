@@ -18,6 +18,10 @@ const authApi = read('src/lib/authApi.ts');
 const authContext = read('src/auth/AuthContext.tsx');
 const account = read('src/pages/AccountPage.tsx');
 const resetPasswordPage = read('src/pages/ResetPasswordRedirectPage.tsx');
+const approvals = read('src/pages/EventApprovalsPage.tsx');
+const createEvent = read('src/pages/CreateEventPage.tsx');
+const accountPage = read('src/pages/AccountPage.tsx');
+const legalPage = read('src/pages/LegalPage.tsx');
 
 test('landing, discovery, detail, recovery, and legal routes remain public', () => {
   for (const route of ['/events', '/events/:eventId', '/login', '/signup', '/forgot-password', '/reset-password', '/verify-email', '/privacy', '/refund-policy', '/terms', '/organizer-terms', '/buyer-terms']) {
@@ -81,4 +85,17 @@ test('all legal links remain discoverable and Sentry scrubs token-bearing URLs',
   assert.match(main, /sendDefaultPii: false/);
   assert.match(main, /beforeBreadcrumb/);
   assert.match(main, /beforeSend/);
+});
+
+test('creator verification is account-scoped, revocable, and never requests document storage', () => {
+  assert.match(approvals, /Verify creator account as 18\+/);
+  assert.match(approvals, /Revoke account verification/);
+  assert.match(approvals, /Already-approved events remain active/);
+  assert.match(approvals, /getCreatorAgeIdentityVerificationHistory/);
+  assert.match(createEvent, /creator_age_identity_verification_status === 'verified'/);
+  assert.match(createEvent, /do not need to submit ID again/);
+  assert.match(accountPage, /Age verification:/);
+  assert.match(accountPage, /unless Admitly asks you to reverify/);
+  assert.match(legalPage, /generally does not need to resubmit identification for each future event/);
+  assert.doesNotMatch(`${approvals}\n${createEvent}\n${accountPage}`, /type="file"[^>]*(government|identity|document)/i);
 });

@@ -100,6 +100,9 @@ class Event(TimestampMixin, Base):
     creator_age_identity_verification_note: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )
+    creator_age_identity_verification_snapshot_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     refund_policy_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     terms_text: Mapped[str | None] = mapped_column(Text, nullable=True)

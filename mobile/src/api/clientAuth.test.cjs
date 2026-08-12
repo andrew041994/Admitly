@@ -40,3 +40,13 @@ test('a revoked session returns mobile to signed-out state', () => {
   assert.match(session, /setApiUnauthorizedHandler/);
   assert.match(session, /setState\('signedOut'\)/);
 });
+
+test('mobile exposes account-level creator verification without an ID upload path', () => {
+  const account = fs.readFileSync(path.join(__dirname, 'account.ts'), 'utf8');
+  const createEvent = fs.readFileSync(path.join(__dirname, '..', 'navigation', 'screens', 'CreateEventScreen.tsx'), 'utf8');
+  assert.match(account, /creator_age_identity_verification_status/);
+  assert.match(profile, /You do not need to submit ID again for future events/);
+  assert.match(profile, /not uploaded in the app/);
+  assert.doesNotMatch(profile, /ImagePicker|uploadEventCoverImage/);
+  assert.doesNotMatch(createEvent, /government|identity document|date of birth|document number/i);
+});

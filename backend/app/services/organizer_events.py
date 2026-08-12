@@ -12,6 +12,7 @@ from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.organizer_profile import OrganizerProfile
 from app.models.ticket_tier import TicketTier
+from app.models.user import User
 from app.services.events import _build_ticket_tier_code
 from app.services.event_locations import EventLocationValidationError, validate_event_location
 from app.services.event_permissions import EventPermissionAction, has_event_permission
@@ -104,12 +105,8 @@ def publish_event(db: Session, *, actor_user_id: int, event_id: int) -> Event:
     event = get_owned_event_for_update(db, actor_user_id=actor_user_id, event_id=event_id)
     if event.status == EventStatus.CANCELLED:
         raise OrganizerEventValidationError(code="invalid_status", errors=[{"field": "status", "message": "Cancelled events cannot be published."}])
-    if (
-        event.creator_age_identity_verification_status != "verified"
-        or event.creator_age_identity_verified_user_id != actor_user_id
-        or event.creator_age_identity_verified_by_user_id is None
-        or event.creator_age_identity_verified_at is None
-    ):
+    creator = db.get(User, event.organizer.user_id)
+    if creator is None or creator.creator_age_identity_verification_status != "verified":
         raise OrganizerEventValidationError(
             code="creator_age_identity_verification_required",
             errors=[{

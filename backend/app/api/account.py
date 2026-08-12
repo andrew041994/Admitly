@@ -37,6 +37,7 @@ def _to_user_response(user: User) -> UserResponse:
         created_at=user.created_at,
         updated_at=user.updated_at,
         last_login_at=user.last_login_at,
+        creator_age_identity_verification_status=user.creator_age_identity_verification_status,
     )
 
 
@@ -82,6 +83,7 @@ def get_profile(
         my_tickets_count=int(my_tickets_count or 0),
         my_events_count=int(my_events_count or 0),
         staff_events_count=int(staff_events_count or 0),
+        creator_age_identity_verification_status=current_user.creator_age_identity_verification_status,
     )
 
 
