@@ -6,6 +6,7 @@ import {
   getCurrentUser,
   login,
   logout,
+  logoutAll,
   refresh,
   register,
   requestEmailVerification,
@@ -13,7 +14,7 @@ import {
   resetPassword,
   verifyEmail as verifyEmailRequest,
 } from '../api/auth';
-import { ApiError, setApiAuthToken } from '../api/client';
+import { ApiError, setApiAuthToken, setApiUnauthorizedHandler } from '../api/client';
 import { clearStoredSession, getStoredSession, setStoredSession } from '../storage/sessionStorage';
 import { normalizeEmailAddress } from '../features/auth/emailValidation';
 import { unregisterPushTokenForLogout } from '../features/notifications/pushRegistration';
@@ -26,6 +27,7 @@ type SessionContextValue = {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (fullName: string, email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  signOutAll: () => Promise<void>;
   requestPasswordReset: (email: string) => Promise<void>;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
   resendVerification: () => Promise<void>;
@@ -133,7 +135,12 @@ export function SessionProvider({ children }: PropsWithChildren) {
               console.log('[session] backend validation started (refresh fallback)');
             }
             const refreshed = await refresh(storedSession.refreshToken);
-            await setStoredSession(toStoredSession(refreshed.tokens));
+            try {
+              await setStoredSession(toStoredSession(refreshed.tokens));
+            } catch (storageError) {
+              await logout(refreshed.tokens.refresh_token).catch(() => undefined);
+              throw storageError;
+            }
             setApiAuthToken(refreshed.tokens.access_token);
             completeBootAsSignedIn(refreshed.user, 'refreshed session');
             return;
@@ -158,34 +165,76 @@ export function SessionProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
+  useEffect(() => {
+    setApiUnauthorizedHandler(async () => {
+      await clearStoredSession();
+      setApiAuthToken(null);
+      setUser(null);
+      setState('signedOut');
+    });
+    return () => setApiUnauthorizedHandler(null);
+  }, []);
+
   const value = useMemo(
     () => ({
       state,
       user,
       signIn: async (email: string, password: string) => {
         const result = await login(normalizeEmail(email), password);
-        await setStoredSession(toStoredSession(result.tokens));
+        try {
+          await setStoredSession(toStoredSession(result.tokens));
+        } catch (storageError) {
+          await logout(result.tokens.refresh_token).catch(() => undefined);
+          throw storageError;
+        }
         setApiAuthToken(result.tokens.access_token);
         setUser(result.user);
         setState('signedIn');
       },
       signUp: async (fullName: string, email: string, password: string) => {
         const result = await register(fullName.trim(), normalizeEmail(email), password);
-        await setStoredSession(toStoredSession(result.tokens));
+        try {
+          await setStoredSession(toStoredSession(result.tokens));
+        } catch (storageError) {
+          await logout(result.tokens.refresh_token).catch(() => undefined);
+          throw storageError;
+        }
         setApiAuthToken(result.tokens.access_token);
         setUser(result.user);
         setState('signedIn');
       },
       signOut: async () => {
+        const storedSession = await getStoredSession();
         try {
           await unregisterPushTokenForLogout();
         } catch {
           // push-token cleanup must not block sign-out
         }
         try {
-          await logout();
+          await logout(storedSession?.refreshToken ?? null);
         } catch {
           // logout should still complete client-side even if network call fails
+        }
+        await clearStoredSession();
+        setApiAuthToken(null);
+        setUser(null);
+        setState('signedOut');
+      },
+      signOutAll: async () => {
+        const storedSession = await getStoredSession();
+        try {
+          await logoutAll();
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 401 && storedSession?.refreshToken) {
+            try {
+              const refreshed = await refresh(storedSession.refreshToken);
+              await setStoredSession(toStoredSession(refreshed.tokens));
+              setApiAuthToken(refreshed.tokens.access_token);
+              await logoutAll();
+            } catch {
+              // Server failure must not retain local credentials.
+            }
+          }
         }
         await clearStoredSession();
         setApiAuthToken(null);
@@ -198,6 +247,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
       },
       resetPassword: async (token: string, newPassword: string) => {
         await resetPassword(token.trim(), newPassword);
+        await clearStoredSession();
+        setApiAuthToken(null);
+        setUser(null);
+        setState('signedOut');
       },
       resendVerification: async () => {
         if (!user) throw new Error('Sign in to resend your verification email.');

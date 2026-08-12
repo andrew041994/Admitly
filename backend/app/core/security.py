@@ -92,6 +92,7 @@ def create_token(*, subject: str, token_type: str, expires_delta: timedelta, cla
         "type": token_type,
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),
+        "jti": secrets.token_urlsafe(24),
     }
     if claims:
         payload.update(claims)
@@ -103,7 +104,12 @@ def create_token(*, subject: str, token_type: str, expires_delta: timedelta, cla
     return f"{encoded_header}.{encoded_payload}.{_b64url_encode(signature)}"
 
 
-def decode_token(token: str, *, expected_type: str | None = None) -> dict[str, Any]:
+def decode_token(
+    token: str,
+    *,
+    expected_type: str | None = None,
+    verify_expiration: bool = True,
+) -> dict[str, Any]:
     try:
         encoded_header, encoded_payload, encoded_signature = token.split(".")
         signing_input = f"{encoded_header}.{encoded_payload}".encode("utf-8")
@@ -121,7 +127,7 @@ def decode_token(token: str, *, expected_type: str | None = None) -> dict[str, A
         raise TokenError("Invalid token.") from exc
 
     exp = payload.get("exp")
-    if not isinstance(exp, int) or exp < int(datetime.now(timezone.utc).timestamp()):
+    if not isinstance(exp, int) or (verify_expiration and exp < int(datetime.now(timezone.utc).timestamp())):
         raise TokenError("Token expired.")
 
     if expected_type and payload.get("type") != expected_type:

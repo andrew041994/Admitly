@@ -138,7 +138,7 @@ function TicketSelectionRoute({ eventId, onOrderCreated }: { eventId: number; on
 }
 
 function SignedInNavigator() {
-  const { signOut, user } = useSession();
+  const { signOut, signOutAll, user } = useSession();
   const canAccessScanner = Boolean(user);
   const navigation = useNavigation<NativeStackNavigationProp<AppStackParamList>>();
 
@@ -268,6 +268,7 @@ function SignedInNavigator() {
         {({ navigation }) => (
           <ProfileScreen
             onSignOut={signOut}
+            onSignOutAll={signOutAll}
             onOpenCreateEvent={() => navigation.navigate('CreateEvent')}
             onOpenMyEvents={() => navigation.navigate('MyEvents')}
             onOpenStaffManagement={() => navigation.navigate('StaffManagement')}

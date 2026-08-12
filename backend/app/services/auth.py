@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
 from datetime import timedelta
+import logging
 
 from fastapi import HTTPException, status
 from sqlalchemy import select, update
@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import (
     TokenError,
-    create_token,
     decode_token,
     generate_urlsafe_token,
     hash_password,
@@ -24,37 +23,19 @@ from app.models.password_reset_token import PasswordResetToken
 from app.models.user import User
 from app.models.verification_token import EmailVerificationToken
 from app.lib.email_addresses import InvalidEmailAddressError, normalize_and_validate_email
+from app.services.auth_sessions import (
+    IssuedAuthTokens,
+    create_auth_session,
+    revoke_all_user_sessions,
+    rotate_auth_session,
+)
 
-
-@dataclass
-class IssuedAuthTokens:
-    access_token: str
-    refresh_token: str
-    access_expires_in_seconds: int
-    refresh_expires_in_seconds: int
+logger = logging.getLogger(__name__)
 
 
 
 def _token_hash(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-
-
-def _issue_auth_tokens(user: User) -> IssuedAuthTokens:
-    access_exp = timedelta(minutes=settings.jwt_access_token_exp_minutes)
-    refresh_exp = timedelta(days=settings.jwt_refresh_token_exp_days)
-    access = create_token(
-        subject=str(user.id),
-        token_type="access",
-        expires_delta=access_exp,
-        claims={"email": user.email, "is_admin": user.is_admin},
-    )
-    refresh = create_token(subject=str(user.id), token_type="refresh", expires_delta=refresh_exp)
-    return IssuedAuthTokens(
-        access_token=access,
-        refresh_token=refresh,
-        access_expires_in_seconds=int(access_exp.total_seconds()),
-        refresh_expires_in_seconds=int(refresh_exp.total_seconds()),
-    )
 
 
 def register_user(
@@ -87,12 +68,14 @@ def register_user(
     )
     db.add(user)
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Account identity is already in use.") from exc
+    tokens = create_auth_session(db, user=user)
+    db.commit()
     db.refresh(user)
-    return user, _issue_auth_tokens(user)
+    return user, tokens
 
 
 def authenticate_user(db: Session, *, email: str, password: str) -> tuple[User, IssuedAuthTokens]:
@@ -108,23 +91,14 @@ def authenticate_user(db: Session, *, email: str, password: str) -> tuple[User, 
 
     user.last_login_at = utc_now()
     db.add(user)
+    tokens = create_auth_session(db, user=user)
     db.commit()
     db.refresh(user)
-    return user, _issue_auth_tokens(user)
+    return user, tokens
 
 
 def refresh_auth_tokens(db: Session, *, refresh_token: str) -> tuple[User, IssuedAuthTokens]:
-    try:
-        payload = decode_token(refresh_token, expected_type="refresh")
-    except TokenError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token.") from exc
-    sub = payload.get("sub")
-    if sub is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token.")
-    user = db.get(User, int(sub))
-    if user is None or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token.")
-    return user, _issue_auth_tokens(user)
+    return rotate_auth_session(db, refresh_token=refresh_token)
 
 
 def generate_email_verification_token(db: Session, *, user: User) -> str:
@@ -193,15 +167,28 @@ def generate_password_reset_token(db: Session, *, user: User) -> str:
 def reset_password_with_token(db: Session, *, token: str, new_password: str) -> bool:
     validate_password_strength(new_password)
     token_hash = _token_hash(token)
-    row = db.execute(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)).scalar_one_or_none()
+    row = db.execute(
+        select(PasswordResetToken)
+        .where(PasswordResetToken.token_hash == token_hash)
+        .with_for_update()
+    ).scalar_one_or_none()
     if row is None or row.used_at is not None or not row.is_active or _is_expired(row.expires_at):
         return False
     row.used_at = utc_now()
     row.is_active = False
     row.user.hashed_password = hash_password(new_password)
+    revoked_count = revoke_all_user_sessions(
+        db,
+        user_id=row.user_id,
+        reason="password_reset",
+    )
     db.add(row)
     db.add(row.user)
     db.commit()
+    logger.info(
+        "password_reset_sessions_revoked",
+        extra={"user_id": row.user_id, "session_count": revoked_count},
+    )
     return True
 
 
@@ -245,8 +232,17 @@ def change_password(db: Session, *, user: User, current_password: str, new_passw
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is invalid.")
     validate_password_strength(new_password)
     user.hashed_password = hash_password(new_password)
+    revoked_count = revoke_all_user_sessions(
+        db,
+        user_id=user.id,
+        reason="password_change",
+    )
     db.add(user)
     db.commit()
+    logger.info(
+        "password_change_sessions_revoked",
+        extra={"user_id": user.id, "session_count": revoked_count},
+    )
 
 
 def require_admin(user: User) -> None:

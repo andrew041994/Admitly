@@ -11,9 +11,10 @@ type Props = {
   onOpenStaffManagement: () => void;
   onOpenStaffEvents: () => void;
   onSignOut: () => void;
+  onSignOutAll: () => void;
 };
 
-export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffManagement, onOpenStaffEvents, onSignOut }: Props) {
+export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffManagement, onOpenStaffEvents, onSignOut, onSignOutAll }: Props) {
   const [profile, setProfile] = useState<Awaited<ReturnType<typeof getAccountProfile>> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,6 +61,7 @@ export function ProfileScreen({ onOpenCreateEvent, onOpenMyEvents, onOpenStaffMa
         <Text style={styles.chevron}>›</Text>
       </Pressable>
       <Pressable style={styles.signOut} onPress={onSignOut}><Text style={styles.signOutText}>Logout</Text></Pressable>
+      <Pressable style={styles.signOut} onPress={onSignOutAll}><Text style={styles.dangerText}>Log out all devices</Text></Pressable>
     </View>
   );
 }
@@ -86,5 +88,6 @@ const styles = StyleSheet.create({
   chevron: { color: '#B8B1A1', fontSize: 18, fontWeight: '600', lineHeight: 18 },
   signOut: { marginTop: theme.spacing.md },
   signOutText: { color: theme.colors.primary, fontWeight: '700' },
+  dangerText: { color: theme.colors.error, fontWeight: '700' },
   error: { color: theme.colors.error },
 });

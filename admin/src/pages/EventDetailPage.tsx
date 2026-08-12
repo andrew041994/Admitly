@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { attendeeLoginUrl, eventVenue, formatEventDate, PublicLayout } from '../components/PublicSite';
+import { useAuth } from '../auth/AuthContext';
 import { getPublicEvent, type PublicEventDetail } from '../lib/publicEventsApi';
 
 function tierPrice(amountValue: string, currency: string) {
@@ -15,6 +16,7 @@ function tierPrice(amountValue: string, currency: string) {
 }
 
 export function EventDetailPage() {
+  const { state } = useAuth();
   const { eventId } = useParams();
   const numericEventId = Number(eventId);
   const [event, setEvent] = useState<PublicEventDetail | null>(null);
@@ -61,8 +63,9 @@ export function EventDetailPage() {
                       ))}
                     </ul>
                   ) : <p>Ticket details are not currently available.</p>}
-                  <a className="button" href={attendeeLoginUrl}>Continue in the Admitly app</a>
-                  <p className="fine-print">Sign in to access the ticket and checkout options currently available for this event.</p>
+                  {state === 'signed-out' ? <Link className="button" to="/login" state={{ from: `/events/${event.id}` }}>Log in for ticket access</Link> : <p className="checkout-unavailable">Online checkout is not currently available. No order will be created from this page.</p>}
+                  <a className="text-link" href={attendeeLoginUrl}>Open in the Admitly app</a>
+                  <p className="fine-print">Live MMG checkout remains disabled. Admitly will not present a development checkout in production.</p>
                 </aside>
               </div>
             </article>

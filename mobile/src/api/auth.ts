@@ -91,9 +91,17 @@ export async function resetPassword(token: string, newPassword: string): Promise
   });
 }
 
-export async function logout(): Promise<{ success: boolean }> {
+export async function logout(refreshToken: string | null): Promise<{ success: boolean }> {
   return apiRequest<{ success: boolean }>({
     path: '/auth/logout',
+    method: 'POST',
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+}
+
+export async function logoutAll(): Promise<{ success: boolean; revoked_sessions: number }> {
+  return apiRequest<{ success: boolean; revoked_sessions: number }>({
+    path: '/auth/logout-all',
     method: 'POST',
   });
 }

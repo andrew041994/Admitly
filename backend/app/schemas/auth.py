@@ -68,6 +68,11 @@ class AuthResponse(BaseModel):
 
 class LogoutResponse(BaseModel):
     success: bool
+    revoked_sessions: int = 0
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str | None = None
 
 
 class VerifyRequest(BaseModel):

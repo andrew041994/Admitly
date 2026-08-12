@@ -13,6 +13,7 @@ from app.models.venue import Venue
 from app.schemas.account import (
     AccountProfileResponse,
     AccountStaffEventResponse,
+    ChangePasswordResponse,
     ChangePasswordRequest,
     UpdateProfileRequest,
 )
@@ -84,14 +85,14 @@ def get_profile(
     )
 
 
-@router.post("/change-password")
+@router.post("/change-password", response_model=ChangePasswordResponse)
 def post_change_password(
     payload: ChangePasswordRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> dict[str, bool]:
+) -> ChangePasswordResponse:
     change_password(db, user=current_user, current_password=payload.current_password, new_password=payload.new_password)
-    return {"success": True}
+    return ChangePasswordResponse(success=True, reauthentication_required=True)
 
 
 @router.get("/staff-events", response_model=list[AccountStaffEventResponse])

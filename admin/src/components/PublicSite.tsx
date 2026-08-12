@@ -25,17 +25,17 @@ export function PublicHeader() {
         <BrandMark />
         <nav className="public-nav" aria-label="Primary navigation">
           <Link to="/events">Browse Events</Link>
-          <a href={attendeeLoginUrl} title="Open the Admitly app to sign in and create an event">Create an Event</a>
-          <a href={attendeeLoginUrl}>Log In</a>
-          <a className="button button-small" href={attendeeSignupUrl}>Sign Up</a>
+          <Link to="/create-event">Create an Event</Link>
+          <Link to="/login">Log In</Link>
+          <Link className="button button-small" to="/signup">Sign Up</Link>
         </nav>
         <details className="mobile-menu">
           <summary aria-label="Open navigation menu">Menu</summary>
           <nav aria-label="Mobile navigation">
             <Link to="/events">Browse Events</Link>
-            <a href={attendeeLoginUrl}>Create an Event</a>
-            <a href={attendeeLoginUrl}>Log In</a>
-            <a href={attendeeSignupUrl}>Sign Up</a>
+            <Link to="/create-event">Create an Event</Link>
+            <Link to="/login">Log In</Link>
+            <Link to="/signup">Sign Up</Link>
           </nav>
         </details>
       </div>
@@ -54,8 +54,8 @@ export function PublicFooter() {
         <nav aria-label="Explore">
           <strong>Explore</strong>
           <Link to="/events">Browse Events</Link>
-          <a href={attendeeLoginUrl}>Log In</a>
-          <a href={attendeeSignupUrl}>Sign Up</a>
+          <Link to="/login">Log In</Link>
+          <Link to="/signup">Sign Up</Link>
           <Link to="/terms#questions">Support &amp; contact</Link>
         </nav>
         <nav aria-label="Legal policies">
@@ -69,7 +69,7 @@ export function PublicFooter() {
       </div>
       <div className="public-container footer-bottom">
         <span>© {new Date().getFullYear()} Admitly</span>
-        <Link to="/login">Admin sign in</Link>
+        <a href={attendeeLoginUrl}>Open in App</a>
       </div>
     </footer>
   );

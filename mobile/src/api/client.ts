@@ -1,6 +1,7 @@
 import { env } from '../config/env';
 
 let authToken: string | null = null;
+let unauthorizedHandler: (() => void | Promise<void>) | null = null;
 
 export class ApiError extends Error {
   status: number;
@@ -18,6 +19,10 @@ export class ApiError extends Error {
 
 export function setApiAuthToken(token: string | null) {
   authToken = token;
+}
+
+export function setApiUnauthorizedHandler(handler: (() => void | Promise<void>) | null) {
+  unauthorizedHandler = handler;
 }
 
 type ApiOptions = RequestInit & { path: string };
@@ -59,6 +64,11 @@ export async function apiRequest<T>({ path, headers, body, ...init }: ApiOptions
       // ignore body parsing errors and keep generic message
     }
 
+    if (response.status === 401 && authToken && unauthorizedHandler) {
+      const handler = unauthorizedHandler;
+      authToken = null;
+      void handler();
+    }
     throw new ApiError(message, response.status, parsedDetail, response.headers.get('X-Request-ID'));
   }
 

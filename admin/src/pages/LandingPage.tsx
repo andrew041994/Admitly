@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  attendeeLoginUrl,
   EventCard,
   PublicLayout,
 } from '../components/PublicSite';
@@ -15,10 +14,10 @@ const attendeeSteps = [
 ];
 
 const creatorSteps = [
-  'Create your event in the Admitly app.',
+  'Create your event from your Admitly account.',
   'Email proof that you are 18 or older for identity and age verification.',
   'Admitly reviews the event before it can be approved and published.',
-  'Manage ticket availability and your event from the app.',
+  'Manage ticket availability and your event from Admitly.',
   'Run your event and use Admitly’s check-in tools.',
   'Admitly processes payout within 5 business days after the event concludes, less applicable fees and subject to reconciliation, security, and legal review.',
 ];
@@ -62,9 +61,9 @@ export function LandingPage() {
               <p className="hero-lede">Admitly makes it simple to discover events, choose tickets, and manage your own events from one place.</p>
               <div className="cta-row">
                 <Link className="button" to="/events">Browse Events</Link>
-                <a className="button button-secondary" href={attendeeLoginUrl}>Create an Event</a>
+                <Link className="button button-secondary" to="/create-event">Create an Event</Link>
               </div>
-              <p className="app-handoff-note">Account sign-in, signup, checkout, and event creation continue securely in the Admitly app.</p>
+              <p className="app-handoff-note">Use Admitly on the web or continue with the supported mobile app.</p>
             </div>
             <div className="hero-art" aria-label="A preview of an Admitly event ticket">
               <div className="hero-orbit hero-orbit-one" />
@@ -128,7 +127,7 @@ export function LandingPage() {
               <p className="eyebrow">For event creators</p>
               <h2 id="creator-heading">Your event, thoughtfully supported.</h2>
               <p>Create an event from your Admitly account, complete a straightforward review, and manage ticketing through the event.</p>
-              <a className="button" href={attendeeLoginUrl}>Create an Event</a>
+              <Link className="button" to="/create-event">Create an Event</Link>
               <p className="fine-print">Creators must be 18+. Government ID is reviewed separately by email before approval; it is not uploaded to or stored in the Admitly application.</p>
             </div>
             <ol className="creator-steps">
@@ -154,7 +153,7 @@ export function LandingPage() {
             <div><p className="eyebrow">Your next event starts here</p><h2>Ready when you are.</h2></div>
             <div className="cta-row">
               <Link className="button button-light" to="/events">Browse Events</Link>
-              <a className="button button-outline-light" href={attendeeLoginUrl}>Create an Event</a>
+              <Link className="button button-outline-light" to="/create-event">Create an Event</Link>
             </div>
           </div>
         </section>

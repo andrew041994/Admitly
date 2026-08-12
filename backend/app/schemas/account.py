@@ -14,6 +14,11 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class ChangePasswordResponse(BaseModel):
+    success: bool
+    reauthentication_required: bool
+
+
 class AccountProfileResponse(BaseModel):
     id: int
     email: str

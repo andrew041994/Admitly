@@ -37,6 +37,7 @@ from app.models.webhook_endpoint import WebhookEndpoint
 from app.models.webhook_delivery import WebhookDelivery
 
 __all__ = [
+    "AuthSession",
     "User",
     "OrganizerProfile",
     "Venue",
@@ -77,3 +78,4 @@ __all__ = [
     "WebhookEndpoint",
     "WebhookDelivery",
 ]
+from app.models.auth_session import AuthSession

@@ -1,33 +1,5 @@
-import { useEffect, useMemo } from 'react';
-
-export function ResetPasswordRedirectPage() {
-  const token = useMemo(() => new URLSearchParams(window.location.search).get('token') ?? '', []);
-  const deepLink = useMemo(() => `admitly://reset-password?token=${encodeURIComponent(token)}`, [token]);
-
-  function openAdmitly() {
-    window.location.href = deepLink;
-  }
-
-  useEffect(() => {
-    openAdmitly();
-  }, [deepLink]);
-
-  return (
-    <main className="reset-redirect-page">
-      <section className="reset-redirect-card" aria-labelledby="reset-redirect-title">
-        <p className="admin-kicker">Admitly password reset</p>
-        <h1 id="reset-redirect-title">Open Admitly to reset your password</h1>
-        <p>
-          If Admitly does not open automatically, copy this reset code and paste it into the Reset Password screen in the app.
-        </p>
-        <label className="reset-code-label" htmlFor="reset-code">
-          Reset code
-        </label>
-        <input id="reset-code" className="reset-code-box" value={token} readOnly onFocus={(event) => event.currentTarget.select()} />
-        <button type="button" onClick={openAdmitly}>
-          Open Admitly
-        </button>
-      </section>
-    </main>
-  );
-}
+import { type FormEvent, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { resetPassword } from '../lib/authApi';
+import { useAuth } from '../auth/AuthContext';
+export function ResetPasswordRedirectPage() { const { signOut } = useAuth(); const token = useMemo(() => new URLSearchParams(window.location.search).get('token') ?? '', []); const [password, setPassword] = useState(''); const [done, setDone] = useState(false); const [error, setError] = useState<string | null>(token ? null : 'This reset link is missing its token.'); async function submit(e: FormEvent) { e.preventDefault(); setError(null); try { await resetPassword(token, password); await signOut(); setDone(true); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to reset password.'); } } return <main className="auth-page"><section className="auth-card"><Link className="legal-brand" to="/">Admitly</Link><h1>Choose a new password</h1>{done ? <><p role="status">Your password has been updated. All devices have been signed out.</p><Link className="button" to="/login">Log In</Link></> : <form className="web-form" onSubmit={submit}>{error ? <p className="form-error" role="alert">{error}</p> : null}<label>New password<input type="password" autoComplete="new-password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required /></label><button disabled={!token}>Reset password</button></form>}<a href={`admitly://reset-password?token=${encodeURIComponent(token)}`}>Open in the Admitly app</a></section></main>; }

@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     jwt_secret: str = Field(default="dev-change-me", alias="JWT_SECRET")
     jwt_access_token_exp_minutes: int = Field(default=15, alias="JWT_ACCESS_TOKEN_EXP_MINUTES")
     jwt_refresh_token_exp_days: int = Field(default=30, alias="JWT_REFRESH_TOKEN_EXP_DAYS")
+    auth_session_retention_days: int = Field(default=90, ge=1, alias="AUTH_SESSION_RETENTION_DAYS")
+    auth_session_cleanup_batch_size: int = Field(default=100, ge=1, le=1000, alias="AUTH_SESSION_CLEANUP_BATCH_SIZE")
     verification_token_exp_hours: int = Field(default=24, alias="VERIFICATION_TOKEN_EXP_HOURS")
     rate_limit_verification_resend_count: int = Field(default=3, alias="RATE_LIMIT_VERIFICATION_RESEND_COUNT")
     rate_limit_verification_resend_window_seconds: int = Field(default=900, alias="RATE_LIMIT_VERIFICATION_RESEND_WINDOW_SECONDS")

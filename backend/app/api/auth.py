@@ -17,6 +17,7 @@ from app.schemas.auth import (
     AuthTokensResponse,
     ForgotPasswordRequest,
     LoginRequest,
+    LogoutRequest,
     LogoutResponse,
     RefreshRequest,
     RegisterRequest,
@@ -39,6 +40,7 @@ from app.services.auth import (
     requires_email_verification,
     verify_email_token,
 )
+from app.services.auth_sessions import revoke_all_user_sessions, revoke_refresh_session
 from app.core.security import normalize_email
 
 logger = logging.getLogger(__name__)
@@ -217,8 +219,30 @@ def refresh(
 
 
 @router.post("/logout", response_model=LogoutResponse)
-def logout() -> LogoutResponse:
-    return LogoutResponse(success=True)
+def logout(
+    payload: LogoutRequest | None = None,
+    db: Session = Depends(get_db),
+) -> LogoutResponse:
+    revoked = revoke_refresh_session(
+        db,
+        refresh_token=payload.refresh_token if payload else None,
+        reason="logout",
+    )
+    return LogoutResponse(success=True, revoked_sessions=1 if revoked else 0)
+
+
+@router.post("/logout-all", response_model=LogoutResponse)
+def logout_all(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_authenticated_user),
+) -> LogoutResponse:
+    count = revoke_all_user_sessions(
+        db,
+        user_id=current_user.id,
+        reason="logout_all",
+        commit=True,
+    )
+    return LogoutResponse(success=True, revoked_sessions=count)
 
 
 @router.get("/me", response_model=UserResponse)

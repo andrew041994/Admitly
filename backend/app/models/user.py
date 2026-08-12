@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.auth_session import AuthSession
     from app.models.event_staff import EventStaff
     from app.models.event_reminder_log import EventReminderLog
     from app.models.organizer_profile import OrganizerProfile
@@ -39,6 +40,10 @@ class User(TimestampMixin, Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     auth_provider: Mapped[str] = mapped_column(String(32), default="local", nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    auth_sessions: Mapped[list["AuthSession"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
     organizer_profile: Mapped["OrganizerProfile | None"] = relationship(
         back_populates="user", uselist=False
