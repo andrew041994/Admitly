@@ -6,10 +6,10 @@ This is a future operator procedure. It does not authorize a deployment, migrati
 
 | Combination | Compatibility |
 | --- | --- |
-| Existing backend + schema 0039 | Compatible after the 0039 preflight succeeds. Migration 0039 is additive, and retained server defaults supply `payment_attempts.authenticity_status` and `refunds.provider_status` for old inserts. New uniqueness constraints can reject a newly duplicated provider reference, which is safe but may surface as an old-backend conflict response. |
-| New backend + schema 0038 | Not compatible. New ORM queries and inserts reference payment-attempt and refund columns introduced by 0039. |
-| New backend + schema 0039 | Compatible and required target state. |
-| New admin + existing backend | Not fully compatible. The new support UI expects payment-attempt authenticity data and new payment/refund operations supplied by the new backend. |
+| Existing deployed backend + schema 0040 | Database-compatible. Migration 0040 is additive and its new non-null verification status has a retained `pending` server default. The old backend does not enforce the new age-verification publication/discovery policy, so do not perform event approval/publication while it is serving. |
+| Age-verification backend + schema 0039 | Not compatible. ORM event reads reference columns introduced by 0040. |
+| Age-verification backend + schema 0040 | Compatible and required target state. Existing events remain stored and unverified; no event is auto-verified. Approved-but-unverified events are hidden from discovery until reviewed. |
+| Age-verification admin + existing backend | Not compatible for event approvals because the verification endpoint and response fields are absent. Deploy it only after the backend. |
 | New mobile + existing backend | Core auth/order APIs remain compatible, but do not release clients ahead of the backend hardening and production configuration verification. |
 
 The retained database defaults are intentional expand-first compatibility protections. Do not remove them until all old backend versions are permanently retired, and then only through a later reviewed migration.
@@ -24,27 +24,26 @@ The retained database defaults are intentional expand-first compatibility protec
    backend/.venv/bin/python scripts/verify_production_safety.py --production-env-file /secure/path/production.env
    ```
 
-4. Run [migration-0039-preflight.md](migration-0039-preflight.md) through a verified SELECT-only Neon role.
-5. Resolve and recheck every blocking result. Do not continue with exact duplicates.
-6. Keep `MMG_ENABLED=false` while the official provider implementation remains unavailable.
-7. Begin a short payment/refund write-maintenance window. This closes the race between the final duplicate query and unique-constraint creation and limits exposure to non-concurrent DDL locks.
-8. Apply migration 0039 using the approved production migration procedure.
-9. Verify the database reports exactly `20260811_0039`, both unique constraints exist, and the retained defaults are present. Do not run application writes as a migration test.
-10. Deploy the new backend release immediately after the migration.
-11. Perform non-financial smoke checks: health, request ID, CORS allow/deny behavior, authentication authorization boundaries using an approved test account, logs, and Sentry controlled test procedure. Do not invoke payment callbacks or real notifications.
-12. End the maintenance window only after backend health and safety checks pass.
-13. Deploy the admin bundle. Verify the public legal routes, API base URL, Sentry release, support payment-attempt display, and absence of test-checkout paths.
-14. Produce signed mobile builds from the same approved release. Test Android/iOS physically before staged store release. Do not use OTA to introduce native SecureStore or Sentry dependencies.
-15. Complete push, organizer, transfer, scan, and—after MMG is officially integrated—payment lifecycle verification before final release sign-off.
+4. Confirm production is still at `20260811_0039`, record counts of total events and approved events, and confirm the operator understands that 0040 does not auto-verify them. No ID data preflight or backfill is required.
+5. Keep `MMG_ENABLED=false` while the official provider implementation remains unavailable.
+6. Pause event approval/publication operationally for the short migration/backend transition. The repository has no feature-specific kill switch.
+7. Apply migration 0040 using the approved production migration procedure. Do not run it through Codex or against an unverified database target.
+8. Verify the database reports exactly `20260811_0040`; the five event verification columns, two foreign keys, two indexes, status check constraint, and retained `pending` server default exist.
+9. Deploy the age-verification backend immediately after the migration. Until it is live, the old backend is schema-compatible but does not enforce the new policy.
+10. Perform non-financial smoke checks: health, request ID, CORS, authentication, event creation as pending/draft through an approved test account, approval rejection before verification, logs, and Sentry. Do not send an ID, payment, or notification as a smoke test.
+11. Deploy the age-verification admin bundle. Verify legal routes and that Event Approvals requires verification before approval and displays no ID upload/storage capability.
+12. Manually review existing approved events. Record verification only after the email-ID process is completed; do not bulk backfill or auto-verify. Approved legacy events remain hidden from discovery until verified.
+13. End the event approval/publication hold only after backend/admin verification passes.
+14. Produce signed mobile builds only on the separately approved schedule. Do not use OTA to introduce native SecureStore or Sentry dependencies.
 
 ## Rollback points
 
 - **Before migration:** abort without database or service changes.
-- **After migration, before backend deployment:** leave schema 0039 in place and restore normal service on the old backend if necessary. Retained defaults keep old payment-attempt/refund inserts compatible. Investigate any uniqueness conflict rather than weakening the constraint.
-- **After backend deployment:** roll the backend back to the recorded old release while keeping schema 0039. This is the preferred application rollback.
+- **After migration, before backend deployment:** leave schema 0040 in place. The old backend remains database-compatible, but keep event approval/publication operationally paused because it lacks the verification gate.
+- **After backend deployment:** an application rollback may keep schema 0040, but it reintroduces the missing verification enforcement. Roll back only with event approval/publication held and a plan to restore the compliant backend promptly.
 - **After admin deployment:** roll back the static admin bundle independently; it has no direct database dependency.
 - **During mobile rollout:** pause/stage the store rollout. Previously installed clients remain API-compatible, but any binary exposing development checkout must not be promoted.
-- **Database downgrade:** last resort only. First restore the old backend and stop new writes. Downgrade 0039 removes callback authenticity and refund provider audit data, so it requires explicit incident approval and preservation of relevant records before execution.
+- **Database downgrade:** last resort only. Downgrading 0040 deletes verification metadata and audit notes from `events`; preserve required evidence and obtain explicit incident/privacy approval first. Routine rollback keeps schema 0040.
 
 ## Downtime and lock considerations
 

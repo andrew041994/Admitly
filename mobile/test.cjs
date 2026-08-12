@@ -7,4 +7,5 @@ require('./src/navigation/screens/TicketDetailScreen.test.cjs');
 require('./src/navigation/screens/AccountVerificationFlow.test.cjs');
 require('./src/features/notifications/routing.test.cjs');
 require('./src/navigation/screens/NotificationsScreen.test.cjs');
+require('./src/navigation/screens/EventCoverFlow.test.cjs');
 require('./src/config/observabilityConfig.test.cjs');

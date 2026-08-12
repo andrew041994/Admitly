@@ -104,6 +104,19 @@ def publish_event(db: Session, *, actor_user_id: int, event_id: int) -> Event:
     event = get_owned_event_for_update(db, actor_user_id=actor_user_id, event_id=event_id)
     if event.status == EventStatus.CANCELLED:
         raise OrganizerEventValidationError(code="invalid_status", errors=[{"field": "status", "message": "Cancelled events cannot be published."}])
+    if (
+        event.creator_age_identity_verification_status != "verified"
+        or event.creator_age_identity_verified_user_id != actor_user_id
+        or event.creator_age_identity_verified_by_user_id is None
+        or event.creator_age_identity_verified_at is None
+    ):
+        raise OrganizerEventValidationError(
+            code="creator_age_identity_verification_required",
+            errors=[{
+                "field": "creator_age_identity_verification",
+                "message": "Creator age and identity verification is required before publication.",
+            }],
+        )
     validate_event_publishable(event)
     now = get_guyana_now()
     event.status = EventStatus.PUBLISHED
@@ -140,7 +153,6 @@ def update_event_and_tiers(db: Session, *, actor_user_id: int, event_id: int, pa
         "short_description",
         "long_description",
         "category",
-        "cover_image_url",
         "start_at",
         "end_at",
         "doors_open_at",

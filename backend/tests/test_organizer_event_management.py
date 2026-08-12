@@ -48,6 +48,7 @@ def _seed_event(
     title: str,
     status: EventStatus = EventStatus.DRAFT,
     approval_status: EventApprovalStatus = EventApprovalStatus.APPROVED,
+    creator_verified: bool = True,
 ) -> Event:
     organizer = db.query(OrganizerProfile).filter(OrganizerProfile.user_id == organizer_user.id).one_or_none()
     if organizer is None:
@@ -69,6 +70,10 @@ def _seed_event(
         visibility=EventVisibility.PUBLIC,
         approval_status=approval_status,
         custom_venue_name=venue.name,
+        creator_age_identity_verification_status="verified" if creator_verified else "pending",
+        creator_age_identity_verified_user_id=organizer_user.id if creator_verified else None,
+        creator_age_identity_verified_by_user_id=organizer_user.id if creator_verified else None,
+        creator_age_identity_verified_at=datetime.now(UTC) if creator_verified else None,
     )
     db.add(event)
     db.flush()
@@ -126,6 +131,23 @@ def test_publish_unpublish_and_validation(client: TestClient, db_session: Sessio
     invalid = client.post(f"/events/organizer/events/{event.id}/publish", headers=auth_headers(owner))
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "publish_validation_failed"
+
+
+def test_publish_requires_creator_age_identity_verification(client: TestClient, db_session: Session) -> None:
+    owner = _seed_user(db_session, unique_email("unverified_publish_owner"), "Unverified Publisher")
+    event = _seed_event(
+        db_session,
+        owner,
+        title="Unverified Draft",
+        status=EventStatus.DRAFT,
+        creator_verified=False,
+    )
+
+    response = client.post(f"/events/organizer/events/{event.id}/publish", headers=auth_headers(owner))
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "creator_age_identity_verification_required"
+    db_session.refresh(event)
+    assert event.status == EventStatus.DRAFT
 
 
 def test_cancel_and_tier_editing_rules(client: TestClient, db_session: Session) -> None:

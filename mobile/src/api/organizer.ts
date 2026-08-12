@@ -17,7 +17,6 @@ export type CreateEventPayload = {
   short_description?: string | null;
   long_description?: string | null;
   category?: string | null;
-  cover_image_url?: string | null;
   start_at: string;
   end_at: string;
   doors_open_at?: string | null;
@@ -241,8 +240,8 @@ export type EventCoverUploadResponse = {
   url: string;
 };
 
-export async function uploadEventCoverImage(file: { uri: string; name: string; type: string }): Promise<EventCoverUploadResponse> {
+export async function uploadEventCoverImage(eventId: number, file: { uri: string; name: string; type: string }): Promise<EventCoverUploadResponse> {
   const formData = new FormData();
   formData.append('file', file as unknown as Blob);
-  return apiRequest<EventCoverUploadResponse>({ path: '/events/uploads/cover-image', method: 'POST', body: formData });
+  return apiRequest<EventCoverUploadResponse>({ path: `/events/${eventId}/cover-image`, method: 'POST', body: formData });
 }

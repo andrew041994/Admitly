@@ -2,12 +2,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from io import BytesIO
 import logging
+import warnings
 from uuid import uuid4
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
 UTC = timezone.utc
@@ -16,9 +17,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.auth import get_current_admin_id, get_current_user_id
+from app.api.rate_limit import apply_rate_limit
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.event import Event
+from app.models.admin_action_audit import AdminActionAudit
 from app.models.event_staff import EventStaff
 from app.models.enums import EventRefundBatchStatus, EventStaffRole
 from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility
@@ -30,6 +33,7 @@ from app.models.user import User
 from app.models.venue import Venue
 from app.schemas.event import (
     AdminEventApprovalItemResponse,
+    EventCreatorAgeIdentityVerificationRequest,
     EventCancelRequest,
     EventCreateRequest,
     EventCreateResponse,
@@ -89,10 +93,18 @@ from app.services.reporting import get_event_reporting_summary, get_event_tier_s
 router = APIRouter(prefix="/events", tags=["events"])
 
 MAX_EVENT_COVER_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_EVENT_COVER_IMAGE_PIXELS = 25_000_000
+MAX_EVENT_COVER_IMAGE_DIMENSION = 10_000
 ALLOWED_EVENT_COVER_TYPES = {
     "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
+}
+EVENT_COVER_FORMAT_TYPES = {
+    "JPEG": "image/jpeg",
+    "PNG": "image/png",
+    "WEBP": "image/webp",
 }
 logger = logging.getLogger(__name__)
 
@@ -101,12 +113,10 @@ class EventCoverUploadResponse(BaseModel):
     url: str
 
 
-def _get_event_cover_s3_config() -> tuple[str, str, str, str, str, str]:
+def _get_event_cover_s3_config() -> tuple[str | None, str | None, str, str, str, str]:
     missing = [
         name
         for name, value in (
-            ("AWS_ACCESS_KEY_ID", settings.aws_access_key_id),
-            ("AWS_SECRET_ACCESS_KEY", settings.aws_secret_access_key),
             ("AWS_REGION", settings.aws_region),
             ("S3_EVENT_BUCKET", settings.s3_event_bucket),
             ("S3_PUBLIC_BASE_URL", settings.s3_public_base_url),
@@ -116,10 +126,13 @@ def _get_event_cover_s3_config() -> tuple[str, str, str, str, str, str]:
     if missing:
         logger.error("Event cover upload S3 configuration is missing: %s", ", ".join(missing))
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Image upload is not configured.")
+    if bool(settings.aws_access_key_id) != bool(settings.aws_secret_access_key):
+        logger.error("Event cover upload AWS credential configuration is incomplete")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Image upload is not configured.")
 
     return (
-        settings.aws_access_key_id or "",
-        settings.aws_secret_access_key or "",
+        settings.aws_access_key_id,
+        settings.aws_secret_access_key,
         settings.aws_region or "",
         settings.s3_event_bucket or "",
         settings.s3_event_prefix.strip("/") + "/" if settings.s3_event_prefix.strip("/") else "",
@@ -127,53 +140,274 @@ def _get_event_cover_s3_config() -> tuple[str, str, str, str, str, str]:
     )
 
 
-@router.post("/uploads/cover-image", response_model=EventCoverUploadResponse, status_code=status.HTTP_201_CREATED)
-async def upload_event_cover_image(
-    file: UploadFile = File(...),
-    _user_id: int = Depends(get_current_user_id),
-) -> EventCoverUploadResponse:
-    content_type = (file.content_type or "").lower()
-    extension = ALLOWED_EVENT_COVER_TYPES.get(content_type)
-    if extension is None:
+def _managed_event_cover_key(url: str | None, *, public_base_url: str) -> str | None:
+    if not url:
+        return None
+    prefix = public_base_url.rstrip("/") + "/"
+    if not url.startswith(prefix):
+        return None
+    key = url[len(prefix):]
+    return key or None
+
+
+def _get_event_for_cover_update(db: Session, *, event_id: int, actor_user_id: int) -> Event:
+    event = db.execute(select(Event).where(Event.id == event_id).with_for_update()).scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+    actor = db.get(User, actor_user_id)
+    owner_user_id = db.execute(
+        select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
+    ).scalar_one_or_none()
+    if actor is None or (not actor.is_admin and owner_user_id != actor_user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to change this event cover image.")
+    return event
+
+
+def _authorize_event_cover_change(db: Session, *, event_id: int, actor_user_id: int) -> None:
+    event = db.execute(select(Event).where(Event.id == event_id)).scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+    actor = db.get(User, actor_user_id)
+    owner_user_id = db.execute(
+        select(OrganizerProfile.user_id).where(OrganizerProfile.id == event.organizer_id)
+    ).scalar_one_or_none()
+    if actor is None or (not actor.is_admin and owner_user_id != actor_user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to change this event cover image.")
+
+
+def _add_event_cover_audit(
+    db: Session,
+    *,
+    event_id: int,
+    actor_user_id: int,
+    action_type: str,
+    object_key: str | None,
+    previous_object_key: str | None,
+    status_value: str,
+) -> None:
+    metadata = {"status": status_value}
+    if object_key is not None:
+        metadata["object_key"] = object_key
+    if previous_object_key is not None:
+        metadata["previous_object_key"] = previous_object_key
+    db.add(
+        AdminActionAudit(
+            actor_user_id=actor_user_id,
+            target_type="event",
+            target_id=str(event_id),
+            action_type=action_type,
+            metadata_json=metadata,
+        )
+    )
+    db.flush()
+
+
+def _normalize_event_cover(contents: bytes, declared_content_type: str) -> tuple[bytes, str, str]:
+    normalized_declared_type = "image/jpeg" if declared_content_type == "image/jpg" else declared_content_type
+    if normalized_declared_type not in {"image/jpeg", "image/png", "image/webp"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported image type. Please upload a JPEG, PNG, or WEBP image.",
         )
-
-    contents = await file.read(MAX_EVENT_COVER_IMAGE_BYTES + 1)
-    if len(contents) > MAX_EVENT_COVER_IMAGE_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Cover image must be 5 MB or smaller.")
     if not contents:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cover image file is empty.")
 
     try:
-        with Image.open(BytesIO(contents)) as image:
-            image.verify()
-    except (UnidentifiedImageError, OSError) as exc:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(contents)) as source:
+                actual_content_type = EVENT_COVER_FORMAT_TYPES.get((source.format or "").upper())
+                if actual_content_type != normalized_declared_type:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="The file content does not match its declared image type.",
+                    )
+                width, height = source.size
+                if (
+                    width <= 0
+                    or height <= 0
+                    or width > MAX_EVENT_COVER_IMAGE_DIMENSION
+                    or height > MAX_EVENT_COVER_IMAGE_DIMENSION
+                    or width * height > MAX_EVENT_COVER_IMAGE_PIXELS
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Cover image dimensions are too large.",
+                    )
+                source.load()
+                image = ImageOps.exif_transpose(source)
+                if actual_content_type == "image/jpeg":
+                    image = image.convert("RGB")
+                elif actual_content_type == "image/webp":
+                    image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+                elif image.mode not in {"RGB", "RGBA", "L", "LA", "P"}:
+                    image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+
+                output = BytesIO()
+                if actual_content_type == "image/jpeg":
+                    image.save(output, format="JPEG", quality=90, optimize=True)
+                elif actual_content_type == "image/png":
+                    image.save(output, format="PNG", optimize=True)
+                else:
+                    image.save(output, format="WEBP", quality=90, method=4)
+                normalized = output.getvalue()
+    except HTTPException:
+        raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning, UnidentifiedImageError, OSError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The selected file is not a valid image.") from exc
 
-    access_key_id, secret_access_key, region, bucket, prefix, public_base_url = _get_event_cover_s3_config()
-    key = f"{prefix}{uuid4().hex}{extension}"
+    if len(normalized) > MAX_EVENT_COVER_IMAGE_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Normalized cover image must be 5 MB or smaller.")
+    extension = ALLOWED_EVENT_COVER_TYPES[normalized_declared_type]
+    return normalized, normalized_declared_type, extension
 
-    s3_client = boto3.client(
-        "s3",
-        region_name=region,
-        aws_access_key_id=access_key_id,
-        aws_secret_access_key=secret_access_key,
+
+@router.post("/uploads/cover-image", status_code=status.HTTP_410_GONE)
+async def reject_unbound_event_cover_upload(
+    _user_id: int = Depends(get_current_user_id),
+) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Unbound cover uploads are no longer supported. Create the event before uploading its cover image.",
     )
+
+
+@router.post("/{event_id}/cover-image", response_model=EventCoverUploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_event_cover_image(
+    event_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> EventCoverUploadResponse:
+    apply_rate_limit(
+        scope="event_cover_upload",
+        key=f"user:{user_id}",
+        limit=settings.rate_limit_event_cover_upload_count,
+        window_seconds=settings.rate_limit_event_cover_upload_window_seconds,
+    )
+    _authorize_event_cover_change(db, event_id=event_id, actor_user_id=user_id)
+    declared_content_type = (file.content_type or "").lower()
+    if declared_content_type not in ALLOWED_EVENT_COVER_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported image type. Please upload a JPEG, PNG, or WEBP image.",
+        )
+    contents = await file.read(MAX_EVENT_COVER_IMAGE_BYTES + 1)
+    if len(contents) > MAX_EVENT_COVER_IMAGE_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Cover image must be 5 MB or smaller.")
+    normalized, content_type, extension = _normalize_event_cover(contents, declared_content_type)
+
+    access_key_id, secret_access_key, region, bucket, prefix, public_base_url = _get_event_cover_s3_config()
+    event = _get_event_for_cover_update(db, event_id=event_id, actor_user_id=user_id)
+    previous_url = event.cover_image_url
+    previous_key = _managed_event_cover_key(previous_url, public_base_url=public_base_url)
+    key = f"{prefix}{event_id}/{uuid4().hex}{extension}"
+    _add_event_cover_audit(
+        db,
+        event_id=event_id,
+        actor_user_id=user_id,
+        action_type="event_cover_upload_reserved",
+        object_key=key,
+        previous_object_key=previous_key,
+        status_value="pending",
+    )
+    db.commit()
+
+    client_options = {"region_name": region}
+    if access_key_id and secret_access_key:
+        client_options.update(
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+        )
+    s3_client = boto3.client("s3", **client_options)
     try:
         s3_client.put_object(
             Bucket=bucket,
             Key=key,
-            Body=contents,
+            Body=normalized,
             ContentType=content_type,
             CacheControl="public, max-age=31536000, immutable",
         )
     except (BotoCoreError, ClientError) as exc:
-        logger.exception("Failed to upload event cover image to S3 bucket %s", bucket)
+        db.rollback()
+        _add_event_cover_audit(
+            db,
+            event_id=event_id,
+            actor_user_id=user_id,
+            action_type="event_cover_upload_failed",
+            object_key=key,
+            previous_object_key=previous_key,
+            status_value="failed",
+        )
+        db.commit()
+        logger.exception("Failed to upload event cover image")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to upload cover image. Please try again.") from exc
 
-    return EventCoverUploadResponse(url=f"{public_base_url}/{key}")
+    new_url = f"{public_base_url}/{key}"
+    try:
+        event = _get_event_for_cover_update(db, event_id=event_id, actor_user_id=user_id)
+        if event.cover_image_url != previous_url:
+            _add_event_cover_audit(
+                db,
+                event_id=event_id,
+                actor_user_id=user_id,
+                action_type="event_cover_upload_orphaned",
+                object_key=key,
+                previous_object_key=previous_key,
+                status_value="cleanup_required",
+            )
+            db.commit()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The event cover changed during upload. Please retry.")
+        event.cover_image_url = new_url
+        _add_event_cover_audit(
+            db,
+            event_id=event_id,
+            actor_user_id=user_id,
+            action_type="event_cover_replaced" if previous_url else "event_cover_uploaded",
+            object_key=key,
+            previous_object_key=previous_key,
+            status_value="active",
+        )
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Event cover object uploaded but database update failed", extra={"event_id": event_id, "object_key": key})
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Cover image could not be attached to the event.")
+    return EventCoverUploadResponse(url=new_url)
+
+
+@router.delete("/{event_id}/cover-image", status_code=status.HTTP_204_NO_CONTENT)
+def remove_event_cover_image(
+    event_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> None:
+    apply_rate_limit(
+        scope="event_cover_upload",
+        key=f"user:{user_id}",
+        limit=settings.rate_limit_event_cover_upload_count,
+        window_seconds=settings.rate_limit_event_cover_upload_window_seconds,
+    )
+    event = _get_event_for_cover_update(db, event_id=event_id, actor_user_id=user_id)
+    if event.cover_image_url is None:
+        return
+    previous_key = _managed_event_cover_key(
+        event.cover_image_url,
+        public_base_url=(settings.s3_public_base_url or ""),
+    )
+    event.cover_image_url = None
+    _add_event_cover_audit(
+        db,
+        event_id=event_id,
+        actor_user_id=user_id,
+        action_type="event_cover_removed",
+        object_key=None,
+        previous_object_key=previous_key,
+        status_value="removed",
+    )
+    db.commit()
 
 
 def _to_utc_aware(dt: datetime) -> datetime:
@@ -186,11 +420,17 @@ def _is_event_publicly_visible(event: Event) -> bool:
     return bool(
         event.status == EventStatus.PUBLISHED
         and event.approval_status == EventApprovalStatus.APPROVED
+        and event.creator_age_identity_verification_status == "verified"
+        and event.creator_age_identity_verified_user_id is not None
+        and event.creator_age_identity_verified_by_user_id is not None
+        and event.creator_age_identity_verified_at is not None
+        and event.organizer is not None
+        and event.creator_age_identity_verified_user_id == event.organizer.user_id
     )
 
 
 def _get_visibility_state(event: Event) -> str | None:
-    if event.status == EventStatus.PUBLISHED and event.approval_status != EventApprovalStatus.APPROVED:
+    if event.status == EventStatus.PUBLISHED and not _is_event_publicly_visible(event):
         return "pending_review"
     return None
 
@@ -203,6 +443,13 @@ def _discoverable_event_query() -> select:
             Event.status == EventStatus.PUBLISHED,
             Event.visibility == EventVisibility.PUBLIC,
             Event.approval_status == EventApprovalStatus.APPROVED,
+            Event.creator_age_identity_verification_status == "verified",
+            Event.creator_age_identity_verified_user_id.is_not(None),
+            Event.creator_age_identity_verified_by_user_id.is_not(None),
+            Event.creator_age_identity_verified_at.is_not(None),
+            Event.organizer.has(
+                OrganizerProfile.user_id == Event.creator_age_identity_verified_user_id
+            ),
             Event.published_at.is_not(None),
             Event.cancelled_at.is_(None),
         )
@@ -273,6 +520,11 @@ def _to_admin_approval_item(event: Event) -> AdminEventApprovalItemResponse:
         status=event.status.value,
         created_at=event.created_at,
         published_at=event.published_at,
+        creator_user_id=event.organizer.user_id,
+        creator_age_identity_verification_status=event.creator_age_identity_verification_status,
+        creator_age_identity_verified_user_id=event.creator_age_identity_verified_user_id,
+        creator_age_identity_verified_by_user_id=event.creator_age_identity_verified_by_user_id,
+        creator_age_identity_verified_at=event.creator_age_identity_verified_at,
     )
 
 
@@ -443,7 +695,15 @@ def list_pending_event_approvals(
         db.execute(
             select(Event)
             .options(joinedload(Event.organizer), joinedload(Event.venue))
-            .where(Event.approval_status == EventApprovalStatus.PENDING)
+            .where(
+                or_(
+                    Event.approval_status == EventApprovalStatus.PENDING,
+                    Event.creator_age_identity_verification_status != "verified",
+                    Event.creator_age_identity_verified_user_id.is_(None),
+                    Event.creator_age_identity_verified_by_user_id.is_(None),
+                    Event.creator_age_identity_verified_at.is_(None),
+                )
+            )
             .where(Event.status != EventStatus.CANCELLED)
             .where(Event.cancelled_at.is_(None))
             .order_by(Event.created_at.asc(), Event.id.asc())
@@ -469,12 +729,79 @@ def approve_event_for_discovery(
     if event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
 
+    creator_user_id = event.organizer.user_id
+    if (
+        event.creator_age_identity_verification_status != "verified"
+        or event.creator_age_identity_verified_user_id != creator_user_id
+        or event.creator_age_identity_verified_by_user_id is None
+        or event.creator_age_identity_verified_at is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Creator age and identity verification must be recorded before event approval.",
+        )
+
     if event.approval_status != EventApprovalStatus.APPROVED:
         event.approval_status = EventApprovalStatus.APPROVED
         db.add(event)
         db.commit()
         db.refresh(event)
         enqueue_nearby_event_after_commit(db, event_id=event.id)
+
+    return _to_admin_approval_item(event)
+
+
+@router.post(
+    "/admin/{event_id}/creator-age-identity-verification",
+    response_model=AdminEventApprovalItemResponse,
+)
+def record_event_creator_age_identity_verification(
+    event_id: int,
+    payload: EventCreatorAgeIdentityVerificationRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_admin_id),
+) -> AdminEventApprovalItemResponse:
+    _require_admin(db, user_id=user_id)
+    event = db.execute(
+        select(Event)
+        .where(Event.id == event_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+    db.refresh(event, attribute_names=["organizer", "venue"])
+
+    creator_user_id = event.organizer.user_id
+    already_verified = (
+        event.creator_age_identity_verification_status == "verified"
+        and event.creator_age_identity_verified_user_id == creator_user_id
+        and event.creator_age_identity_verified_by_user_id is not None
+        and event.creator_age_identity_verified_at is not None
+    )
+    if not already_verified:
+        verified_at = datetime.now(UTC)
+        event.creator_age_identity_verification_status = "verified"
+        event.creator_age_identity_verified_user_id = creator_user_id
+        event.creator_age_identity_verified_by_user_id = user_id
+        event.creator_age_identity_verified_at = verified_at
+        event.creator_age_identity_verification_note = payload.note
+        db.add(
+            AdminActionAudit(
+                actor_user_id=user_id,
+                target_type="event",
+                target_id=str(event.id),
+                action_type="verify_event_creator_age_identity",
+                reason=payload.note,
+                metadata_json={
+                    "creator_user_id": creator_user_id,
+                    "verification_status": "verified",
+                    "verified_at": verified_at.isoformat(),
+                },
+            )
+        )
+        db.add(event)
+        db.commit()
+        db.refresh(event)
 
     return _to_admin_approval_item(event)
 

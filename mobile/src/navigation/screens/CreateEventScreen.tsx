@@ -26,6 +26,12 @@ type TierFormState = {
   maxPerOrder: string;
 };
 
+type EventCoverFile = {
+  uri: string;
+  name: string;
+  type: string;
+};
+
 const defaultTier = (): TierFormState => ({
   name: '',
   description: '',
@@ -138,10 +144,10 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const [shortDescription, setShortDescription] = useState('');
   const [longDescription, setLongDescription] = useState('');
   const [category, setCategory] = useState('');
-  const [coverImageUrl, setCoverImageUrl] = useState('');
+  const [coverImageFile, setCoverImageFile] = useState<EventCoverFile | null>(null);
   const [coverImagePreviewUri, setCoverImagePreviewUri] = useState<string | null>(null);
-  const [coverImageUploading, setCoverImageUploading] = useState(false);
   const [coverImageError, setCoverImageError] = useState<string | null>(null);
+  const [createdEventId, setCreatedEventId] = useState<number | null>(null);
   const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
   const [categorySearch, setCategorySearch] = useState('');
   const [startAt, setStartAt] = useState<DateTimeField>({ date: null, time: null });
@@ -454,23 +460,19 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
       }
 
       setCoverImagePreviewUri(asset.uri);
-      setCoverImageUploading(true);
-      const upload = await uploadEventCoverImage({
+      setCoverImageFile({
         uri: asset.uri,
         name: asset.fileName || `event-cover.${mimeType.split('/')[1] || 'jpg'}`,
         type: mimeType,
       });
-      setCoverImageUrl(upload.url);
     } catch (err) {
-      setCoverImagePreviewUri(coverImageUrl || null);
+      setCoverImagePreviewUri(coverImageFile?.uri || null);
       setCoverImageError(err instanceof ApiError ? err.message : 'Unable to upload the selected image. Please try again.');
-    } finally {
-      setCoverImageUploading(false);
     }
   };
 
   const removeCoverImage = () => {
-    setCoverImageUrl('');
+    setCoverImageFile(null);
     setCoverImagePreviewUri(null);
     setCoverImageError(null);
   };
@@ -478,11 +480,6 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
   const submit = async () => {
     if (submitValidationError) {
       setError(submitValidationError);
-      return;
-    }
-
-    if (coverImageUploading) {
-      setError('Please wait for the cover image upload to finish.');
       return;
     }
 
@@ -495,35 +492,47 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
       const salesEndAtIso = salesEndAt.date && salesEndAt.time ? buildGuyanaIso(salesEndAt.date, salesEndAt.time) : null;
       const doorsOpenAtIso = doorsOpenAt && startAt.date ? buildGuyanaIso(startAt.date, doorsOpenAt) : null;
 
-      const created = await createEvent({
-        title: title.trim(),
-        short_description: shortDescription.trim() || null,
-        long_description: longDescription.trim() || null,
-        category: category.trim() || null,
-        cover_image_url: coverImageUrl || null,
-        start_at: startAtIso,
-        end_at: endAtIso,
-        doors_open_at: doorsOpenAtIso,
-        sales_start_at: salesStartAtIso,
-        sales_end_at: salesEndAtIso,
-        timezone: GUYANA_TIMEZONE,
-        venue_id: selectedVenueId,
-        custom_venue_name: venueName.trim(),
-        custom_address_text: addressText.trim() || null,
-        refund_policy_text: refundPolicyText.trim() || null,
-        terms_text: termsText.trim() || null,
-        ticket_tiers: tiers.map((tier, index) => ({
-          name: tier.name.trim(),
-          description: tier.description.trim() || null,
-          price_amount: Number(tier.priceAmount).toFixed(2),
-          currency: tier.currency.trim().toUpperCase(),
-          quantity_total: Number(tier.quantityTotal),
-          min_per_order: Number(tier.minPerOrder),
-          max_per_order: Number(tier.maxPerOrder),
-          sort_order: index,
-        })),
-      });
-      onCreated(created.id);
+      let eventId = createdEventId;
+      if (eventId === null) {
+        const created = await createEvent({
+          title: title.trim(),
+          short_description: shortDescription.trim() || null,
+          long_description: longDescription.trim() || null,
+          category: category.trim() || null,
+          start_at: startAtIso,
+          end_at: endAtIso,
+          doors_open_at: doorsOpenAtIso,
+          sales_start_at: salesStartAtIso,
+          sales_end_at: salesEndAtIso,
+          timezone: GUYANA_TIMEZONE,
+          venue_id: selectedVenueId,
+          custom_venue_name: venueName.trim(),
+          custom_address_text: addressText.trim() || null,
+          refund_policy_text: refundPolicyText.trim() || null,
+          terms_text: termsText.trim() || null,
+          ticket_tiers: tiers.map((tier, index) => ({
+            name: tier.name.trim(),
+            description: tier.description.trim() || null,
+            price_amount: Number(tier.priceAmount).toFixed(2),
+            currency: tier.currency.trim().toUpperCase(),
+            quantity_total: Number(tier.quantityTotal),
+            min_per_order: Number(tier.minPerOrder),
+            max_per_order: Number(tier.maxPerOrder),
+            sort_order: index,
+          })),
+        });
+        eventId = created.id;
+        setCreatedEventId(eventId);
+      }
+      if (coverImageFile) {
+        try {
+          await uploadEventCoverImage(eventId, coverImageFile);
+        } catch {
+          setError('Event created, but its cover image could not be attached. Retry to upload the cover without creating a duplicate event.');
+          return;
+        }
+      }
+      onCreated(eventId);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to create event.');
     } finally {
@@ -562,23 +571,22 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
           <Text style={category.trim() ? styles.pickerValue : styles.placeholderValue}>{category.trim() || 'Category'}</Text>
         </Pressable>
         <View style={styles.coverImageSection}>
-          {coverImagePreviewUri || coverImageUrl ? (
+          {coverImagePreviewUri ? (
             <>
               <View style={styles.coverPreview}>
-                <Image source={{ uri: coverImagePreviewUri || coverImageUrl }} style={styles.coverPreviewImage} resizeMode="contain" />
+                <Image source={{ uri: coverImagePreviewUri }} style={styles.coverPreviewImage} resizeMode="contain" />
               </View>
-              {coverImageUploading ? <Text style={styles.hintText}>Uploading cover image…</Text> : null}
               <View style={styles.coverImageActions}>
-                <Pressable onPress={pickCoverImage} style={styles.coverImageAction} disabled={coverImageUploading}>
+                <Pressable onPress={pickCoverImage} style={styles.coverImageAction} disabled={loading}>
                   <Text style={styles.coverImageActionText}>Replace image</Text>
                 </Pressable>
-                <Pressable onPress={removeCoverImage} style={[styles.coverImageAction, styles.coverImageRemoveAction]} disabled={coverImageUploading}>
+                <Pressable onPress={removeCoverImage} style={[styles.coverImageAction, styles.coverImageRemoveAction]} disabled={loading}>
                   <Text style={styles.coverImageRemoveText}>Remove</Text>
                 </Pressable>
               </View>
             </>
           ) : (
-            <Pressable style={styles.coverImageUploadArea} onPress={pickCoverImage} disabled={coverImageUploading}>
+            <Pressable style={styles.coverImageUploadArea} onPress={pickCoverImage} disabled={loading}>
               <Text style={styles.coverImageUploadTitle}>Add event cover image</Text>
               <Text style={styles.hintText}>Recommended: 1080 × 1350. Other image sizes will show fully with padding.</Text>
             </Pressable>
@@ -692,8 +700,8 @@ export function CreateEventScreen({ onCreated }: { onCreated: (eventId: number) 
         />
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <Pressable onPress={submit} style={[styles.button, loading || coverImageUploading ? styles.buttonDisabled : null]} disabled={loading || coverImageUploading}>
-            <Text style={styles.buttonText}>{coverImageUploading ? 'Uploading image…' : loading ? 'Creating…' : 'Create Event'}</Text>
+          <Pressable onPress={submit} style={[styles.button, loading ? styles.buttonDisabled : null]} disabled={loading}>
+            <Text style={styles.buttonText}>{loading ? 'Saving…' : createdEventId ? 'Retry Cover Upload' : 'Create Event'}</Text>
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>

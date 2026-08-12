@@ -103,7 +103,8 @@ def create_event_with_ticket_tiers(
         short_description=payload.short_description,
         long_description=payload.long_description,
         category=payload.category,
-        cover_image_url=payload.cover_image_url,
+        # Cover objects are attached only through the event-bound upload endpoint.
+        cover_image_url=None,
         start_at=payload.start_at,
         end_at=payload.end_at,
         doors_open_at=payload.doors_open_at,

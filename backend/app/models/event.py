@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Numeric,
@@ -32,6 +33,12 @@ if TYPE_CHECKING:
 
 class Event(TimestampMixin, Base):
     __tablename__ = "events"
+    __table_args__ = (
+        CheckConstraint(
+            "creator_age_identity_verification_status IN ('pending', 'verified')",
+            name="ck_events_creator_age_identity_verification_status",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     organizer_id: Mapped[int] = mapped_column(
@@ -76,6 +83,21 @@ class Event(TimestampMixin, Base):
         db_enum(EventApprovalStatus, name="event_approval_status"),
         nullable=False,
         default=EventApprovalStatus.PENDING,
+    )
+    creator_age_identity_verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    creator_age_identity_verified_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
+    creator_age_identity_verified_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
+    creator_age_identity_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    creator_age_identity_verification_note: Mapped[str | None] = mapped_column(
+        Text, nullable=True
     )
 
     refund_policy_text: Mapped[str | None] = mapped_column(Text, nullable=True)

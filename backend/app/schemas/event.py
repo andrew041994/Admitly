@@ -72,6 +72,22 @@ class AdminEventApprovalItemResponse(BaseModel):
     status: str
     created_at: datetime
     published_at: datetime | None
+    creator_user_id: int
+    creator_age_identity_verification_status: str
+    creator_age_identity_verified_user_id: int | None
+    creator_age_identity_verified_by_user_id: int | None
+    creator_age_identity_verified_at: datetime | None
+
+
+class EventCreatorAgeIdentityVerificationRequest(BaseModel):
+    note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 class EventRefundBatchResponse(BaseModel):
@@ -145,6 +161,8 @@ class EventCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_times_and_location(self) -> "EventCreateRequest":
+        if self.cover_image_url is not None:
+            raise ValueError("cover_image_url must be set through the event cover image endpoint.")
         if self.end_at <= self.start_at:
             raise ValueError("end_at must be after start_at.")
         if self.sales_start_at and self.sales_end_at and self.sales_end_at <= self.sales_start_at:
@@ -289,6 +307,12 @@ class OrganizerEventUpdateRequest(BaseModel):
     custom_venue_name: str | None = None
     custom_address_text: str | None = None
     ticket_tiers: list[OrganizerTicketTierUpsertRequest] | None = None
+
+    @model_validator(mode="after")
+    def validate_cover_image_update(self) -> "OrganizerEventUpdateRequest":
+        if self.cover_image_url is not None:
+            raise ValueError("cover_image_url must be set through the event cover image endpoint.")
+        return self
 
 
 class OrganizerEventDashboardItemResponse(BaseModel):

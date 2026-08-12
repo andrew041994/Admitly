@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     push_provider: str = Field(default="noop", alias="PUSH_PROVIDER")
     rate_limit_push_registration_count: int = Field(default=10, alias="RATE_LIMIT_PUSH_REGISTRATION_COUNT")
     rate_limit_push_registration_window_seconds: int = Field(default=300, alias="RATE_LIMIT_PUSH_REGISTRATION_WINDOW_SECONDS")
+    rate_limit_event_cover_upload_count: int = Field(default=10, alias="RATE_LIMIT_EVENT_COVER_UPLOAD_COUNT")
+    rate_limit_event_cover_upload_window_seconds: int = Field(default=300, alias="RATE_LIMIT_EVENT_COVER_UPLOAD_WINDOW_SECONDS")
 
     ticket_public_base_url: str = Field(default="https://admitly.app", alias="TICKET_PUBLIC_BASE_URL")
 

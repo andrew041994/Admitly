@@ -19,7 +19,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
-EXPECTED_MIGRATION_HEAD = "20260811_0039"
+EXPECTED_MIGRATION_HEAD = "20260811_0040"
 
 
 class Reporter:
@@ -174,8 +174,10 @@ def _check_clients(reporter: Reporter) -> None:
         "one or more admin public legal routes are missing",
     )
     reporter.check(
-        "__ADMITLY_RELEASE__" in admin_vite and "VERCEL_GIT_COMMIT_SHA" in admin_vite,
-        "admin build embeds release identity with commit/version fallback",
+        "import.meta.env.VITE_ADMITLY_RELEASE" in admin_vite
+        and "import.meta.env.VITE_ADMITLY_DIST" in admin_vite
+        and "VERCEL_GIT_COMMIT_SHA" in admin_vite,
+        "admin build safely embeds release/dist identity with commit/version fallback",
         "admin release identity build wiring is missing",
     )
 
