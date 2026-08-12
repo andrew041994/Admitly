@@ -9,3 +9,4 @@ require('./src/features/notifications/routing.test.cjs');
 require('./src/navigation/screens/NotificationsScreen.test.cjs');
 require('./src/navigation/screens/EventCoverFlow.test.cjs');
 require('./src/config/observabilityConfig.test.cjs');
+require('./src/navigation/screens/RescheduleAndTicketStatus.test.cjs');

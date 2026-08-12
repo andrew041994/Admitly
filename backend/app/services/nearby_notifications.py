@@ -3,17 +3,24 @@ from __future__ import annotations
 import logging
 import math
 from datetime import timedelta
+from datetime import timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility
+from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, MessageChannel, MessageTemplateType, OrderStatus, TicketStatus
 from app.models.event import Event
+from app.models.event_reschedule import EventReschedule
+from app.models.order import Order
 from app.models.push_dispatch import NotificationJob
+from app.models.ticket import Ticket
 from app.models.user import User
 from app.models.user_notification import NotificationPreference
 from app.services.notification_center import create_user_notification, utc_now
+from app.services.messaging import dispatch_templated_message
+from app.services.event_locations import describe_event_location
 
 logger = logging.getLogger(__name__)
 NEARBY_RADIUS_KM = 20.0
@@ -134,6 +141,123 @@ def _process_nearby_job(db: Session, job: NotificationJob) -> int:
     return created
 
 
+def _format_reschedule_time(value, timezone_name: str) -> str:  # noqa: ANN001
+    try:
+        event_timezone = ZoneInfo(timezone_name or "America/Guyana")
+    except ZoneInfoNotFoundError:
+        event_timezone = ZoneInfo("America/Guyana")
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(event_timezone).strftime("%A, %B %d, %Y at %I:%M %p %Z")
+
+
+def _process_event_reschedule_job(db: Session, job: NotificationJob) -> int:
+    reschedule = db.execute(
+        select(EventReschedule).where(EventReschedule.id == job.related_entity_id)
+    ).scalar_one_or_none()
+    if reschedule is None:
+        job.status = "completed"
+        job.claimed_at = None
+        return 0
+    event = db.get(Event, reschedule.event_id)
+    if event is None:
+        job.status = "completed"
+        job.claimed_at = None
+        return 0
+
+    recipients = db.execute(
+        select(User.id, User.email)
+        .join(Ticket, Ticket.owner_user_id == User.id)
+        .join(Order, Order.id == Ticket.order_id)
+        .where(
+            User.id > job.next_cursor_id,
+            Ticket.event_id == event.id,
+            Ticket.status.in_([TicketStatus.ISSUED, TicketStatus.CHECKED_IN]),
+            Order.status == OrderStatus.COMPLETED,
+            Order.refund_status != "refunded",
+        )
+        .group_by(User.id, User.email)
+        .order_by(User.id.asc())
+        .limit(FANOUT_BATCH_SIZE)
+    ).all()
+
+    previous_time = _format_reschedule_time(reschedule.previous_start_at, event.timezone)
+    new_time = _format_reschedule_time(reschedule.new_start_at, event.timezone)
+    schedule_changed = any((
+        reschedule.previous_start_at != reschedule.new_start_at,
+        reschedule.previous_end_at != reschedule.new_end_at,
+        reschedule.previous_doors_open_at != reschedule.new_doors_open_at,
+        reschedule.previous_sales_start_at != reschedule.new_sales_start_at,
+        reschedule.previous_sales_end_at != reschedule.new_sales_end_at,
+    ))
+    venue_changed = any((
+        reschedule.previous_venue_id != reschedule.new_venue_id,
+        reschedule.previous_custom_venue_name != reschedule.new_custom_venue_name,
+        reschedule.previous_custom_address_text != reschedule.new_custom_address_text,
+        reschedule.previous_latitude != reschedule.new_latitude,
+        reschedule.previous_longitude != reschedule.new_longitude,
+        reschedule.previous_is_location_pinned != reschedule.new_is_location_pinned,
+    ))
+    changes: list[str] = []
+    if schedule_changed:
+        changes.append(f"the schedule changed from {previous_time} to {new_time}")
+    if venue_changed:
+        previous_venue = describe_event_location(
+            db,
+            venue_id=reschedule.previous_venue_id,
+            custom_venue_name=reschedule.previous_custom_venue_name,
+            custom_address_text=reschedule.previous_custom_address_text,
+        )
+        new_venue = describe_event_location(
+            db,
+            venue_id=reschedule.new_venue_id,
+            custom_venue_name=reschedule.new_custom_venue_name,
+            custom_address_text=reschedule.new_custom_address_text,
+        )
+        changes.append(f"the venue changed from {previous_venue} to {new_venue}")
+    change_summary = " and ".join(changes) or "event details changed"
+    body = f"For {event.title}, {change_summary}. Your existing ticket remains valid and no action is required to keep it valid."
+    created = 0
+    for user_id, email in recipients:
+        job.next_cursor_id = user_id
+        dispatch_templated_message(
+            db,
+            template_type=MessageTemplateType.EVENT_DAY_UPDATE,
+            channels=(MessageChannel.EMAIL,),
+            recipient_user_id=user_id,
+            recipient_email=email,
+            related_entity_type="event_reschedule",
+            related_entity_id=reschedule.id,
+            context={
+                "subject": f"Event rescheduled: {event.title}",
+                "body": body,
+                "event_id": str(event.id),
+            },
+            actor_user_id=reschedule.actor_user_id,
+            idempotency_key=f"event-reschedule:{reschedule.id}:user:{user_id}",
+        )
+        _, was_created = create_user_notification(
+            db,
+            user_id=user_id,
+            notification_type="event_rescheduled",
+            title=f"{event.title} updated",
+            body=f"{change_summary.capitalize()}. Your ticket remains valid; no action is required.",
+            dedupe_key=f"event-reschedule:{reschedule.id}:user:{user_id}",
+            route_key="event",
+            route_params={"event_id": event.id},
+            related_entity_type="event_reschedule",
+            related_entity_id=reschedule.id,
+        )
+        created += int(was_created)
+
+    if len(recipients) < FANOUT_BATCH_SIZE:
+        job.status = "completed"
+    else:
+        job.status = "pending"
+        job.run_at = utc_now()
+    job.claimed_at = None
+    return created
+
+
 def process_notification_jobs(db: Session, *, limit: int = 10) -> dict[str, int]:
     now = utc_now()
     stale_before = now - timedelta(minutes=10)
@@ -161,6 +285,8 @@ def process_notification_jobs(db: Session, *, limit: int = 10) -> dict[str, int]
         try:
             if job.job_type == "nearby_event":
                 summary["notifications_created"] += _process_nearby_job(db, job)
+            elif job.job_type == "event_reschedule":
+                summary["notifications_created"] += _process_event_reschedule_job(db, job)
             else:
                 job.status = "failed"
                 job.error_code = "unknown_job_type"

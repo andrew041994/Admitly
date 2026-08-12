@@ -45,6 +45,8 @@ from app.schemas.event import (
     EventDiscoveryItemResponse,
     EventPriceSummaryResponse,
     EventRefundBatchResponse,
+    EventRescheduleRequest,
+    EventRescheduleResponse,
     EventResponse,
     EventDiscoveryTicketTierResponse,
     MyEventItemResponse,
@@ -76,7 +78,7 @@ from app.services.events import (
     get_event_refund_batch,
     list_event_refund_batches,
 )
-from app.services.venues import resolve_or_create_venue
+from app.services.venues import get_venue_address_text, resolve_or_create_venue
 from app.services.organizer_events import (
     OrganizerEventAuthorizationError,
     OrganizerEventNotFoundError,
@@ -88,6 +90,13 @@ from app.services.organizer_events import (
     update_event_and_tiers,
 )
 from app.services.nearby_notifications import enqueue_nearby_event_after_commit
+from app.services.event_reschedules import (
+    EventRescheduleAuthorizationError,
+    EventRescheduleConflictError,
+    EventRescheduleNotFoundError,
+    EventRescheduleValidationError,
+    reschedule_event,
+)
 from app.services.reporting import get_event_reporting_summary, get_event_tier_summary
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -972,8 +981,14 @@ def _to_organizer_event_detail(event: Event) -> OrganizerEventDetailResponse:
         approval_status=event.approval_status.value,
         is_publicly_visible=_is_event_publicly_visible(event),
         visibility_state=_get_visibility_state(event),
+        venue_id=event.venue_id,
+        venue_name=event.venue.name if event.venue else None,
+        venue_address_text=get_venue_address_text(event.venue) if event.venue else None,
         custom_venue_name=event.custom_venue_name,
         custom_address_text=event.custom_address_text,
+        latitude=str(event.latitude) if event.latitude is not None else None,
+        longitude=str(event.longitude) if event.longitude is not None else None,
+        is_location_pinned=bool(event.is_location_pinned),
         ticket_tiers=[
             EventCreateTicketTierResponse(
                 id=tier.id,
@@ -1091,6 +1106,59 @@ def patch_organizer_event(
     except OrganizerEventValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": exc.code, "errors": exc.errors}) from exc
     return _to_organizer_event_detail(event)
+
+
+@router.post("/organizer/events/{event_id}/reschedule", response_model=EventRescheduleResponse)
+def reschedule_organizer_event(
+    event_id: int,
+    payload: EventRescheduleRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> EventRescheduleResponse:
+    try:
+        _, row, notifications_required = reschedule_event(
+            db,
+            event_id=event_id,
+            actor_user_id=user_id,
+            payload=payload,
+        )
+        db.commit()
+    except EventRescheduleNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except EventRescheduleAuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except EventRescheduleConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except EventRescheduleValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return EventRescheduleResponse(
+        id=row.id,
+        event_id=row.event_id,
+        actor_user_id=row.actor_user_id,
+        previous_start_at=row.previous_start_at,
+        previous_end_at=row.previous_end_at,
+        previous_doors_open_at=row.previous_doors_open_at,
+        new_start_at=row.new_start_at,
+        new_end_at=row.new_end_at,
+        new_doors_open_at=row.new_doors_open_at,
+        sales_start_at=row.new_sales_start_at,
+        sales_end_at=row.new_sales_end_at,
+        previous_venue_id=row.previous_venue_id,
+        new_venue_id=row.new_venue_id,
+        previous_custom_venue_name=row.previous_custom_venue_name,
+        new_custom_venue_name=row.new_custom_venue_name,
+        previous_custom_address_text=row.previous_custom_address_text,
+        new_custom_address_text=row.new_custom_address_text,
+        previous_latitude=str(row.previous_latitude) if row.previous_latitude is not None else None,
+        new_latitude=str(row.new_latitude) if row.new_latitude is not None else None,
+        previous_longitude=str(row.previous_longitude) if row.previous_longitude is not None else None,
+        new_longitude=str(row.new_longitude) if row.new_longitude is not None else None,
+        previous_is_location_pinned=row.previous_is_location_pinned,
+        new_is_location_pinned=row.new_is_location_pinned,
+        reason=row.reason,
+        rescheduled_at=row.rescheduled_at,
+        notifications_required=notifications_required,
+    )
 
 
 @router.post("/organizer/events/{event_id}/publish", response_model=OrganizerEventDetailResponse)

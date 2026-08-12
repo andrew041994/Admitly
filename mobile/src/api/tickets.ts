@@ -6,7 +6,7 @@ export type WalletTicketCard = {
   manual_code: string;
   manual_code_display: string;
   ticket_status: string;
-  display_status: 'active' | 'used' | 'invalid' | string;
+  display_status: 'active' | 'used' | 'expired' | 'refunded';
   is_valid_for_entry: boolean;
   can_display_entry_code: boolean;
   can_transfer: boolean;

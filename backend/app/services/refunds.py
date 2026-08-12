@@ -106,13 +106,13 @@ def validate_refund_request(
     reason: RefundReason,
     admin_override: bool = False,
 ) -> None:
-    remaining = get_order_remaining_refundable(db, order=order)
-    if requested_amount <= Decimal("0.00"):
-        raise RefundValidationError("Refund amount must be greater than zero.")
-    if remaining <= Decimal("0.00"):
+    total_refunded = get_order_total_refunded(db, order_id=order.id)
+    if total_refunded >= Decimal(order.total_amount):
         raise RefundValidationError("Order is already fully refunded.")
-    if requested_amount > remaining:
-        raise RefundValidationError("Refund amount exceeds remaining refundable amount.")
+    if total_refunded > Decimal("0.00"):
+        raise RefundValidationError("Historical partial refund exists; full-order refund requires manual reconciliation.")
+    if requested_amount != Decimal(order.total_amount):
+        raise RefundValidationError("Admitly supports full-order refunds only.")
     if order.is_comp or Decimal(order.total_amount) <= Decimal("0.00"):
         raise RefundValidationError("Comped/free orders are not refundable.")
     if order.status != OrderStatus.COMPLETED or order.payment_verification_status != "verified":
@@ -131,7 +131,6 @@ def request_refund(
     user_id: int,
     order_id: int,
     reason: RefundReason,
-    amount: Decimal | None,
     note: str | None,
 ) -> Refund:
     order = (
@@ -143,7 +142,7 @@ def request_refund(
         raise RefundAuthorizationError("Order does not belong to the authenticated user.")
     db.refresh(order, attribute_names=["event"])
 
-    requested_amount = amount if amount is not None else get_order_remaining_refundable(db, order=order)
+    requested_amount = get_order_refundable_amount(order)
     validate_refund_request(db, order=order, requested_amount=requested_amount, reason=reason)
 
     refund = Refund(
@@ -255,7 +254,6 @@ def process_refund_for_order(
     order_id: int,
     actor_user_id: int,
     reason: RefundReason,
-    amount: Decimal | None = None,
     admin_notes: str | None = None,
 ) -> Refund:
     _assert_admin(db, actor_user_id=actor_user_id)
@@ -269,7 +267,7 @@ def process_refund_for_order(
         raise RefundNotFoundError("Order not found.")
     db.refresh(order, attribute_names=["event", "tickets"])
 
-    requested_amount = amount if amount is not None else get_order_remaining_refundable(db, order=order)
+    requested_amount = get_order_refundable_amount(order)
     validate_refund_request(
         db,
         order=order,
@@ -303,7 +301,6 @@ def approve_refund(
     *,
     refund_id: int,
     actor_user_id: int,
-    amount: Decimal | None,
     admin_notes: str | None,
 ) -> Refund:
     _assert_admin(db, actor_user_id=actor_user_id)
@@ -320,10 +317,6 @@ def approve_refund(
         .scalar_one()
     )
     db.refresh(order, attribute_names=["event", "tickets"])
-
-    if amount is not None:
-        validate_refund_request(db, order=order, requested_amount=amount, reason=refund.reason, admin_override=True)
-        refund.amount = amount
 
     refund.status = RefundStatus.APPROVED
     refund.approved_by_user_id = actor_user_id
@@ -394,7 +387,7 @@ def resolve_dispute(
     actor_user_id: int,
     resolution: str | None,
     admin_notes: str | None,
-    refund_amount: Decimal | None,
+    refund_full_order: bool,
     refund_reason: RefundReason | None,
 ) -> Dispute:
     _assert_admin(db, actor_user_id=actor_user_id)
@@ -411,7 +404,7 @@ def resolve_dispute(
     dispute.resolved_at = _now()
 
     order: Order | None = None
-    if refund_amount is not None:
+    if refund_full_order:
         order = (
             db.execute(
                 select(Order).where(Order.id == dispute.order_id).with_for_update()
@@ -419,20 +412,14 @@ def resolve_dispute(
             .scalar_one()
         )
         reason = refund_reason or RefundReason.OTHER
-        refund = Refund(
-            order_id=dispute.order_id,
-            user_id=dispute.user_id,
-            amount=refund_amount,
-            reason=reason,
-            status=RefundStatus.APPROVED,
-            approved_by_user_id=actor_user_id,
-            admin_notes="Dispute resolution refund",
-            payment_provider=order.payment_provider,
-        )
-        db.add(refund)
-        db.flush()
         db.refresh(order, attribute_names=["event", "tickets"])
-        _process_refund_locked(db, refund=refund, order=order, actor_user_id=actor_user_id, admin_notes=admin_notes)
+        process_refund_for_order(
+            db,
+            order_id=order.id,
+            actor_user_id=actor_user_id,
+            reason=reason,
+            admin_notes=admin_notes or "Dispute resolution full-order refund",
+        )
 
     db.flush()
     notify_dispute_resolved(db, dispute=dispute, order=order)

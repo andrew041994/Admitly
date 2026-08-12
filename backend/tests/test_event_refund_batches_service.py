@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
 from app.models import Event, FinancialEntry, OrganizerBalanceAdjustment, OrganizerProfile, Order, Refund, User, Venue
-from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus, PayoutStatus, RefundReason
+from app.models.enums import EventApprovalStatus, EventStatus, EventVisibility, OrderStatus, PayoutStatus, RefundReason, RefundStatus
 from app.services.events import (
     EventAuthorizationError,
     cancel_event,
@@ -95,20 +95,12 @@ def _seed_event_with_orders(db: Session):
     db.add_all([paid, partial, comped, paid_out])
     db.flush()
 
-    process_refund_for_order(
-        db,
-        order_id=partial.id,
-        actor_user_id=admin.id,
-        reason=RefundReason.USER_REQUEST,
-        amount=Decimal("30.00"),
-        admin_notes="partial",
-    )
+    db.add(Refund(order_id=partial.id, user_id=buyer.id, amount=Decimal("30.00"), reason=RefundReason.USER_REQUEST, status=RefundStatus.PROCESSED, admin_notes="historical partial"))
     process_refund_for_order(
         db,
         order_id=paid.id,
         actor_user_id=admin.id,
         reason=RefundReason.USER_REQUEST,
-        amount=Decimal("100.00"),
         admin_notes="full",
     )
     db.commit()
@@ -141,7 +133,7 @@ def test_organizer_can_cancel_owned_event_and_outsider_cannot(db_session: Sessio
     assert batch.event_id == event.id
 
 
-def test_admin_can_cancel_any_event_and_auto_refunds_only_remaining_amounts(db_session: Session) -> None:
+def test_admin_cancellation_skips_historical_partial_instead_of_issuing_another_partial(db_session: Session) -> None:
     data = _seed_event_with_orders(db_session)
     event, batch = cancel_event(db_session, event_id=data["event"].id, actor_user_id=data["admin"].id)
     assert event.status == EventStatus.CANCELLED
@@ -149,7 +141,7 @@ def test_admin_can_cancel_any_event_and_auto_refunds_only_remaining_amounts(db_s
 
     refunds = db_session.execute(select(Refund).where(Refund.order_id == data["partial"].id)).scalars().all()
     total_partial_refunded = sum(Decimal(ref.amount) for ref in refunds)
-    assert total_partial_refunded == Decimal("80.00")
+    assert total_partial_refunded == Decimal("30.00")
 
     comp_refunds = db_session.execute(select(Refund).where(Refund.order_id == data["comped"].id)).scalars().all()
     assert comp_refunds == []

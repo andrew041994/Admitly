@@ -87,15 +87,15 @@ Any duplicate reference, fulfillment mismatch, unexpected completed order, or re
 
 ## Refund approval and rejection
 
-1. Identify the refund, internal/public order reference, requester/current eligible owner, event, and original payment. Verify completed/paid status, payment authenticity, provider/reference, amount/currency, remaining refundable amount, prior refunds/disputes, transfer/check-in/void state, event timing/policy, payout status, and applicable approved policy.
-2. Calculate the maximum remaining refundable amount from processed refunds and the order total. Do not include a pending/approved amount twice, approve above remaining value, or silently assume fees are refundable.
+1. Identify the refund, internal/public order reference, requester/current eligible owner, event, and original payment. Verify completed/paid status, payment authenticity, provider/reference, full order amount/currency, prior refunds/disputes, transfer/check-in/void state, event timing/policy, payout status, and applicable approved policy.
+2. Confirm that the request is for the full order total. Admitly does not support partial or per-ticket refunds. Any historical partial refund blocks automated processing and requires manual accounting/reconciliation review; do not issue another partial amount to reach the total.
 3. Write the support-case reason before the action: decision, policy basis, evidence, exact amount/currency, provider state, ticket effects, post-payout adjustment impact, and follow-up owner. The current refund approve/reject services do not uniformly create a separate `admin_action_audits` row, so the support note is mandatory.
 4. **Approve:** use only the supported admin refund endpoint. Approval is not provider completion. For MMG, the repository leaves it approved and awaiting provider confirmation; do not mark it processed while live provider calls/verification are unavailable.
 5. **Reject:** require a specific rejection reason, use the supported endpoint, verify status is `rejected`, and communicate only the approved policy basis. Never reject to conceal a reconciliation discrepancy.
 6. **Provider confirmation:** require authoritative provider evidence and the unique provider refund reference. The confirm action is audited and row-locked, but a typed reference is not independent provider verification. Do not use it for MMG until official lookup/status validation exists.
 7. After verified completion, confirm financial reversal, order refund state, ticket effects, post-payout adjustment if applicable, provider reference uniqueness, and reconciliation totals. A checked-in ticket or ambiguous transfer/refund claim requires escalation rather than an automatic state change.
 
-Record approval/rejection actor, UTC time, reason, case ID, refund/order IDs, amount/currency, policy/evidence location, original and final statuses, provider reference fingerprint or restricted evidence link, downstream ticket/ledger state, and notification decision. Never paste a full provider payload into the audit note.
+Record approval/rejection actor, UTC time, reason, case ID, refund/order IDs, full order amount/currency, policy/evidence location, original and final statuses, provider reference fingerprint or restricted evidence link, downstream ticket/ledger state, and notification decision. Never paste a full provider payload into the audit note.
 
 ## Ambiguous payment or refund
 

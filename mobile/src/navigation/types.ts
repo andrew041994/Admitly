@@ -24,4 +24,5 @@ export type AppStackParamList = {
   MyEvents: undefined;
   StaffManagement: undefined;
   OrganizerDashboard: { eventId: number };
+  RescheduleEvent: { eventId: number };
 };

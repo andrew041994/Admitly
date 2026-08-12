@@ -28,6 +28,7 @@ MIN_POLL_INTERVAL_SECONDS = 15
 DEFAULT_MAX_CONSECUTIVE_DB_FAILURES = 5
 SUPPORTED_PUSH_PROVIDERS = {"noop", "mock", "expo"}
 REQUIRED_NOTIFICATION_TABLES = (
+    "event_reschedules",
     "event_reminder_logs",
     "notification_jobs",
     "push_dispatches",

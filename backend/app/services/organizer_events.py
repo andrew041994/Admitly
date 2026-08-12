@@ -6,13 +6,15 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.enums import EventStatus, OrderStatus
+from app.models.enums import EventApprovalStatus, EventStatus, OrderStatus
 from app.models.event import Event
 from app.models.order import Order
 from app.models.order_item import OrderItem
 from app.models.organizer_profile import OrganizerProfile
 from app.models.ticket_tier import TicketTier
 from app.services.events import _build_ticket_tier_code
+from app.services.event_locations import EventLocationValidationError, validate_event_location
+from app.services.event_permissions import EventPermissionAction, has_event_permission
 from app.services.ticket_holds import get_guyana_now
 
 
@@ -49,8 +51,7 @@ def get_owned_event_for_update(db: Session, *, actor_user_id: int, event_id: int
     event = db.execute(select(Event).where(Event.id == event_id).with_for_update()).scalar_one_or_none()
     if event is None:
         raise OrganizerEventNotFoundError("Event not found.")
-    owner_profile = _get_owner_profile(db, user_id=actor_user_id)
-    if owner_profile is None or owner_profile.id != event.organizer_id:
+    if not has_event_permission(db, user_id=actor_user_id, event=event, action=EventPermissionAction.EDIT_EVENT):
         raise OrganizerEventAuthorizationError("Not authorized to manage this event.")
     db.refresh(event, attribute_names=["ticket_tiers", "venue"])
     return event
@@ -68,8 +69,7 @@ def get_owned_event(db: Session, *, actor_user_id: int, event_id: int) -> Event:
     )
     if event is None:
         raise OrganizerEventNotFoundError("Event not found.")
-    owner_profile = _get_owner_profile(db, user_id=actor_user_id)
-    if owner_profile is None or owner_profile.id != event.organizer_id:
+    if not has_event_permission(db, user_id=actor_user_id, event=event, action=EventPermissionAction.EDIT_EVENT):
         raise OrganizerEventAuthorizationError("Not authorized to manage this event.")
     return event
 
@@ -148,6 +148,22 @@ def calculate_event_metrics(db: Session, *, event_id: int) -> OrganizerDashboard
 
 def update_event_and_tiers(db: Session, *, actor_user_id: int, event_id: int, payload) -> Event:  # noqa: ANN001
     event = get_owned_event_for_update(db, actor_user_id=actor_user_id, event_id=event_id)
+    schedule_fields = {"start_at", "end_at", "doors_open_at", "sales_start_at", "sales_end_at"}
+    venue_fields = {"venue_id", "custom_venue_name", "custom_address_text", "latitude", "longitude", "is_location_pinned"}
+    if event.approval_status == EventApprovalStatus.APPROVED:
+        changed_material_fields = [
+            field
+            for field in (schedule_fields | venue_fields).intersection(payload.model_fields_set)
+            if getattr(payload, field) != getattr(event, field)
+        ]
+        if changed_material_fields:
+            raise OrganizerEventValidationError(
+                code="material_change_required",
+                errors=[{
+                    "field": field,
+                    "message": "Approved event schedules and venues must be changed through Reschedule or Change Venue.",
+                } for field in sorted(changed_material_fields)],
+            )
     for field in [
         "title",
         "short_description",
@@ -159,12 +175,39 @@ def update_event_and_tiers(db: Session, *, actor_user_id: int, event_id: int, pa
         "sales_start_at",
         "sales_end_at",
         "visibility",
-        "custom_venue_name",
-        "custom_address_text",
     ]:
         value = getattr(payload, field, None)
         if value is not None:
             setattr(event, field, value)
+
+    if venue_fields.intersection(payload.model_fields_set):
+        requested_venue_id = payload.venue_id if "venue_id" in payload.model_fields_set else event.venue_id
+        requested_name = payload.custom_venue_name if "custom_venue_name" in payload.model_fields_set else event.custom_venue_name
+        requested_address = payload.custom_address_text if "custom_address_text" in payload.model_fields_set else event.custom_address_text
+        if "venue_id" in payload.model_fields_set and payload.venue_id is not None:
+            requested_name = None
+            requested_address = None
+        elif "custom_venue_name" in payload.model_fields_set and payload.custom_venue_name:
+            requested_venue_id = None
+        try:
+            location, venue = validate_event_location(
+                db,
+                venue_id=requested_venue_id,
+                custom_venue_name=requested_name,
+                custom_address_text=requested_address,
+                latitude=payload.latitude if "latitude" in payload.model_fields_set else event.latitude,
+                longitude=payload.longitude if "longitude" in payload.model_fields_set else event.longitude,
+                is_location_pinned=payload.is_location_pinned if "is_location_pinned" in payload.model_fields_set else bool(event.is_location_pinned),
+            )
+        except EventLocationValidationError as exc:
+            raise OrganizerEventValidationError(code="invalid_event_location", errors=[{"field": "venue", "message": str(exc)}]) from exc
+        event.venue_id = location.venue_id
+        event.venue = venue
+        event.custom_venue_name = location.custom_venue_name
+        event.custom_address_text = location.custom_address_text
+        event.latitude = location.latitude
+        event.longitude = location.longitude
+        event.is_location_pinned = location.is_location_pinned
 
     if event.end_at <= event.start_at:
         raise OrganizerEventValidationError(code="invalid_event", errors=[{"field": "end_at", "message": "end_at must be after start_at."}])

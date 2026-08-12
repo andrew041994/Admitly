@@ -31,6 +31,7 @@ import { ProfileScreen } from './screens/ProfileScreen';
 import { StaffManagementScreen } from './screens/StaffManagementScreen';
 import { StaffEventsScreen } from './screens/StaffEventsScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
+import { RescheduleEventScreen } from './screens/RescheduleEventScreen';
 import { registerPushTokenIfPermitted } from '../features/notifications/pushRegistration';
 import { getNotificationDestination } from '../features/notifications/routing';
 
@@ -289,7 +290,10 @@ function SignedInNavigator() {
       </AppStack.Screen>
       <AppStack.Screen name="StaffManagement" component={StaffManagementScreen} options={{ title: 'Staff Management' }} />
       <AppStack.Screen name="OrganizerDashboard" options={{ title: 'Event Dashboard' }}>
-        {({ route }) => <OrganizerDashboardScreen eventId={route.params.eventId} />}
+        {({ route, navigation }) => <OrganizerDashboardScreen eventId={route.params.eventId} onOpenReschedule={() => navigation.navigate('RescheduleEvent', { eventId: route.params.eventId })} />}
+      </AppStack.Screen>
+      <AppStack.Screen name="RescheduleEvent" options={{ title: 'Reschedule or Change Venue' }}>
+        {({ route, navigation }) => <RescheduleEventScreen eventId={route.params.eventId} onCompleted={() => navigation.replace('OrganizerDashboard', { eventId: route.params.eventId })} />}
       </AppStack.Screen>
     </AppStack.Navigator>
   );

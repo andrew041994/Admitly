@@ -20,6 +20,7 @@ ALLOWED_NOTIFICATION_TYPES = {
     "ticket_purchase_completed",
     "nearby_event_created",
     "event_starting_soon",
+    "event_rescheduled",
 }
 ALLOWED_ROUTE_KEYS = {"ticket", "transfers", "wallet", "event"}
 TRANSACTIONAL_TYPES = {
@@ -28,6 +29,7 @@ TRANSACTIONAL_TYPES = {
     "ticket_transfer_declined",
     "ticket_transfer_canceled",
     "ticket_purchase_completed",
+    "event_rescheduled",
 }
 
 

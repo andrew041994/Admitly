@@ -1,17 +1,19 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RefundRequestCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     order_id: int
     reason: str
-    amount: float | None = None
     note: str | None = None
 
 
 class RefundApproveRequest(BaseModel):
-    amount: float | None = None
+    model_config = ConfigDict(extra="forbid")
+
     admin_notes: str | None = None
 
 
@@ -47,9 +49,11 @@ class DisputeCreateRequest(BaseModel):
 
 
 class DisputeResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     resolution: str | None = None
     admin_notes: str | None = None
-    refund_amount: float | None = None
+    refund_full_order: bool = False
     refund_reason: str | None = None
 
 

@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -91,7 +89,6 @@ def create_refund_request(
             user_id=user_id,
             order_id=payload.order_id,
             reason=reason,
-            amount=Decimal(str(payload.amount)) if payload.amount is not None else None,
             note=payload.note,
         )
         db.commit()
@@ -165,7 +162,6 @@ def admin_approve_refund(
             db,
             refund_id=refund_id,
             actor_user_id=user_id,
-            amount=Decimal(str(payload.amount)) if payload.amount is not None else None,
             admin_notes=payload.admin_notes,
         )
         db.commit()
@@ -263,7 +259,7 @@ def admin_resolve_dispute(
             actor_user_id=user_id,
             resolution=payload.resolution,
             admin_notes=payload.admin_notes,
-            refund_amount=Decimal(str(payload.refund_amount)) if payload.refund_amount is not None else None,
+            refund_full_order=payload.refund_full_order,
             refund_reason=parsed_reason,
         )
         db.commit()

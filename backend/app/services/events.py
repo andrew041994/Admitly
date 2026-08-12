@@ -210,7 +210,6 @@ def process_event_refund_batch_chunk(
                 order_id=order.id,
                 actor_user_id=actor_user_id,
                 reason=RefundReason.EVENT_CANCELED,
-                amount=remaining,
                 admin_notes=f"Auto-refund for cancelled event #{batch.event_id}",
             )
             batch.successful_refunds += 1

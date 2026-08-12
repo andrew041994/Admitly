@@ -4,8 +4,9 @@ import { FlatList, StyleSheet, Text, View } from 'react-native';
 import { ApiError } from '../../api/client';
 import { getEventDashboard, getOrganizerEvent, OrganizerEventDetail } from '../../api/organizer';
 import { theme } from '../../theme';
+import { ThemedButton } from '../../components/ThemedButton';
 
-export function OrganizerDashboardScreen({ eventId }: { eventId: number }) {
+export function OrganizerDashboardScreen({ eventId, onOpenReschedule }: { eventId: number; onOpenReschedule: () => void }) {
   const [dashboard, setDashboard] = useState<Awaited<ReturnType<typeof getEventDashboard>> | null>(null);
   const [eventDetail, setEventDetail] = useState<OrganizerEventDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +27,7 @@ export function OrganizerDashboardScreen({ eventId }: { eventId: number }) {
       {eventDetail?.status === 'published' && eventDetail.approval_status !== 'approved' ? (
         <Text style={styles.notice}>This event is published but will not appear in discovery until approved.</Text>
       ) : null}
+      {eventDetail?.approval_status === 'approved' ? <ThemedButton label="Reschedule or Change Venue" variant="secondary" onPress={onOpenReschedule} /> : null}
       <Text style={styles.metric}>Tickets sold: {dashboard.tickets_sold}</Text>
       <Text style={styles.metric}>Gross revenue: {dashboard.gross_revenue.toFixed(2)}</Text>
       <Text style={styles.metric}>Admitted: {dashboard.attendees_admitted}</Text>

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -38,6 +39,7 @@ from app.services.refunds import (
     resolve_dispute,
     submit_dispute,
 )
+from app.schemas.refunds import DisputeResolveRequest, RefundApproveRequest, RefundRequestCreate
 
 
 
@@ -129,7 +131,6 @@ def test_refund_request_permissions_and_limits(db_session: Session) -> None:
         user_id=data["buyer"].id,
         order_id=data["paid_order"].id,
         reason=RefundReason.USER_REQUEST,
-        amount=None,
         note=None,
     )
     assert refund.status == RefundStatus.PENDING
@@ -141,34 +142,32 @@ def test_refund_request_permissions_and_limits(db_session: Session) -> None:
             user_id=data["other_buyer"].id,
             order_id=data["paid_order"].id,
             reason=RefundReason.USER_REQUEST,
-            amount=Decimal("10.00"),
             note=None,
         )
-
     with pytest.raises(RefundValidationError):
         request_refund(
             db_session,
             user_id=data["buyer"].id,
             order_id=data["comp_order"].id,
             reason=RefundReason.USER_REQUEST,
-            amount=Decimal("10.00"),
             note=None,
         )
 
 
-def test_partial_refunds_cannot_exceed_remaining(db_session: Session) -> None:
+def test_partial_refund_request_shapes_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        RefundRequestCreate(order_id=1, reason="event_canceled", amount=10.00)
+    with pytest.raises(ValidationError):
+        RefundApproveRequest(amount=10.00)
+    with pytest.raises(ValidationError):
+        DisputeResolveRequest(refund_amount=10.00)
+
+
+def test_historical_partial_refund_blocks_new_refund_for_manual_reconciliation(db_session: Session) -> None:
     data = _seed(db_session)
-
-    first = request_refund(
-        db_session,
-        user_id=data["buyer"].id,
-        order_id=data["paid_order"].id,
-        reason=RefundReason.USER_REQUEST,
-        amount=Decimal("40.00"),
-        note=None,
-    )
-    approve_refund(db_session, refund_id=first.id, actor_user_id=data["admin"].id, amount=None, admin_notes="ok")
-
+    from app.models import Refund
+    db_session.add(Refund(order_id=data["paid_order"].id, user_id=data["buyer"].id, amount=Decimal("40.00"), reason=RefundReason.USER_REQUEST, status=RefundStatus.PROCESSED))
+    db_session.flush()
     remaining = get_order_remaining_refundable(db_session, order=data["paid_order"])
     assert remaining == Decimal("60.00")
 
@@ -178,7 +177,6 @@ def test_partial_refunds_cannot_exceed_remaining(db_session: Session) -> None:
             user_id=data["buyer"].id,
             order_id=data["paid_order"].id,
             reason=RefundReason.USER_REQUEST,
-            amount=Decimal("70.00"),
             note=None,
         )
 
@@ -191,25 +189,23 @@ def test_approve_refund_creates_financial_entries_and_reject_keeps_accounting_cl
         user_id=data["buyer"].id,
         order_id=data["paid_order"].id,
         reason=RefundReason.USER_REQUEST,
-        amount=Decimal("25.00"),
         note=None,
     )
-    processed = approve_refund(db_session, refund_id=refund.id, actor_user_id=data["admin"].id, amount=None, admin_notes="approved")
-    assert processed.status == RefundStatus.PROCESSED
-
-    entries = db_session.execute(select(FinancialEntry).where(FinancialEntry.refund_id == processed.id)).scalars().all()
-    assert len(entries) == 1
-    assert Decimal(entries[0].amount) == Decimal("-25.00")
-
     reject_candidate = request_refund(
         db_session,
         user_id=data["buyer"].id,
         order_id=data["paid_order"].id,
         reason=RefundReason.OTHER,
-        amount=Decimal("5.00"),
         note=None,
     )
     reject_refund(db_session, refund_id=reject_candidate.id, actor_user_id=data["admin"].id, admin_notes="denied")
+    processed = approve_refund(db_session, refund_id=refund.id, actor_user_id=data["admin"].id, admin_notes="approved")
+    assert processed.status == RefundStatus.PROCESSED
+
+    entries = db_session.execute(select(FinancialEntry).where(FinancialEntry.refund_id == processed.id)).scalars().all()
+    assert len(entries) == 1
+    assert Decimal(entries[0].amount) == Decimal("-100.00")
+
     rejected_entries = db_session.execute(select(FinancialEntry).where(FinancialEntry.refund_id == reject_candidate.id)).scalars().all()
     assert rejected_entries == []
 
@@ -222,14 +218,13 @@ def test_paid_out_refund_creates_balance_offset(db_session: Session) -> None:
         user_id=data["buyer"].id,
         order_id=data["paid_out_order"].id,
         reason=RefundReason.FRAUD,
-        amount=Decimal("10.00"),
         note=None,
     )
-    approve_refund(db_session, refund_id=refund.id, actor_user_id=data["admin"].id, amount=None, admin_notes="fraud")
+    approve_refund(db_session, refund_id=refund.id, actor_user_id=data["admin"].id, admin_notes="fraud")
 
     adjustments = db_session.execute(select(OrganizerBalanceAdjustment).where(OrganizerBalanceAdjustment.refund_id == refund.id)).scalars().all()
     assert len(adjustments) == 1
-    assert Decimal(adjustments[0].amount) == Decimal("-10.00")
+    assert Decimal(adjustments[0].amount) == Decimal("-60.00")
 
 
 def test_mmg_refund_requires_separate_provider_confirmation(db_session: Session) -> None:
@@ -245,14 +240,12 @@ def test_mmg_refund_requires_separate_provider_confirmation(db_session: Session)
         user_id=data["buyer"].id,
         order_id=order.id,
         reason=RefundReason.USER_REQUEST,
-        amount=Decimal("25.00"),
         note=None,
     )
     approved = approve_refund(
         db_session,
         refund_id=refund.id,
         actor_user_id=data["admin"].id,
-        amount=None,
         admin_notes="Approved pending MMG confirmation",
     )
 
@@ -302,8 +295,8 @@ def test_dispute_creation_uniqueness_and_resolve_with_refund(db_session: Session
         dispute_id=dispute.id,
         actor_user_id=data["admin"].id,
         resolution="approved",
-        admin_notes="resolve with partial refund",
-        refund_amount=Decimal("15.00"),
+        admin_notes="resolve with full-order refund",
+        refund_full_order=True,
         refund_reason=RefundReason.DUPLICATE_PURCHASE,
     )
     assert resolved.status == DisputeStatus.RESOLVED
@@ -331,7 +324,7 @@ def test_dispute_resolution_triggers_central_notification(db_session: Session, m
         actor_user_id=data["admin"].id,
         resolution="resolved",
         admin_notes="done",
-        refund_amount=None,
+        refund_full_order=False,
         refund_reason=None,
     )
     assert called["count"] == 1

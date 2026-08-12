@@ -28,8 +28,15 @@ function formatDate(iso: string): string {
 function statusLabel(status: string): string {
   if (status === 'active') return 'Active';
   if (status === 'used') return 'Used';
-  if (status === 'invalid') return 'Invalid';
-  return status;
+  if (status === 'expired') return 'Expired';
+  return 'Refunded';
+}
+
+function statusStyle(status: WalletTicketCard['display_status']) {
+  if (status === 'active') return styles.badgeActive;
+  if (status === 'used') return styles.badgeUsed;
+  if (status === 'refunded') return styles.badgeRefunded;
+  return styles.badgeMuted;
 }
 
 export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
@@ -81,8 +88,8 @@ export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
   }, [loadTickets]);
 
   const grouped = useMemo(() => ({
-    upcoming: tickets.filter((t) => t.event.is_upcoming),
-    past: tickets.filter((t) => !t.event.is_upcoming),
+    current: tickets.filter((t) => t.display_status === 'active'),
+    history: tickets.filter((t) => t.display_status !== 'active'),
   }), [tickets]);
 
   if (loading) {
@@ -107,7 +114,7 @@ export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
   return (
     <Screen padded={false}>
       <FlatList
-        data={[{ key: 'Upcoming', items: grouped.upcoming }, { key: 'Past', items: grouped.past }]}
+        data={[{ key: 'Current', items: grouped.current }, { key: 'History', items: grouped.history }]}
         keyExtractor={(item) => item.key}
         contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadTickets(true)} tintColor={theme.colors.primary} />}
@@ -137,10 +144,10 @@ export function MyTicketsScreen({ onOpenTicket }: MyTicketsScreenProps) {
             {item.items.length > 0 && <Text style={styles.sectionTitle}>{item.key}</Text>}
             {item.items.map((ticket) => (
               <Pressable key={ticket.id} style={styles.card} onPress={() => onOpenTicket(ticket.id)}>
-                <View style={styles.row}><Text style={styles.title}>{ticket.event.title}</Text><Text style={[styles.badge, ticket.display_status === 'active' ? styles.badgeActive : styles.badgeMuted]}>{statusLabel(ticket.display_status)}</Text></View>
+                <View style={styles.row}><Text style={styles.title}>{ticket.event.title}</Text><Text accessibilityLabel={`Ticket status: ${statusLabel(ticket.display_status)}`} style={[styles.badge, statusStyle(ticket.display_status)]}>{statusLabel(ticket.display_status)}</Text></View>
                 <Text style={styles.meta}>{formatDate(ticket.event.start_at)}</Text>
                 <Text style={styles.meta}>{ticket.venue.name ?? ticket.venue.address_summary ?? 'Venue TBA'}</Text>
-                <Text style={styles.meta}>{ticket.ticket_tier_name} • {ticket.manual_code_display}</Text>
+                <Text style={styles.meta}>{ticket.can_display_entry_code ? `${ticket.ticket_tier_name} • ${ticket.manual_code_display}` : ticket.ticket_tier_name}</Text>
                 <Text style={styles.link}>View Ticket</Text>
               </Pressable>
             ))}
@@ -161,6 +168,8 @@ const styles = StyleSheet.create({
   link: { color: theme.colors.primary, fontWeight: '600', marginTop: theme.spacing.xs },
   badge: { borderRadius: 999, paddingHorizontal: theme.spacing.sm, paddingVertical: 2, fontSize: theme.typography.caption, overflow: 'hidden' },
   badgeActive: { backgroundColor: '#1f2c13', color: '#98e067' },
+  badgeUsed: { backgroundColor: '#16344a', color: '#8fd5ff' },
+  badgeRefunded: { backgroundColor: '#3b2610', color: '#ffc46b' },
   badgeMuted: { backgroundColor: '#2a2a2a', color: theme.colors.textSecondary },
   stateWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: theme.spacing.md, padding: theme.spacing.lg },
   stateTitle: { color: theme.colors.textPrimary, fontWeight: '700', fontSize: theme.typography.heading },

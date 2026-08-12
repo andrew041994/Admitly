@@ -90,11 +90,11 @@ See the dedicated decision procedure below. Do not manually reassign ownership.
 
 ## Workflow 7: refund issue
 
-**Identify and verify:** Confirm requester authority, internal/public order reference, current ticket owner where relevant, order completed/verified state, event timing/status and policy, currency/total, remaining refundable amount, existing refund/dispute records, ticket transfer/check-in/void state, payout status, and provider reference/status.
+**Identify and verify:** Confirm requester authority, internal/public order reference, current ticket owner where relevant, order completed/verified state, event timing/status and policy, currency/full order total, existing refund/dispute records, ticket transfer/check-in/void state, payout status, and provider reference/status.
 
 **Permitted:** Open/reopen refund review; approve, reject, or provider-confirm only through existing admin endpoints after the payment SOP checks and a mandatory case reason; keep MMG refunds pending while the live provider operation is unavailable; reconcile only after authoritative confirmation.
 
-**Prohibited:** Direct row edits; refund above remaining amount; treating approval/submission as provider completion; inventing a provider refund reference; retrying an ambiguous provider request; promising timing/fees not established by policy; automatically invalidating an already checked-in ticket without escalation.
+**Prohibited:** Direct row edits; partial or per-ticket refunds; treating approval/submission as provider completion; inventing a provider refund reference; retrying an ambiguous provider request; promising timing/fees not established by policy; automatically invalidating an already checked-in ticket without escalation. Historical partial records require manual reconciliation and must not be topped up through another partial refund.
 
 **Audit/evidence:** Record refund/order IDs, amount/currency, reason, eligibility findings, provider evidence, approval/rejection rationale, prior attempts, and final reconciliation. Because not every refund endpoint creates a separate `admin_action_audits` row, the support-case note is mandatory. Escalate ambiguity, duplicate reference, disputed payment, post-payout refund, checked-in/transferred ticket, or provider mismatch.
 

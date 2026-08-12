@@ -69,7 +69,7 @@ from app.services.tickets import (
     scan_ticket,
 )
 import app.services.tickets as tickets_service
-from app.services.ticket_wallet import get_wallet_ticket, list_wallet_tickets
+from app.services.ticket_wallet import derive_ticket_display_status, get_wallet_ticket, list_wallet_tickets
 from tests.utils import transfer_ticket_to_user, unique_email
 
 
@@ -1268,7 +1268,7 @@ def test_wallet_ticket_detail_owned_vs_non_owned(db_session: Session) -> None:
     assert get_wallet_ticket(db_session, user_id=other.id, ticket_id=ticket.id) is None
 
 
-def test_wallet_status_used_and_invalid(db_session: Session) -> None:
+def test_wallet_status_used_and_non_refund_void_is_excluded(db_session: Session) -> None:
     order_used, _, _, buyer, event = _seed_order(db_session, user_email=unique_email("wallet_used"), quantity=1)
     used_ticket = issue_tickets_for_completed_order(db_session, order_used)[0]
     check_in_ticket_for_event(
@@ -1287,11 +1287,47 @@ def test_wallet_status_used_and_invalid(db_session: Session) -> None:
 
     wallet = {v.ticket.id: v for v in list_wallet_tickets(db_session, user_id=buyer.id)}
     assert wallet[used_ticket.id].display_status == "used"
-    assert wallet[invalid_ticket.id].display_status == "invalid"
+    assert invalid_ticket.id not in wallet
+
+
+def test_wallet_canonical_status_precedence_and_event_end(db_session: Session) -> None:
+    future_order, _, _, buyer, future_event = _seed_order(db_session, user_email=unique_email("wallet_canonical"), quantity=1)
+    active = issue_tickets_for_completed_order(db_session, future_order)[0]
+
+    expired_order, _, _, _, expired_event = _seed_order(db_session, user_email=unique_email("wallet_expired"), quantity=1)
+    expired_order.user_id = buyer.id
+    expired = issue_tickets_for_completed_order(db_session, expired_order)[0]
+    expired.owner_user_id = buyer.id
+    expired.user_id = buyer.id
+    expired_event.end_at = datetime.now(timezone.utc) - timedelta(microseconds=1)
+
+    refunded_order, _, _, _, refunded_event = _seed_order(db_session, user_email=unique_email("wallet_refunded"), quantity=2)
+    refunded_order.user_id = buyer.id
+    refunded_tickets = issue_tickets_for_completed_order(db_session, refunded_order)
+    for refunded in refunded_tickets:
+        refunded.owner_user_id = buyer.id
+        refunded.user_id = buyer.id
+        refunded.status = TicketStatus.VOIDED
+        refunded.voided_at = datetime.now(timezone.utc)
+    refunded_order.refund_status = "refunded"
+    refunded_event.end_at = datetime.now(timezone.utc) - timedelta(days=1)
+    db_session.commit()
+
+    wallet = {view.ticket.id: view for view in list_wallet_tickets(db_session, user_id=buyer.id)}
+    assert wallet[active.id].display_status == "active"
+    assert wallet[expired.id].display_status == "expired"
+    assert all(wallet[refunded.id].display_status == "refunded" for refunded in refunded_tickets)
+
+    active.status = TicketStatus.CHECKED_IN
+    active.checked_in_at = datetime.now(timezone.utc)
+    future_event.end_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db_session.commit()
+    used = get_wallet_ticket(db_session, user_id=buyer.id, ticket_id=active.id)
+    assert used is not None and used.display_status == "used"
 
 
 def test_wallet_transferred_acceptance_behavior(db_session: Session) -> None:
-    order, _, _, buyer, _ = _seed_order(db_session, quantity=1)
+    order, _, _, buyer, event = _seed_order(db_session, quantity=1)
     ticket = issue_tickets_for_completed_order(db_session, order)[0]
     new_owner = User(email=unique_email("wallet_new_owner"), full_name="New Owner")
     db_session.add(new_owner)
@@ -1303,6 +1339,23 @@ def test_wallet_transferred_acceptance_behavior(db_session: Session) -> None:
     recipient_wallet = list_wallet_tickets(db_session, user_id=new_owner.id)
     assert len(recipient_wallet) == 1
     assert recipient_wallet[0].ticket.id == ticket.id
+    assert recipient_wallet[0].display_status == "active"
+
+    event.end_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db_session.commit()
+    historical = get_wallet_ticket(db_session, user_id=new_owner.id, ticket_id=ticket.id)
+    assert historical is not None
+    assert historical.display_status == "expired"
+
+
+def test_wallet_expiry_uses_absolute_end_instant_across_timezones(db_session: Session) -> None:
+    order, _, _, _, event = _seed_order(db_session, quantity=1)
+    ticket = issue_tickets_for_completed_order(db_session, order)[0]
+    boundary = datetime(2027, 1, 5, 3, 0, tzinfo=timezone.utc)
+    event.end_at = boundary.astimezone(timezone(timedelta(hours=-4)))
+
+    assert derive_ticket_display_status(ticket, now=boundary - timedelta(microseconds=1)) == "active"
+    assert derive_ticket_display_status(ticket, now=boundary) == "expired"
 
 
 def test_wallet_entry_payload_exists_and_stable(db_session: Session) -> None:

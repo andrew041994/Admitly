@@ -42,37 +42,42 @@ def _is_event_upcoming(ticket: Ticket, now: datetime) -> bool:
     now_ts = _to_timestamp(now) or 0.0
     event_end_ts = _to_timestamp(ticket.event.end_at if ticket.event else None)
     if event_end_ts is not None:
-        return event_end_ts >= now_ts
+        return event_end_ts > now_ts
     event_start_ts = _to_timestamp(ticket.event.start_at if ticket.event else None)
     return bool(event_start_ts and event_start_ts >= now_ts)
 
 
-def _derive_display_status(ticket: Ticket) -> str:
-    db = object_session(ticket)
-    if db is not None and get_active_pending_transfer_for_ticket(db, ticket_id=ticket.id) is not None:
-        return "transfer_pending"
-    if ticket.status == TicketStatus.CHECKED_IN:
-        return "used"
-    if ticket.status == TicketStatus.VOIDED:
-        return "invalid"
+def derive_ticket_display_status(ticket: Ticket, *, now: datetime) -> str | None:
     if ticket.order and ticket.order.refund_status == "refunded":
-        return "invalid"
+        return "refunded"
+    if ticket.status == TicketStatus.CHECKED_IN or ticket.checked_in_at is not None:
+        return "used"
+    if ticket.status == TicketStatus.VOIDED or ticket.voided_at is not None:
+        return None
     if ticket.order and ticket.order.status in {OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.FAILED}:
-        return "invalid"
+        return None
     if ticket.event and ticket.event.status == EventStatus.CANCELLED:
-        return "invalid"
+        return None
+    if ticket.event and (_to_timestamp(ticket.event.end_at) or 0.0) <= (_to_timestamp(now) or 0.0):
+        return "expired"
+    if ticket.status != TicketStatus.ISSUED:
+        return None
     return "active"
 
 
-def _is_valid_for_entry(ticket: Ticket, *, display_status: str) -> bool:
-    return display_status == "active"
+def _is_valid_for_entry(ticket: Ticket, *, display_status: str, transfer_pending: bool) -> bool:
+    return display_status == "active" and not transfer_pending
 
 
 def _build_wallet_view(ticket: Ticket, *, now: datetime) -> WalletTicketView:
     is_upcoming = _is_event_upcoming(ticket, now)
-    display_status = _derive_display_status(ticket)
+    display_status = derive_ticket_display_status(ticket, now=now)
+    if display_status is None:
+        raise ValueError("Ticket has no user-facing wallet status.")
+    db = object_session(ticket)
+    transfer_pending = bool(db and get_active_pending_transfer_for_ticket(db, ticket_id=ticket.id) is not None)
     token_value = (ticket.qr_token or ticket.qr_payload or "").strip()
-    can_display_entry_code = bool(token_value) and display_status == "active"
+    can_display_entry_code = bool(token_value) and display_status == "active" and not transfer_pending
     can_transfer = True
     transfer_unavailable_reason = None
     try:
@@ -84,7 +89,7 @@ def _build_wallet_view(ticket: Ticket, *, now: datetime) -> WalletTicketView:
         ticket=ticket,
         event_is_upcoming=is_upcoming,
         display_status=display_status,
-        is_valid_for_entry=_is_valid_for_entry(ticket, display_status=display_status),
+        is_valid_for_entry=_is_valid_for_entry(ticket, display_status=display_status, transfer_pending=transfer_pending),
         can_display_entry_code=can_display_entry_code,
         can_transfer=can_transfer,
         transfer_unavailable_reason=transfer_unavailable_reason,
@@ -115,7 +120,11 @@ def _base_wallet_query(user_id: int):
 def list_wallet_tickets(db: Session, *, user_id: int) -> list[WalletTicketView]:
     now = get_guyana_now()
     tickets = db.execute(_base_wallet_query(user_id)).scalars().unique().all()
-    views = [_build_wallet_view(ticket, now=now) for ticket in tickets]
+    views = [
+        _build_wallet_view(ticket, now=now)
+        for ticket in tickets
+        if derive_ticket_display_status(ticket, now=now) is not None
+    ]
     views.sort(key=_wallet_sort_key)
     return views
 
@@ -123,5 +132,7 @@ def list_wallet_tickets(db: Session, *, user_id: int) -> list[WalletTicketView]:
 def get_wallet_ticket(db: Session, *, user_id: int, ticket_id: int) -> WalletTicketView | None:
     ticket = db.execute(_base_wallet_query(user_id).where(Ticket.id == ticket_id)).scalars().unique().one_or_none()
     if ticket is None:
+        return None
+    if derive_ticket_display_status(ticket, now=get_guyana_now()) is None:
         return None
     return _build_wallet_view(ticket, now=get_guyana_now())

@@ -43,7 +43,7 @@ Official MMG material must establish each applicable item before implementation:
 - authoritative transaction lookup/status endpoint and the fields used to match merchant, order, amount, currency, and provider transaction identity;
 - agent-payment lookup/verification mechanism and its authoritative status lifecycle;
 - provider idempotency-key support and retry semantics for payment creation, lookup, and refunds;
-- refund endpoint, request/response schemas, full/partial refund rules, limits, timing, statuses, idempotency, and authoritative completion lookup;
+- refund endpoint, request/response schemas, provider support for Admitly's full-order-only refund rule, limits, timing, statuses, idempotency, and authoritative completion lookup;
 - settlement/reconciliation reports or APIs, settlement identifiers, fee fields, payout timing, and discrepancy workflow;
 - sandbox credentials/test cases, production credentials, IP allowlisting or certificate requirements, webhook certification, and launch approval process;
 - official support/escalation contacts and operational status source.

@@ -1,6 +1,7 @@
 from app.models.event import Event
 from app.models.event_refund_batch import EventRefundBatch
 from app.models.event_reminder_log import EventReminderLog
+from app.models.event_reschedule import EventReschedule
 from app.models.event_staff import EventStaff
 from app.models.dispute import Dispute
 from app.models.financial_entry import FinancialEntry
@@ -42,6 +43,7 @@ __all__ = [
     "Event",
     "EventRefundBatch",
     "EventReminderLog",
+    "EventReschedule",
     "EventStaff",
     "TicketTier",
     "Order",

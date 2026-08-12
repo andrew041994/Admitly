@@ -19,7 +19,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
-EXPECTED_MIGRATION_HEAD = "20260811_0040"
+EXPECTED_MIGRATION_HEAD = "20260812_0042"
 
 
 class Reporter:

@@ -304,8 +304,12 @@ class OrganizerEventUpdateRequest(BaseModel):
     sales_start_at: datetime | None = None
     sales_end_at: datetime | None = None
     visibility: str | None = None
+    venue_id: int | None = None
     custom_venue_name: str | None = None
     custom_address_text: str | None = None
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+    is_location_pinned: bool | None = None
     ticket_tiers: list[OrganizerTicketTierUpsertRequest] | None = None
 
     @model_validator(mode="after")
@@ -313,6 +317,86 @@ class OrganizerEventUpdateRequest(BaseModel):
         if self.cover_image_url is not None:
             raise ValueError("cover_image_url must be set through the event cover image endpoint.")
         return self
+
+
+class EventRescheduleRequest(BaseModel):
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    start_at: datetime
+    end_at: datetime
+    doors_open_at: datetime | None
+    sales_start_at: datetime | None
+    sales_end_at: datetime | None
+    venue_id: int | None
+    custom_venue_name: str | None
+    custom_address_text: str | None
+    latitude: Decimal | None
+    longitude: Decimal | None
+    is_location_pinned: bool
+    reason: str = Field(min_length=3, max_length=2000)
+
+    @field_validator("idempotency_key", "reason")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank.")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> "EventRescheduleRequest":
+        values = [self.start_at, self.end_at, self.doors_open_at, self.sales_start_at, self.sales_end_at]
+        if any(value is not None and value.tzinfo is None for value in values):
+            raise ValueError("Reschedule date/times must include a UTC offset.")
+        if self.end_at <= self.start_at:
+            raise ValueError("end_at must be after start_at.")
+        if self.doors_open_at is not None and self.doors_open_at > self.start_at:
+            raise ValueError("doors_open_at must be before or at start_at.")
+        if self.sales_start_at is not None and self.sales_end_at is not None and self.sales_end_at <= self.sales_start_at:
+            raise ValueError("sales_end_at must be after sales_start_at.")
+        if self.sales_end_at is not None and self.sales_end_at > self.start_at:
+            raise ValueError("sales_end_at must be before or at start_at.")
+        if self.venue_id is not None and (self.custom_venue_name or self.custom_address_text):
+            raise ValueError("Use either venue_id or custom venue fields, not both.")
+        if self.venue_id is None and not (self.custom_venue_name and self.custom_venue_name.strip()):
+            raise ValueError("Provide either venue_id or custom_venue_name.")
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("latitude and longitude must be provided together.")
+        if self.latitude is not None and not Decimal("-90") <= self.latitude <= Decimal("90"):
+            raise ValueError("latitude must be between -90 and 90.")
+        if self.longitude is not None and not Decimal("-180") <= self.longitude <= Decimal("180"):
+            raise ValueError("longitude must be between -180 and 180.")
+        if self.is_location_pinned and self.latitude is None:
+            raise ValueError("Pinned locations require latitude and longitude.")
+        return self
+
+
+class EventRescheduleResponse(BaseModel):
+    id: int
+    event_id: int
+    actor_user_id: int
+    previous_start_at: datetime
+    previous_end_at: datetime
+    previous_doors_open_at: datetime | None
+    new_start_at: datetime
+    new_end_at: datetime
+    new_doors_open_at: datetime | None
+    sales_start_at: datetime | None
+    sales_end_at: datetime | None
+    previous_venue_id: int | None
+    new_venue_id: int | None
+    previous_custom_venue_name: str | None
+    new_custom_venue_name: str | None
+    previous_custom_address_text: str | None
+    new_custom_address_text: str | None
+    previous_latitude: str | None
+    new_latitude: str | None
+    previous_longitude: str | None
+    new_longitude: str | None
+    previous_is_location_pinned: bool
+    new_is_location_pinned: bool
+    reason: str
+    rescheduled_at: datetime
+    notifications_required: bool
 
 
 class OrganizerEventDashboardItemResponse(BaseModel):
@@ -353,8 +437,14 @@ class OrganizerEventDetailResponse(BaseModel):
     approval_status: str
     is_publicly_visible: bool
     visibility_state: str | None = None
+    venue_id: int | None
+    venue_name: str | None
+    venue_address_text: str | None
     custom_venue_name: str | None
     custom_address_text: str | None
+    latitude: str | None
+    longitude: str | None
+    is_location_pinned: bool
     ticket_tiers: list[EventCreateTicketTierResponse]
 
 

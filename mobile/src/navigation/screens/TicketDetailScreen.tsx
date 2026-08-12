@@ -29,6 +29,11 @@ function formatManualCode(code: string): string {
   return `ADM - ${digits}`;
 }
 
+
+function statusLabel(status: WalletTicketDetail['display_status']): string {
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
 export function TicketDetailScreen({ ticketId }: TicketDetailScreenProps) {
   const [ticket, setTicket] = useState<WalletTicketDetail | null>(null);
   const [qrDataUri, setQrDataUri] = useState<string | null>(null);
@@ -47,10 +52,13 @@ export function TicketDetailScreen({ ticketId }: TicketDetailScreenProps) {
   }
 
   useEffect(() => {
-    Promise.all([getMyTicket(ticketId), getMyTicketQr(ticketId)])
-      .then(([ticketData, qrData]) => {
+    getMyTicket(ticketId)
+      .then(async (ticketData) => {
         setTicket(ticketData);
-        setQrDataUri(qrData.qr_data_uri);
+        if (ticketData.can_display_entry_code) {
+          const qrData = await getMyTicketQr(ticketId);
+          setQrDataUri(qrData.qr_data_uri);
+        }
       })
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : 'Unable to load ticket.'));
   }, [ticketId]);
@@ -130,11 +138,13 @@ export function TicketDetailScreen({ ticketId }: TicketDetailScreenProps) {
         <Text style={styles.meta}>{formatDate(ticket.event.start_at)}</Text>
         <Text style={styles.meta}>{ticket.venue.name ?? ticket.venue.address_summary ?? 'Venue TBA'}</Text>
         <Text style={styles.meta}>Ticket: {ticket.ticket_tier_name}</Text>
-        <View style={styles.manualCodeWrap}>
-          <Text style={styles.manualCodeLabel}>Check-in Code</Text>
-          <Text style={styles.manualCode}>{ticket.manual_code_display || formatManualCode(ticket.manual_code)}</Text>
-        </View>
-        <Text style={styles.meta}>Status: {ticket.display_status}</Text>
+        {ticket.can_display_entry_code ? (
+          <View style={styles.manualCodeWrap}>
+            <Text style={styles.manualCodeLabel}>Check-in Code</Text>
+            <Text style={styles.manualCode}>{ticket.manual_code_display || formatManualCode(ticket.manual_code)}</Text>
+          </View>
+        ) : null}
+        <Text accessibilityLabel={`Ticket status: ${statusLabel(ticket.display_status)}`} style={[styles.status, styles[`status_${ticket.display_status}`]]}>Status: {statusLabel(ticket.display_status)}</Text>
 
         {ticket.can_display_entry_code && qrDataUri ? (
           <View style={styles.qrWrap}>
@@ -193,6 +203,11 @@ const styles = StyleSheet.create({
   container: { gap: theme.spacing.sm, paddingBottom: theme.spacing.xl },
   title: { color: theme.colors.textPrimary, fontSize: theme.typography.heading, fontWeight: '700' },
   meta: { color: theme.colors.textSecondary },
+  status: { fontWeight: '700', paddingVertical: theme.spacing.xs },
+  status_active: { color: '#98e067' },
+  status_used: { color: '#8fd5ff' },
+  status_expired: { color: theme.colors.textSecondary },
+  status_refunded: { color: '#ffc46b' },
   manualCodeWrap: { marginVertical: theme.spacing.md, alignItems: 'center', gap: theme.spacing.xs, backgroundColor: theme.colors.surface, borderRadius: theme.radius.lg, borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing.lg },
   manualCodeLabel: { color: theme.colors.textSecondary, fontSize: 14, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8 },
   manualCode: { color: theme.colors.textPrimary, fontSize: 30, fontWeight: '800', letterSpacing: 1.2 },

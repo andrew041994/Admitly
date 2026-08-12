@@ -127,7 +127,12 @@ export type OrganizerEventDetail = CreateEventResponse & {
   approval_status: 'pending' | 'approved' | 'rejected' | string;
   is_publicly_visible: boolean;
   visibility_state?: 'pending_review' | string | null;
+  venue_name: string | null;
+  venue_address_text: string | null;
   custom_address_text: string | null;
+  latitude: string | null;
+  longitude: string | null;
+  is_location_pinned: boolean;
   ticket_tiers: Array<{
     id: number;
     event_id: number;
@@ -142,6 +147,51 @@ export type OrganizerEventDetail = CreateEventResponse & {
     is_active: boolean;
     sort_order: number;
   }>;
+};
+
+export type EventReschedulePayload = {
+  idempotency_key: string;
+  start_at: string;
+  end_at: string;
+  doors_open_at: string | null;
+  sales_start_at: string | null;
+  sales_end_at: string | null;
+  venue_id: number | null;
+  custom_venue_name: string | null;
+  custom_address_text: string | null;
+  latitude: string | null;
+  longitude: string | null;
+  is_location_pinned: boolean;
+  reason: string;
+};
+
+export type EventRescheduleResponse = {
+  id: number;
+  event_id: number;
+  previous_start_at: string;
+  previous_end_at: string;
+  previous_doors_open_at: string | null;
+  new_start_at: string;
+  new_end_at: string;
+  new_doors_open_at: string | null;
+  sales_start_at: string | null;
+  sales_end_at: string | null;
+  previous_venue_id: number | null;
+  new_venue_id: number | null;
+  previous_custom_venue_name: string | null;
+  new_custom_venue_name: string | null;
+  previous_custom_address_text: string | null;
+  new_custom_address_text: string | null;
+  previous_latitude: string | null;
+  new_latitude: string | null;
+  previous_longitude: string | null;
+  new_longitude: string | null;
+  previous_is_location_pinned: boolean;
+  new_is_location_pinned: boolean;
+  actor_user_id: number;
+  rescheduled_at: string;
+  reason: string;
+  notifications_required: boolean;
 };
 
 export type EventStaffAssignment = {
@@ -184,6 +234,14 @@ export async function getOrganizerEvent(eventId: number): Promise<OrganizerEvent
 
 export async function updateOrganizerEvent(eventId: number, payload: Record<string, unknown>): Promise<OrganizerEventDetail> {
   return apiRequest<OrganizerEventDetail>({ path: `/events/organizer/events/${eventId}`, method: 'PATCH', body: JSON.stringify(payload) });
+}
+
+export async function rescheduleOrganizerEvent(eventId: number, payload: EventReschedulePayload): Promise<EventRescheduleResponse> {
+  return apiRequest<EventRescheduleResponse>({
+    path: `/events/organizer/events/${eventId}/reschedule`,
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function publishOrganizerEvent(eventId: number): Promise<OrganizerEventDetail> {
