@@ -1,4 +1,4 @@
-import { type ChangeEvent, type FormEvent, useEffect, useState } from 'react';
+import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../auth/AuthContext';
@@ -37,25 +37,31 @@ function validateTiers(tiers: TierFormState[]): string | null {
 export function CreateEventPage() {
   const navigate = useNavigate();
   const { user, refreshUser } = useAuth();
+  const [step, setStep] = useState<1 | 2>(1);
   const [form, setForm] = useState({ title: '', description: '', start: '', end: '', venue: '', address: '' });
   const [tiers, setTiers] = useState<TierFormState[]>([initialTier()]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [verification, setVerification] = useState<CreatorVerificationDocumentStatus | null>(null);
-  const [verificationLoading, setVerificationLoading] = useState(true);
+  const [verificationLoading, setVerificationLoading] = useState(false);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<File | null>(null);
   const [uploadingId, setUploadingId] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const verificationRequested = useRef(false);
+  const submissionInFlight = useRef(false);
 
   useEffect(() => {
+    if (step !== 2 || verificationRequested.current) return;
+    verificationRequested.current = true;
     let active = true;
+    setVerificationLoading(true);
     void getCreatorVerificationDocumentStatus()
       .then((status) => { if (active) setVerification(status); })
       .catch(() => { if (active) setVerificationError('Verification status is temporarily unavailable. You can still create a draft event.'); })
       .finally(() => { if (active) setVerificationLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [step]);
 
   function selectVerificationFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -104,12 +110,19 @@ export function CreateEventPage() {
     setTiers((current) => current.filter((_tier, tierIndex) => tierIndex !== index));
   }
 
-  async function submit(event: FormEvent) {
+  function next(event: FormEvent) {
     event.preventDefault();
-    if (busy) return;
     setError(null);
     const tierError = validateTiers(tiers);
     if (tierError) { setError(tierError); return; }
+    if (new Date(form.end) <= new Date(form.start)) { setError('Event end time must be after its start time.'); return; }
+    setStep(2);
+  }
+
+  async function submit() {
+    if (submissionInFlight.current || uploadingId) return;
+    submissionInFlight.current = true;
+    setError(null);
     setBusy(true);
     try {
       const created = await createEvent({
@@ -132,11 +145,39 @@ export function CreateEventPage() {
       navigate(`/my-events/${created.id}`, { replace: true });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to create event.');
-    } finally { setBusy(false); }
+    } finally { submissionInFlight.current = false; setBusy(false); }
   }
 
   return <section className="user-page narrow-page">
     <p className="eyebrow">Creator workspace</p><h1>Create Event</h1>
+    <p className="wizard-step" aria-live="polite">Step {step} of 2 — {step === 1 ? 'Event Details' : 'Verification'}</p>
+    {step === 1 ? <form className="panel web-form two-column-form" onSubmit={next}>
+      {error ? <p className="form-error form-wide" role="alert">{error}</p> : null}
+      <label className="form-wide">Event title<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required /></label>
+      <label className="form-wide">Short description<textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
+      <label>Starts<input type="datetime-local" value={form.start} onChange={(event) => setForm({ ...form, start: event.target.value })} required /></label>
+      <label>Ends<input type="datetime-local" value={form.end} onChange={(event) => setForm({ ...form, end: event.target.value })} required /></label>
+      <label>Venue name<input value={form.venue} onChange={(event) => setForm({ ...form, venue: event.target.value })} required /></label>
+      <label>Address<input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label>
+      <section className="ticket-tier-list form-wide" aria-labelledby="ticket-tiers-heading">
+        <div className="ticket-tier-heading">
+          <div><h2 id="ticket-tiers-heading">Ticket tiers</h2><p>Add the ticket options buyers can choose from.</p></div>
+          <button type="button" className="button-link" onClick={() => setTiers((current) => [...current, additionalTier()])}>Add another ticket tier</button>
+        </div>
+        {tiers.map((tier, index) => (
+          <fieldset className="ticket-tier-card" key={`ticket-tier-${index}`}>
+            <legend>Tier {index + 1}</legend>
+            <div className="ticket-tier-fields">
+              <label>Tier name<input value={tier.name} maxLength={120} onChange={(event) => updateTier(index, { name: event.target.value })} required /></label>
+              <label>Price (GYD)<input type="number" min="0" step="0.01" value={tier.price} onChange={(event) => updateTier(index, { price: event.target.value })} required /></label>
+              <label>Quantity<input type="number" min="1" step="1" value={tier.quantity} onChange={(event) => updateTier(index, { quantity: event.target.value })} required /></label>
+            </div>
+            {index > 0 ? <button type="button" className="button-link remove-tier-button" onClick={() => removeTier(index)}>Remove tier</button> : null}
+          </fieldset>
+        ))}
+      </section>
+      <button className="form-wide">Next</button>
+    </form> : <>
     <div className="verification-notice" aria-live="polite">
       {(verification?.account_verification_status ?? user?.creator_age_identity_verification_status) === 'verified' ? <>
         <strong>Age verified</strong>
@@ -165,32 +206,12 @@ export function CreateEventPage() {
         {verificationError ? <p className="form-error" role="alert">{verificationError}</p> : null}
       </>}
     </div>
-    <form className="panel web-form two-column-form" onSubmit={submit}>
-      {error ? <p className="form-error form-wide" role="alert">{error}</p> : null}
-      <label className="form-wide">Event title<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required /></label>
-      <label className="form-wide">Short description<textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
-      <label>Starts<input type="datetime-local" value={form.start} onChange={(event) => setForm({ ...form, start: event.target.value })} required /></label>
-      <label>Ends<input type="datetime-local" value={form.end} onChange={(event) => setForm({ ...form, end: event.target.value })} required /></label>
-      <label>Venue name<input value={form.venue} onChange={(event) => setForm({ ...form, venue: event.target.value })} required /></label>
-      <label>Address<input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label>
-      <section className="ticket-tier-list form-wide" aria-labelledby="ticket-tiers-heading">
-        <div className="ticket-tier-heading">
-          <div><h2 id="ticket-tiers-heading">Ticket tiers</h2><p>Add the ticket options buyers can choose from.</p></div>
-          <button type="button" className="button-link" onClick={() => setTiers((current) => [...current, additionalTier()])}>Add another ticket tier</button>
-        </div>
-        {tiers.map((tier, index) => (
-          <fieldset className="ticket-tier-card" key={`ticket-tier-${index}`}>
-            <legend>Tier {index + 1}</legend>
-            <div className="ticket-tier-fields">
-              <label>Tier name<input value={tier.name} maxLength={120} onChange={(event) => updateTier(index, { name: event.target.value })} required /></label>
-              <label>Price (GYD)<input type="number" min="0" step="0.01" value={tier.price} onChange={(event) => updateTier(index, { price: event.target.value })} required /></label>
-              <label>Quantity<input type="number" min="1" step="1" value={tier.quantity} onChange={(event) => updateTier(index, { quantity: event.target.value })} required /></label>
-            </div>
-            {index > 0 ? <button type="button" className="button-link remove-tier-button" onClick={() => removeTier(index)}>Remove tier</button> : null}
-          </fieldset>
-        ))}
-      </section>
-      <button className="form-wide" disabled={busy}>{busy ? 'Creating…' : 'Create draft event'}</button>
-    </form>
+    {error ? <p className="form-error" role="alert">{error}</p> : null}
+    {uploadingId ? <p className="verification-status" role="status">Finish the secure ID upload before creating the draft.</p> : null}
+    <div className="wizard-actions">
+      <button type="button" className="button-link" disabled={busy || uploadingId} onClick={() => { setError(null); setStep(1); }}>Back</button>
+      <button type="button" disabled={busy || uploadingId} onClick={() => void submit()}>{busy ? 'Creating…' : 'Create draft event'}</button>
+    </div>
+    </>}
   </section>;
 }

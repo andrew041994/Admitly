@@ -218,6 +218,26 @@ test('Create Event offers private account verification for pending and revoked c
   assert.match(sentryPrivacy, /'filename', 'fileName', 'file_name'/);
 });
 
+test('Create Event is a local two-step wizard that preserves event and tier state', () => {
+  assert.match(createEvent, /useState<1 \| 2>\(1\)/);
+  assert.match(createEvent, /Step \{step\} of 2/);
+  const stepOneStart = createEvent.indexOf('{step === 1 ? <form');
+  const stepTwoStart = createEvent.indexOf('</form> : <>', stepOneStart);
+  const stepOne = createEvent.slice(stepOneStart, stepTwoStart);
+  const stepTwo = createEvent.slice(stepTwoStart);
+  assert.match(stepOne, />Next<\/button>/);
+  assert.doesNotMatch(stepOne, /Upload ID|Create draft event|type="file"/);
+  assert.match(stepTwo, /Upload ID/);
+  assert.match(stepTwo, /Create draft event/);
+  assert.match(stepTwo, />Back<\/button>/);
+  assert.match(createEvent, /function next\(event: FormEvent\)[\s\S]*validateTiers\(tiers\)[\s\S]*setStep\(2\)/);
+  assert.match(createEvent, /setStep\(1\)/);
+  assert.ok(createEvent.indexOf('const [form, setForm]') < stepOneStart);
+  assert.ok(createEvent.indexOf('const [tiers, setTiers]') < stepOneStart);
+  const nextHandler = createEvent.slice(createEvent.indexOf('function next('), createEvent.indexOf('async function submit'));
+  assert.doesNotMatch(nextHandler, /createEvent\(/);
+});
+
 test('admin document review is private, authorized, and releases memory-only image URLs', () => {
   assert.match(approvalsApi, /\/admin\/creator-verification\/documents\/\$\{documentId\}\/content/);
   assert.match(approvalsApi, /return response\.blob\(\)/);
@@ -261,7 +281,10 @@ test('web Create Event supports repeatable ticket tiers with backend-equivalent 
 test('web submits every tier in one atomic backend event-creation request', () => {
   assert.equal((createEvent.match(/await createEvent\(/g) || []).length, 1);
   assert.match(createEvent, /ticket_tiers: tiers\.map/);
-  assert.match(createEvent, /if \(busy\) return/);
+  assert.match(createEvent, /if \(submissionInFlight\.current \|\| uploadingId\) return/);
+  assert.match(createEvent, /submissionInFlight\.current = true/);
+  const submitHandler = createEvent.slice(createEvent.indexOf('async function submit'), createEvent.indexOf('return <section'));
+  assert.doesNotMatch(submitHandler, /verification.*===|document_pending_review/);
   assert.match(backendEventSchema, /ticket_tiers: list\["TicketTierCreateRequest"\] = Field\(min_length=1\)/);
   assert.match(backendEventService, /for idx, tier_payload in enumerate\(payload\.ticket_tiers\)/);
   assert.ok(backendEventApi.indexOf('create_event_with_ticket_tiers') < backendEventApi.indexOf('db.commit()', backendEventApi.indexOf('def create_event(')));
