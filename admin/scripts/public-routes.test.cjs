@@ -79,10 +79,11 @@ test('wallet uses backend canonical statuses and material changes use existing e
   assert.match(materialChange, /Reschedule or Change Venue/);
 });
 
-test('My Events uses the shared primary CTA for both Create Event actions', () => {
-  assert.match(myEventsPage, /<div className="page-heading">[\s\S]*<Link className="button" to="\/create-event">Create Event<\/Link>/);
+test('My Events keeps only the empty-state page CTA', () => {
+  const pageHeading = myEventsPage.slice(myEventsPage.indexOf('<div className="page-heading">'), myEventsPage.indexOf('{loading'));
+  assert.doesNotMatch(pageHeading, /create-event|Create Event/);
   assert.match(myEventsPage, /<div className="empty-panel">[\s\S]*<Link className="button" to="\/create-event">Create Event<\/Link>/);
-  assert.equal((myEventsPage.match(/<Link className="button" to="\/create-event">Create Event<\/Link>/g) || []).length, 2);
+  assert.equal((myEventsPage.match(/<Link className="button" to="\/create-event">Create Event<\/Link>/g) || []).length, 1);
   assert.match(styles, /--admitly-primary: #2457f5/);
   assert.match(styles, /\.button \{[\s\S]*background: var\(--admitly-primary\)/);
   assert.match(styles, /\.button:not\(\.button-secondary\):not\(\.button-light\):not\(\.button-outline-light\):hover \{[\s\S]*background: var\(--admitly-primary-hover\)/);
