@@ -79,9 +79,10 @@ test('wallet uses backend canonical statuses and material changes use existing e
   assert.match(materialChange, /Reschedule or Change Venue/);
 });
 
-test('My Events uses the shared primary CTA while its empty action stays secondary', () => {
+test('My Events uses the shared primary CTA for both Create Event actions', () => {
   assert.match(myEventsPage, /<div className="page-heading">[\s\S]*<Link className="button" to="\/create-event">Create Event<\/Link>/);
-  assert.match(myEventsPage, /<div className="empty-panel">[\s\S]*<Link to="\/create-event">Create Event<\/Link>/);
+  assert.match(myEventsPage, /<div className="empty-panel">[\s\S]*<Link className="button" to="\/create-event">Create Event<\/Link>/);
+  assert.equal((myEventsPage.match(/<Link className="button" to="\/create-event">Create Event<\/Link>/g) || []).length, 2);
   assert.match(styles, /--admitly-primary: #2457f5/);
   assert.match(styles, /\.button \{[\s\S]*background: var\(--admitly-primary\)/);
   assert.match(styles, /\.button:not\(\.button-secondary\):not\(\.button-light\):not\(\.button-outline-light\):hover \{[\s\S]*background: var\(--admitly-primary-hover\)/);
