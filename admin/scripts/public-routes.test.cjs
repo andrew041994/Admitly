@@ -25,6 +25,7 @@ const authContext = read('src/auth/AuthContext.tsx');
 const account = read('src/pages/AccountPage.tsx');
 const resetPasswordPage = read('src/pages/ResetPasswordRedirectPage.tsx');
 const approvals = read('src/pages/EventApprovalsPage.tsx');
+const approvalDetails = read('src/components/EventApprovalDetailsPanel.tsx');
 const createEvent = read('src/pages/CreateEventPage.tsx');
 const accountPage = read('src/pages/AccountPage.tsx');
 const legalPage = read('src/pages/LegalPage.tsx');
@@ -187,8 +188,8 @@ test('all legal links remain discoverable and Sentry scrubs token-bearing URLs',
 });
 
 test('creator verification remains account-scoped and revocable', () => {
-  assert.match(approvals, /Verify creator account as 18\+/);
-  assert.match(approvals, /Revoke account verification/);
+  assert.match(approvalDetails, /Verify creator account as 18\+/);
+  assert.match(approvalDetails, /Revoke account verification/);
   assert.match(approvals, /Already-approved events remain active/);
   assert.match(approvals, /getCreatorAgeIdentityVerificationHistory/);
   assert.match(createEvent, /account_verification_status/);
@@ -245,7 +246,7 @@ test('admin document review is private, authorized, and releases memory-only ima
   assert.match(approvals, /URL\.revokeObjectURL\(viewerUrlRef\.current\)/);
   assert.match(approvals, /Review private image/);
   assert.match(approvals, /viewer\?\.documentId !== document\.id/);
-  assert.match(approvals, /documents\.some\(\(document\) => document\.user_id === event\.creator_user_id\)/);
+  assert.match(approvals, /hasPendingDocument=\{documents\.some\(\(document\) => document\.user_id === event\.creator_user_id\)\}/);
   assert.match(approvals, /Verify creator as 18\+/);
   assert.match(approvals, /Reject verification/);
   assert.match(approvals, /Retry cleanup/);
@@ -254,6 +255,26 @@ test('admin document review is private, authorized, and releases memory-only ima
   assert.match(approvalsApi, /\/cleanup/);
   assert.doesNotMatch(`${approvals}\n${approvalsApi}`, /storage_object_key|signed_url|s3:\/\//i);
   assert.match(router, /path="\/admin" element={<RequireAdmin \/>}/);
+});
+
+test('expanded event approval uses a structured reusable review panel', () => {
+  assert.match(approvals, /<EventApprovalDetailsPanel/);
+  assert.match(approvals, /className="event-approval-expanded-row"/);
+  assert.doesNotMatch(approvals, /<strong>Slug:<\/strong>/);
+  for (const heading of ['Event details', 'Creator verification', 'Review actions', 'Verification history']) {
+    assert.ok(approvalDetails.includes(`>${heading}<`), heading);
+  }
+  for (const label of ['Organizer', 'Start', 'Venue', 'Slug', 'Published', 'Event status', 'Creator user ID', 'Account verified at', 'Verifier', 'Approval snapshot']) {
+    assert.ok(approvalDetails.includes(`label="${label}"`), label);
+  }
+  assert.match(approvalDetails, /StatusBadge label="Approval"/);
+  assert.match(approvalDetails, /StatusBadge label="Creator"/);
+  assert.match(approvalDetails, /onClick=\{onApprove\}/);
+  assert.match(approvalDetails, /onClick=\{onCollapse\}>Hide details/);
+  assert.ok(approvalDetails.indexOf('Required revocation reason') < approvalDetails.indexOf('onClick={onRevoke}'));
+  assert.match(approvalDetails, /className="verification-timeline"/);
+  assert.match(styles, /\.event-review-card-grid \{[\s\S]*grid-template-columns: repeat\(2/);
+  assert.match(styles, /@media \(max-width: 850px\)[\s\S]*\.event-review-card-grid \{ grid-template-columns: 1fr/);
 });
 
 test('legal and creator guidance describe temporary private upload and remove email-only claims', () => {

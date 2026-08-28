@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { EventApprovalDetailsPanel } from '../components/EventApprovalDetailsPanel';
 import { ApiError } from '../lib/apiClient';
 import {
   AdminCreatorVerificationDocument,
@@ -270,56 +271,27 @@ export function EventApprovalsPage() {
                   <td>
                     <button type="button" onClick={() => void inspect(event)}>
                       {expandedId === event.id ? 'Hide' : 'Inspect'}
-                    </button>{' '}
-                    <button
-                      type="button"
-                      onClick={() => void onApprove(event.id)}
-                      disabled={
-                        approvingId === event.id
-                        || event.approval_status === 'approved'
-                        || event.creator_account_verification_status !== 'verified'
-                      }
-                    >
-                      {event.approval_status === 'approved' ? 'Approved' : approvingId === event.id ? 'Approving…' : 'Approve'}
                     </button>
                   </td>
                 </tr>
                 {expandedId === event.id ? (
-                  <tr>
+                  <tr className="event-approval-expanded-row">
                     <td colSpan={8}>
-                      <strong>Slug:</strong> {event.slug} · <strong>Published:</strong> {formatDate(event.published_at)} ·{' '}
-                      <strong>Event status:</strong> {event.status} · <strong>Creator user:</strong> #{event.creator_user_id}
-                      <div>
-                        <strong>Account verified at:</strong> {formatDate(event.creator_account_verified_at)} · <strong>Verifier:</strong> {event.creator_account_verified_by_user_id ? `#${event.creator_account_verified_by_user_id}` : '—'}
-                      </div>
-                      <div><strong>Event approval snapshot recorded:</strong> {formatDate(event.creator_age_identity_verification_snapshot_at)}</div>
-                      {event.creator_account_revoked_at ? <p><strong>Revoked:</strong> {formatDate(event.creator_account_revoked_at)} · {event.creator_account_revocation_reason}</p> : null}
-                      {event.creator_account_verification_status !== 'verified' && documents.some((document) => document.user_id === event.creator_user_id) ? (
-                        <p className="verification-status">A private document is pending for this creator. Review and act on it in the verification section above.</p>
-                      ) : event.creator_account_verification_status !== 'verified' ? (
-                        <div className="form-grid">
-                          <label>
-                            Optional safe audit note (no ID number or image)
-                            <input
-                              value={verificationNotes[event.id] ?? ''}
-                              maxLength={1000}
-                              onChange={(changeEvent) => setVerificationNotes((current) => ({
-                                ...current,
-                                [event.id]: changeEvent.target.value,
-                              }))}
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            disabled={verifyingId === event.id}
-                            onClick={() => void onRecordVerification(event)}
-                          >
-                            {verifyingId === event.id ? 'Recording…' : 'Verify creator account as 18+'}
-                          </button>
-                        </div>
-                      ) : <div className="form-grid"><label>Required revocation reason<input value={revocationReasons[event.id] ?? ''} maxLength={1000} onChange={(changeEvent) => setRevocationReasons((current) => ({ ...current, [event.id]: changeEvent.target.value }))} /></label><button type="button" className="danger-button" disabled={verifyingId === event.id} onClick={() => void onRevokeVerification(event)}>Revoke account verification</button></div>}
-                      <h3>Verification history</h3>
-                      {(history[event.creator_user_id] ?? []).length ? <ul>{history[event.creator_user_id].map((row) => <li key={row.id}>{formatDate(row.created_at)} · {row.previous_status} → {row.new_status} by admin #{row.actor_user_id}{row.note ? ` · ${row.note}` : ''}</li>)}</ul> : <p>No recorded account verification history.</p>}
+                      <EventApprovalDetailsPanel
+                        event={event}
+                        history={history[event.creator_user_id] ?? []}
+                        hasPendingDocument={documents.some((document) => document.user_id === event.creator_user_id)}
+                        approving={approvingId === event.id}
+                        verifying={verifyingId === event.id}
+                        verificationNote={verificationNotes[event.id] ?? ''}
+                        revocationReason={revocationReasons[event.id] ?? ''}
+                        onApprove={() => void onApprove(event.id)}
+                        onCollapse={() => setExpandedId(null)}
+                        onVerify={() => void onRecordVerification(event)}
+                        onRevoke={() => void onRevokeVerification(event)}
+                        onVerificationNoteChange={(value) => setVerificationNotes((current) => ({ ...current, [event.id]: value }))}
+                        onRevocationReasonChange={(value) => setRevocationReasons((current) => ({ ...current, [event.id]: value }))}
+                      />
                     </td>
                   </tr>
                 ) : null}
