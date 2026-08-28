@@ -507,6 +507,7 @@ button:disabled {
 }
 
 .mobile-menu { display: none; }
+.public-auth-restoring { color: var(--public-muted); font-weight: 700; }
 
 .button {
   min-height: 3rem;

@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext';
 import type { PublicEvent } from '../lib/publicEventsApi';
+import { AuthenticatedHeader, BrandMark } from './SiteHeader';
 
 export const attendeeLoginUrl = 'admitly://sign-in';
 export const attendeeSignupUrl = 'admitly://sign-up';
@@ -9,16 +11,21 @@ type PublicLayoutProps = {
   children: ReactNode;
 };
 
-export function BrandMark() {
-  return (
-    <Link className="public-brand" to="/" aria-label="Admitly home">
-      <span className="brand-symbol" aria-hidden="true">A</span>
-      <span>Admitly</span>
-    </Link>
-  );
-}
-
 export function PublicHeader() {
+  const { state } = useAuth();
+
+  if (state === 'signed-in') return <AuthenticatedHeader />;
+  if (state === 'booting') {
+    return (
+      <header className="public-header">
+        <div className="public-container public-nav-row">
+          <BrandMark />
+          <span className="public-auth-restoring" role="status">Restoring your session…</span>
+        </div>
+      </header>
+    );
+  }
+
   return (
     <header className="public-header">
       <div className="public-container public-nav-row">
@@ -44,6 +51,9 @@ export function PublicHeader() {
 }
 
 export function PublicFooter() {
+  const { state } = useAuth();
+  const signedIn = state === 'signed-in';
+
   return (
     <footer className="public-footer">
       <div className="public-container footer-grid">
@@ -54,8 +64,18 @@ export function PublicFooter() {
         <nav aria-label="Explore">
           <strong>Explore</strong>
           <Link to="/events">Browse Events</Link>
-          <Link to="/login">Log In</Link>
-          <Link to="/signup">Sign Up</Link>
+          {signedIn ? (
+            <>
+              <Link to="/tickets">My Tickets</Link>
+              <Link to="/my-events">My Events</Link>
+              <Link to="/account">Account</Link>
+            </>
+          ) : state === 'signed-out' ? (
+            <>
+              <Link to="/login">Log In</Link>
+              <Link to="/signup">Sign Up</Link>
+            </>
+          ) : null}
           <Link to="/terms#questions">Support &amp; contact</Link>
         </nav>
         <nav aria-label="Legal policies">

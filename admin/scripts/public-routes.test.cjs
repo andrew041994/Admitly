@@ -7,7 +7,11 @@ const root = path.resolve(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const router = read('src/app/router.tsx');
 const publicSite = read('src/components/PublicSite.tsx');
+const siteHeader = read('src/components/SiteHeader.tsx');
+const userShell = read('src/components/UserShell.tsx');
 const landing = read('src/pages/LandingPage.tsx');
+const eventsPage = read('src/pages/EventsPage.tsx');
+const eventDetailPage = read('src/pages/EventDetailPage.tsx');
 const session = read('src/lib/authSession.ts');
 const client = read('src/lib/apiClient.ts');
 const tickets = read('src/pages/TicketsPage.tsx');
@@ -78,6 +82,77 @@ test('public calls to action use web auth while mobile deep links remain availab
   assert.match(publicSite, /<Link[^>]*to="\/signup">Sign Up<\/Link>/);
   assert.match(publicSite, /attendeeLoginUrl = 'admitly:\/\/sign-in'/);
   assert.match(landing, /to="\/create-event"/);
+});
+
+test('signed-out event browsing renders guest login and signup navigation', () => {
+  assert.match(publicSite, /state === 'signed-out'/);
+  assert.match(publicSite, /<Link to="\/login">Log In<\/Link>/);
+  assert.match(publicSite, /<Link[^>]*to="\/signup">Sign Up<\/Link>/);
+  assert.match(eventsPage, /<PublicLayout>/);
+});
+
+test('signed-in public routes use the authenticated header instead of guest controls', () => {
+  assert.match(publicSite, /if \(state === 'signed-in'\) return <AuthenticatedHeader \/>/);
+  assert.ok(publicSite.indexOf("state === 'signed-in'") < publicSite.indexOf('<Link to="/login">Log In</Link>'));
+  assert.match(siteHeader, />My Tickets<\/NavLink>/);
+  assert.match(siteHeader, />My Events<\/NavLink>/);
+  assert.match(siteHeader, />Account<\/NavLink>/);
+});
+
+test('signed-in admin keeps normal navigation and gains an admin dashboard link', () => {
+  for (const label of ['Discover', 'My Tickets', 'My Events', 'Notifications', 'Account', 'Create Event']) {
+    assert.ok(siteHeader.includes(`>${label}<`), label);
+  }
+  assert.match(siteHeader, /user\?\.is_admin \? <NavLink to="\/admin">Admin Dashboard<\/NavLink> : null/);
+});
+
+test('Discover and protected pages share one authenticated header and auth context', () => {
+  assert.match(userShell, /<AuthenticatedHeader \/>/);
+  assert.match(publicSite, /<AuthenticatedHeader \/>/);
+  assert.match(siteHeader, /const \{ user, signOut \} = useAuth\(\)/);
+  assert.doesNotMatch(`${publicSite}\n${siteHeader}\n${userShell}`, /useState<AuthState>|createContext/);
+  assert.equal((main.match(/<AuthProvider>/g) || []).length, 1);
+});
+
+test('Discover links preserve the session and return directly to protected user pages', () => {
+  assert.match(siteHeader, /<NavLink to="\/events">Discover<\/NavLink>/);
+  for (const route of ['/tickets', '/my-events', '/notifications', '/account']) {
+    assert.ok(siteHeader.includes(`to="${route}"`), route);
+  }
+  assert.doesNotMatch(siteHeader, /clearAuthSession|setAuthSession|sessionStorage|localStorage/);
+});
+
+test('event detail uses the same auth-aware public layout', () => {
+  assert.match(eventDetailPage, /<PublicLayout>/);
+  assert.match(eventDetailPage, /state === 'signed-out' \? <Link[^>]*to="\/login"/);
+  assert.doesNotMatch(eventDetailPage, /state !== 'signed-in' \? <Link[^>]*to="\/login"/);
+});
+
+test('landing page stays public while using the auth-aware header and direct account CTAs', () => {
+  assert.match(landing, /<PublicLayout>/);
+  assert.match(landing, /to="\/create-event"/);
+  assert.match(publicSite, /<Link to="\/tickets">My Tickets<\/Link>/);
+});
+
+test('logout from an auth-aware public page revokes and clears through existing auth flow', () => {
+  assert.match(siteHeader, /await signOut\(\)/);
+  assert.match(siteHeader, /navigate\('\/login', \{ replace: true/);
+  assert.match(authContext, /try \{ await logout\(\); \} finally \{ setUser\(null\); setState\('signed-out'\); \}/);
+  assert.ok(authApi.indexOf("apiJson<{ success: boolean }>('/auth/logout'") < authApi.indexOf('clearAuthSession();'));
+});
+
+test('public event routes stay outside authentication guards', () => {
+  for (const route of ['/events', '/events/:eventId']) {
+    assert.ok(router.indexOf(`path="${route}"`) < router.indexOf('<Route element={<RequireAuth />}'), route);
+  }
+});
+
+test('public-page refresh restores auth without flashing guest controls and 403 does not sign out', () => {
+  assert.match(publicSite, /state === 'booting'/);
+  assert.match(publicSite, /Restoring your session/);
+  assert.match(authContext, /const current = await apiJson<AuthUser>\('\/auth\/me'\)/);
+  assert.match(client, /response\.status === 401/);
+  assert.doesNotMatch(client, /response\.status === 403[\s\S]{0,160}clearAuthSession/);
 });
 
 test('all legal links remain discoverable and Sentry scrubs token-bearing URLs', () => {
