@@ -29,6 +29,7 @@ from app.models.ticket_tier import TicketTier
 from app.models.support_case_note import SupportCaseNote
 from app.models.admin_action_audit import AdminActionAudit
 from app.models.creator_age_identity_verification_history import CreatorAgeIdentityVerificationHistory
+from app.models.creator_verification_document import CreatorVerificationDocument
 from app.models.message_delivery_log import MessageDeliveryLog
 from app.models.support_case import SupportCase
 from app.models.user import User
@@ -75,6 +76,7 @@ __all__ = [
     "SupportCaseNote",
     "AdminActionAudit",
     "CreatorAgeIdentityVerificationHistory",
+    "CreatorVerificationDocument",
     "MessageDeliveryLog",
     "IntegrationApiKey",
     "WebhookEndpoint",

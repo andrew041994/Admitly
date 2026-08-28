@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     rate_limit_push_registration_window_seconds: int = Field(default=300, alias="RATE_LIMIT_PUSH_REGISTRATION_WINDOW_SECONDS")
     rate_limit_event_cover_upload_count: int = Field(default=10, alias="RATE_LIMIT_EVENT_COVER_UPLOAD_COUNT")
     rate_limit_event_cover_upload_window_seconds: int = Field(default=300, alias="RATE_LIMIT_EVENT_COVER_UPLOAD_WINDOW_SECONDS")
+    rate_limit_verification_document_upload_count: int = Field(
+        default=3, alias="RATE_LIMIT_VERIFICATION_DOCUMENT_UPLOAD_COUNT"
+    )
+    rate_limit_verification_document_upload_window_seconds: int = Field(
+        default=3600, alias="RATE_LIMIT_VERIFICATION_DOCUMENT_UPLOAD_WINDOW_SECONDS"
+    )
 
     ticket_public_base_url: str = Field(default="https://admitly.app", alias="TICKET_PUBLIC_BASE_URL")
 
@@ -83,6 +89,30 @@ class Settings(BaseSettings):
     s3_event_bucket: str | None = Field(default=None, alias="S3_EVENT_BUCKET")
     s3_event_prefix: str = Field(default="event-covers/", alias="S3_EVENT_PREFIX")
     s3_public_base_url: str | None = Field(default=None, alias="S3_PUBLIC_BASE_URL")
+
+    verification_document_upload_enabled: bool = Field(
+        default=False, alias="VERIFICATION_DOCUMENT_UPLOAD_ENABLED"
+    )
+    s3_verification_bucket: str | None = Field(default=None, alias="S3_VERIFICATION_BUCKET")
+    s3_verification_region: str | None = Field(default=None, alias="S3_VERIFICATION_REGION")
+    s3_verification_prefix: str = Field(
+        default="creator-verification/", alias="S3_VERIFICATION_PREFIX"
+    )
+    s3_verification_kms_key_id: str | None = Field(
+        default=None, alias="S3_VERIFICATION_KMS_KEY_ID"
+    )
+    s3_verification_max_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        ge=1024,
+        le=16 * 1024 * 1024,
+        alias="S3_VERIFICATION_MAX_BYTES",
+    )
+    s3_verification_retention_days: int = Field(
+        default=7, ge=1, le=7, alias="S3_VERIFICATION_RETENTION_DAYS"
+    )
+    verification_document_cleanup_batch_size: int = Field(
+        default=50, ge=1, le=200, alias="VERIFICATION_DOCUMENT_CLEANUP_BATCH_SIZE"
+    )
 
 
 
@@ -152,10 +182,26 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_safety(self) -> "Settings":
+        errors: list[str] = []
+        if self.verification_document_upload_enabled:
+            required_verification_storage = {
+                "S3_VERIFICATION_BUCKET": self.s3_verification_bucket,
+                "S3_VERIFICATION_REGION": self.s3_verification_region,
+                "S3_VERIFICATION_PREFIX": self.s3_verification_prefix.strip("/"),
+            }
+            missing = sorted(name for name, value in required_verification_storage.items() if not value)
+            if missing:
+                errors.append("enabled verification document upload is missing: " + ", ".join(missing))
+            if self.s3_verification_bucket and self.s3_verification_bucket == self.s3_event_bucket:
+                errors.append("S3_VERIFICATION_BUCKET must be separate from S3_EVENT_BUCKET")
+            if bool(self.aws_access_key_id) != bool(self.aws_secret_access_key):
+                errors.append("AWS static credentials must be both present or both absent")
+
         if not self.is_production:
+            if errors:
+                raise ValueError("Unsafe verification storage configuration: " + "; ".join(errors))
             return self
 
-        errors: list[str] = []
         if self.enable_dev_test_checkout:
             errors.append("ENABLE_DEV_TEST_CHECKOUT must be false")
         if not self.redis_url:

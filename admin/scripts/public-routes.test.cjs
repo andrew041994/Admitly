@@ -28,6 +28,9 @@ const approvals = read('src/pages/EventApprovalsPage.tsx');
 const createEvent = read('src/pages/CreateEventPage.tsx');
 const accountPage = read('src/pages/AccountPage.tsx');
 const legalPage = read('src/pages/LegalPage.tsx');
+const backendEventSchema = fs.readFileSync(path.resolve(root, '../backend/app/schemas/event.py'), 'utf8');
+const backendEventService = fs.readFileSync(path.resolve(root, '../backend/app/services/events.py'), 'utf8');
+const backendEventApi = fs.readFileSync(path.resolve(root, '../backend/app/api/events.py'), 'utf8');
 
 test('landing, discovery, detail, recovery, and legal routes remain public', () => {
   for (const route of ['/events', '/events/:eventId', '/login', '/signup', '/forgot-password', '/reset-password', '/verify-email', '/privacy', '/refund-policy', '/terms', '/organizer-terms', '/buyer-terms']) {
@@ -191,4 +194,26 @@ test('creator verification is account-scoped, revocable, and never requests docu
   assert.match(accountPage, /unless Admitly asks you to reverify/);
   assert.match(legalPage, /generally does not need to resubmit identification for each future event/);
   assert.doesNotMatch(`${approvals}\n${createEvent}\n${accountPage}`, /type="file"[^>]*(government|identity|document)/i);
+});
+
+test('web Create Event supports repeatable ticket tiers with backend-equivalent validation', () => {
+  assert.match(createEvent, /useState<TierFormState\[]>\(\[initialTier\(\)\]\)/);
+  assert.match(createEvent, /Add another ticket tier/);
+  assert.match(createEvent, /tiers\.map\(\(tier, index\) =>/);
+  assert.match(createEvent, /index > 0 \? <button/);
+  assert.match(createEvent, /onClick=\{\(\) => removeTier\(index\)\}>Remove tier<\/button> : null/);
+  assert.match(createEvent, /name is required/);
+  assert.match(createEvent, /price must be zero or greater/);
+  assert.match(createEvent, /quantity must be a positive integer/);
+  assert.doesNotMatch(createEvent, /MAX_(?:TICKET_)?TIERS|tiers\.length\s*[>=]+\s*\d/);
+});
+
+test('web submits every tier in one atomic backend event-creation request', () => {
+  assert.equal((createEvent.match(/await createEvent\(/g) || []).length, 1);
+  assert.match(createEvent, /ticket_tiers: tiers\.map/);
+  assert.match(createEvent, /if \(busy\) return/);
+  assert.match(backendEventSchema, /ticket_tiers: list\["TicketTierCreateRequest"\] = Field\(min_length=1\)/);
+  assert.match(backendEventService, /for idx, tier_payload in enumerate\(payload\.ticket_tiers\)/);
+  assert.ok(backendEventApi.indexOf('create_event_with_ticket_tiers') < backendEventApi.indexOf('db.commit()', backendEventApi.indexOf('def create_event(')));
+  assert.match(backendEventApi, /except EventCreationValidationError[\s\S]*db\.rollback\(\)/);
 });

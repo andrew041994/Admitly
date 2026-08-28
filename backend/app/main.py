@@ -4,6 +4,7 @@ from app.api.admin_support import router as admin_support_router
 from app.api.admin_finance import router as admin_finance_router
 from app.api.auth import router as auth_router
 from app.api.account import router as account_router
+from app.api.creator_verification_documents import router as creator_verification_documents_router
 from app.api.events import router as events_router
 from app.api.health import router as health_router
 from app.api.messaging import router as messaging_router
@@ -48,6 +49,7 @@ app.include_router(admin_support_router)
 app.include_router(admin_finance_router)
 app.include_router(auth_router)
 app.include_router(account_router)
+app.include_router(creator_verification_documents_router)
 app.include_router(users_router)
 app.include_router(venues_router)
 

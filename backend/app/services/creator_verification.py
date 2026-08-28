@@ -9,6 +9,11 @@ from sqlalchemy.orm import Session
 from app.models.admin_action_audit import AdminActionAudit
 from app.models.creator_age_identity_verification_history import CreatorAgeIdentityVerificationHistory
 from app.models.user import User
+from app.services.creator_verification_documents import (
+    delete_tracked_document,
+    mark_document_reviewed,
+)
+from app.services.verification_document_storage import VerificationDocumentStorage
 
 UTC = timezone.utc
 
@@ -26,6 +31,7 @@ def verify_creator_account(
     creator_user_id: int,
     actor_user_id: int,
     note: str | None,
+    document_storage: VerificationDocumentStorage | None = None,
 ) -> User:
     user = get_creator_verification_user_for_update(db, user_id=creator_user_id)
     if user.creator_age_identity_verification_status == "verified":
@@ -33,6 +39,12 @@ def verify_creator_account(
 
     previous_status = user.creator_age_identity_verification_status
     verified_at = datetime.now(UTC)
+    temporary_material = mark_document_reviewed(
+        db,
+        user_id=user.id,
+        actor_user_id=actor_user_id,
+        outcome="verified",
+    )
     user.creator_age_identity_verification_status = "verified"
     user.creator_age_identity_verified_at = verified_at
     user.creator_age_identity_verified_by_user_id = actor_user_id
@@ -62,12 +74,19 @@ def verify_creator_account(
                 "previous_status": previous_status,
                 "new_status": "verified",
                 "verified_at": verified_at.isoformat(),
-                "id_document_stored": False,
+                "temporary_material_submitted": temporary_material is not None,
+                "temporary_material_retention": "delete_immediately",
             },
         )
     )
     db.commit()
     db.refresh(user)
+    if temporary_material is not None:
+        delete_tracked_document(
+            db,
+            document_id=temporary_material.id,
+            storage=document_storage,
+        )
     return user
 
 

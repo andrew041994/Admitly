@@ -1,0 +1,17 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-temporary-creator-verification-material",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "creator-verification/"
+      },
+      "Expiration": {
+        "Days": 7
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}
