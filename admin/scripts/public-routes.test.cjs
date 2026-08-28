@@ -88,6 +88,12 @@ test('My Events uses the shared primary CTA for both Create Event actions', () =
   assert.match(styles, /\.button:not\(\.button-secondary\):not\(\.button-light\):not\(\.button-outline-light\):hover \{[\s\S]*background: var\(--admitly-primary-hover\)/);
 });
 
+test('authenticated header Create Event uses the same unmodified primary CTA class', () => {
+  assert.match(siteHeader, /<NavLink className="button" to="\/create-event">Create Event<\/NavLink>/);
+  assert.doesNotMatch(siteHeader, /className="button button-small" to="\/create-event"/);
+  assert.match(styles, /\.user-actions > a:not\(\.button\)/);
+});
+
 test('public calls to action use web auth while mobile deep links remain available', () => {
   assert.match(publicSite, /<Link to="\/login">Log In<\/Link>/);
   assert.match(publicSite, /<Link[^>]*to="\/signup">Sign Up<\/Link>/);

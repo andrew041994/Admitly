@@ -34,7 +34,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .user-header { position: sticky; top: 0; z-index: 30; border-bottom: 1px solid #e3e8f1; background: rgba(255,255,255,.96); backdrop-filter: blur(12px); }
 .user-header-inner { width: min(100% - 2rem, 78rem); min-height: 4.7rem; margin: auto; display: flex; align-items: center; gap: 1.5rem; }
 .user-header nav { display: flex; flex: 1; align-items: center; gap: .25rem; }
-.user-header nav a, .user-actions > a { padding: .55rem .7rem; border-radius: .55rem; color: #344054; text-decoration: none; font-weight: 700; }
+.user-header nav a, .user-actions > a:not(.button) { padding: .55rem .7rem; border-radius: .55rem; color: #344054; text-decoration: none; font-weight: 700; }
 .user-header nav a.active { color: #1947d8; background: #edf2ff; }
 .user-actions { display: flex; align-items: center; gap: .45rem; }
 .button-link { min-height: auto; padding: .55rem .7rem; color: #344054; background: transparent; }

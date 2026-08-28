@@ -33,7 +33,7 @@ export function AuthenticatedHeader() {
             <NavLink to="/account">Account</NavLink>
           </nav>
           <div className="user-actions">
-            <NavLink className="button button-small" to="/create-event">Create Event</NavLink>
+            <NavLink className="button" to="/create-event">Create Event</NavLink>
             {user?.is_admin ? <NavLink to="/admin">Admin Dashboard</NavLink> : null}
             <button className="button-link" onClick={() => void handleSignOut()}>Log Out</button>
           </div>
