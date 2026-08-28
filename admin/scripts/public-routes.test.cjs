@@ -12,6 +12,8 @@ const userShell = read('src/components/UserShell.tsx');
 const landing = read('src/pages/LandingPage.tsx');
 const eventsPage = read('src/pages/EventsPage.tsx');
 const eventDetailPage = read('src/pages/EventDetailPage.tsx');
+const myEventsPage = read('src/pages/MyEventsPage.tsx');
+const styles = read('src/styles.css');
 const session = read('src/lib/authSession.ts');
 const client = read('src/lib/apiClient.ts');
 const tickets = read('src/pages/TicketsPage.tsx');
@@ -75,6 +77,14 @@ test('wallet uses backend canonical statuses and material changes use existing e
   assert.match(materialChange, /useRef\(crypto\.randomUUID\(\)\)/);
   assert.match(materialChange, /idempotency_key: idempotencyKey\.current/);
   assert.match(materialChange, /Reschedule or Change Venue/);
+});
+
+test('My Events uses the shared primary CTA while its empty action stays secondary', () => {
+  assert.match(myEventsPage, /<div className="page-heading">[\s\S]*<Link className="button" to="\/create-event">Create Event<\/Link>/);
+  assert.match(myEventsPage, /<div className="empty-panel">[\s\S]*<Link to="\/create-event">Create Event<\/Link>/);
+  assert.match(styles, /--admitly-primary: #2457f5/);
+  assert.match(styles, /\.button \{[\s\S]*background: var\(--admitly-primary\)/);
+  assert.match(styles, /\.button:not\(\.button-secondary\):not\(\.button-light\):not\(\.button-outline-light\):hover \{[\s\S]*background: var\(--admitly-primary-hover\)/);
 });
 
 test('public calls to action use web auth while mobile deep links remain available', () => {
