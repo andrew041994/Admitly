@@ -1,4 +1,5 @@
 const sensitiveQueryKeys = new Set(['token', 'access_token', 'refresh_token']);
+const sensitiveFileKeys = ['filename', 'fileName', 'file_name'];
 
 export function redactSensitiveUrl(value: unknown): unknown {
   if (typeof value !== 'string') return value;
@@ -16,6 +17,7 @@ export function scrubSentryBreadcrumb<T extends { data?: Record<string, unknown>
   if (data?.url) data.url = redactSensitiveUrl(data.url);
   if (data?.from) data.from = redactSensitiveUrl(data.from);
   if (data?.to) data.to = redactSensitiveUrl(data.to);
+  for (const key of sensitiveFileKeys) if (key in (data ?? {})) data![key] = '[Filtered]';
   return { ...breadcrumb, ...(data ? { data } : {}) };
 }
 

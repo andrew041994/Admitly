@@ -32,6 +32,29 @@ export const getAccount = () => apiJson<AccountProfile>('/account/profile');
 export const updateProfile = (fullName: string) => apiJson('/account/profile', { method: 'PATCH', body: JSON.stringify({ full_name: fullName }) });
 export const changePassword = (currentPassword: string, newPassword: string) => apiJson<{ success: boolean; reauthentication_required: boolean }>('/account/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) });
 
+export type CreatorVerificationDocumentStatus = {
+  account_verification_status: 'pending' | 'verified' | 'revoked';
+  upload_enabled: boolean;
+  max_upload_bytes: number;
+  allowed_content_types: string[];
+  document_pending_review: boolean;
+  document_status: 'uploading' | 'pending' | 'reviewed' | 'rejected' | 'deleted' | 'cleanup_required' | null;
+  review_outcome: string | null;
+  uploaded_at: string | null;
+  reviewed_at: string | null;
+  deleted_at: string | null;
+};
+
+export const getCreatorVerificationDocumentStatus = () =>
+  apiJson<CreatorVerificationDocumentStatus>('/account/creator-verification/document');
+
+export const uploadCreatorVerificationDocument = (file: File) => {
+  const body = new FormData();
+  const extension = file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg';
+  body.append('file', file, `verification-image.${extension}`);
+  return apiJson<CreatorVerificationDocumentStatus>('/account/creator-verification/document', { method: 'POST', body });
+};
+
 export type OrganizerEvent = { id: number; title: string; cover_image_url: string | null; venue_name: string | null; city: string | null; start_at: string; end_at: string; status: string; approval_status: string; is_publicly_visible: boolean; visibility_state: string | null; total_ticket_types: number; total_quantity: number; sold_count: number; gross_revenue: number; created_at: string; updated_at: string };
 export type OrganizerEventDetail = OrganizerEvent & { short_description: string | null; long_description: string | null; category: string | null; doors_open_at: string | null; sales_start_at: string | null; sales_end_at: string | null; timezone: string; visibility: string; venue_id: number | null; venue_address_text: string | null; custom_venue_name: string | null; custom_address_text: string | null; latitude: string | null; longitude: string | null; is_location_pinned: boolean; ticket_tiers: Array<{ id: number; name: string; description: string | null; price_amount: string; currency: string; quantity_total: number; min_per_order: number; max_per_order: number; is_active: boolean }> };
 export const listMyEvents = () => apiJson<OrganizerEvent[]>('/events/organizer/events');

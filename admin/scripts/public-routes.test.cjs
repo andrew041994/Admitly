@@ -28,6 +28,9 @@ const approvals = read('src/pages/EventApprovalsPage.tsx');
 const createEvent = read('src/pages/CreateEventPage.tsx');
 const accountPage = read('src/pages/AccountPage.tsx');
 const legalPage = read('src/pages/LegalPage.tsx');
+const userApi = read('src/lib/userApi.ts');
+const approvalsApi = read('src/lib/eventApprovalsApi.ts');
+const sentryPrivacy = read('src/lib/sentryPrivacy.ts');
 const backendEventSchema = fs.readFileSync(path.resolve(root, '../backend/app/schemas/event.py'), 'utf8');
 const backendEventService = fs.readFileSync(path.resolve(root, '../backend/app/services/events.py'), 'utf8');
 const backendEventApi = fs.readFileSync(path.resolve(root, '../backend/app/api/events.py'), 'utf8');
@@ -183,17 +186,64 @@ test('all legal links remain discoverable and Sentry scrubs token-bearing URLs',
   assert.match(main, /beforeSend/);
 });
 
-test('creator verification is account-scoped, revocable, and never requests document storage', () => {
+test('creator verification remains account-scoped and revocable', () => {
   assert.match(approvals, /Verify creator account as 18\+/);
   assert.match(approvals, /Revoke account verification/);
   assert.match(approvals, /Already-approved events remain active/);
   assert.match(approvals, /getCreatorAgeIdentityVerificationHistory/);
-  assert.match(createEvent, /creator_age_identity_verification_status === 'verified'/);
+  assert.match(createEvent, /account_verification_status/);
   assert.match(createEvent, /do not need to submit ID again/);
   assert.match(accountPage, /Age verification:/);
   assert.match(accountPage, /unless Admitly asks you to reverify/);
   assert.match(legalPage, /generally does not need to resubmit identification for each future event/);
-  assert.doesNotMatch(`${approvals}\n${createEvent}\n${accountPage}`, /type="file"[^>]*(government|identity|document)/i);
+});
+
+test('Create Event offers private account verification for pending and revoked creators', () => {
+  assert.match(createEvent, /Verify your age/);
+  assert.match(createEvent, /Reverification required/);
+  assert.match(createEvent, /Age verified/);
+  assert.match(createEvent, /type="file" accept="image\/jpeg,image\/png,image\/webp"/);
+  assert.match(createEvent, /allowed_content_types/);
+  assert.match(createEvent, /max_upload_bytes/);
+  assert.match(createEvent, /document_pending_review/);
+  assert.match(createEvent, /ID submitted — awaiting review/);
+  assert.match(createEvent, /upload_enabled/);
+  assert.match(createEvent, /Online ID submission is temporarily unavailable/);
+  assert.match(createEvent, /Create draft event/);
+  assert.match(userApi, /\/account\/creator-verification\/document/);
+  assert.match(userApi, /body\.append\('file', file, `verification-image\.\$\{extension\}`\)/);
+  const verificationUploadApi = userApi.slice(userApi.indexOf('export const uploadCreatorVerificationDocument'), userApi.indexOf('export type OrganizerEvent'));
+  assert.doesNotMatch(verificationUploadApi, /body\.append\('file', file\)/);
+  assert.doesNotMatch(`${createEvent}\n${userApi}`, /localStorage|sessionStorage|readAsDataURL|base64/i);
+  assert.match(sentryPrivacy, /'filename', 'fileName', 'file_name'/);
+});
+
+test('admin document review is private, authorized, and releases memory-only image URLs', () => {
+  assert.match(approvalsApi, /\/admin\/creator-verification\/documents\/\$\{documentId\}\/content/);
+  assert.match(approvalsApi, /return response\.blob\(\)/);
+  assert.match(approvals, /URL\.createObjectURL\(blob\)/);
+  assert.match(approvals, /URL\.revokeObjectURL\(viewerUrlRef\.current\)/);
+  assert.match(approvals, /Review private image/);
+  assert.match(approvals, /viewer\?\.documentId !== document\.id/);
+  assert.match(approvals, /documents\.some\(\(document\) => document\.user_id === event\.creator_user_id\)/);
+  assert.match(approvals, /Verify creator as 18\+/);
+  assert.match(approvals, /Reject verification/);
+  assert.match(approvals, /Retry cleanup/);
+  assert.match(approvalsApi, /\/verify/);
+  assert.match(approvalsApi, /\/reject/);
+  assert.match(approvalsApi, /\/cleanup/);
+  assert.doesNotMatch(`${approvals}\n${approvalsApi}`, /storage_object_key|signed_url|s3:\/\//i);
+  assert.match(router, /path="\/admin" element={<RequireAdmin \/>}/);
+});
+
+test('legal and creator guidance describe temporary private upload and remove email-only claims', () => {
+  assert.doesNotMatch(`${legalPage}\n${landing}\n${createEvent}`, /verification by email|submitted separately by email|reviewed separately by email|verification email account/i);
+  assert.match(legalPage, /restricted private storage/);
+  assert.match(legalPage, /authorized administrator/);
+  assert.match(legalPage, /seven-day storage lifecycle/);
+  assert.match(legalPage, /does not intentionally retain date of birth or government ID number/);
+  assert.match(legalPage, /generally does not need to resubmit identification for each future event/);
+  assert.match(legalPage, /require reverification/);
 });
 
 test('web Create Event supports repeatable ticket tiers with backend-equivalent validation', () => {

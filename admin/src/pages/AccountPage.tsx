@@ -62,7 +62,7 @@ export function AccountPage() {
           <p>Age verification: <strong>{creatorVerified ? 'Verified' : 'Required'}</strong></p>
           <p>{creatorVerified
             ? 'Your age has been verified. You do not need to submit ID again for future events unless Admitly asks you to reverify.'
-            : 'Age verification is required before your event can be approved.'}</p>
+            : 'Age verification is required before your event can be approved. You can securely submit an ID from Create Event while continuing to work on your draft.'}</p>
           <button>Save profile</button>
         </form>
         <form className="panel web-form" onSubmit={security}>

@@ -39,6 +39,22 @@ export type CreatorVerificationHistory = {
   created_at: string;
 };
 
+export type AdminCreatorVerificationDocument = {
+  id: number;
+  user_id: number;
+  account_verification_status: string;
+  status: 'uploading' | 'pending' | 'reviewed' | 'deleted' | 'cleanup_required';
+  review_outcome: string | null;
+  uploaded_at: string | null;
+  reviewed_at: string | null;
+  reviewed_by_user_id: number | null;
+  deleted_at: string | null;
+  cleanup_required_at: string | null;
+  cleanup_attempts: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export async function listPendingEventsForApproval(): Promise<AdminPendingEvent[]> {
   const response = await apiRequest('/events/admin/pending-approval');
   return (await response.json()) as AdminPendingEvent[];
@@ -80,4 +96,47 @@ export async function getCreatorAgeIdentityVerificationHistory(
 ): Promise<CreatorVerificationHistory[]> {
   const response = await apiRequest(`/events/admin/creators/${creatorUserId}/age-identity-verification/history`);
   return (await response.json()) as CreatorVerificationHistory[];
+}
+
+export async function listCreatorVerificationDocuments(
+  status: 'pending' | 'cleanup_required',
+): Promise<AdminCreatorVerificationDocument[]> {
+  const response = await apiRequest(`/admin/creator-verification/documents?status=${status}`);
+  return (await response.json()) as AdminCreatorVerificationDocument[];
+}
+
+export async function getCreatorVerificationDocumentContent(documentId: number): Promise<Blob> {
+  const response = await apiRequest(`/admin/creator-verification/documents/${documentId}/content`);
+  return response.blob();
+}
+
+export async function verifyCreatorVerificationDocument(
+  documentId: number,
+  note?: string,
+): Promise<AdminCreatorVerificationDocument> {
+  const response = await apiRequest(`/admin/creator-verification/documents/${documentId}/verify`, {
+    method: 'POST',
+    body: JSON.stringify({ note: note?.trim() || null }),
+  });
+  return (await response.json()) as AdminCreatorVerificationDocument;
+}
+
+export async function rejectCreatorVerificationDocument(
+  documentId: number,
+  reason: string,
+): Promise<AdminCreatorVerificationDocument> {
+  const response = await apiRequest(`/admin/creator-verification/documents/${documentId}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ reason: reason.trim() }),
+  });
+  return (await response.json()) as AdminCreatorVerificationDocument;
+}
+
+export async function retryCreatorVerificationDocumentCleanup(
+  documentId: number,
+): Promise<{ success: boolean; status: string }> {
+  const response = await apiRequest(`/admin/creator-verification/documents/${documentId}/cleanup`, {
+    method: 'POST',
+  });
+  return (await response.json()) as { success: boolean; status: string };
 }

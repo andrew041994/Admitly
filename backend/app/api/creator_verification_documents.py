@@ -20,6 +20,7 @@ from app.schemas.creator_verification_document import (
     CreatorVerificationDocumentCleanupResponse,
     CreatorVerificationDocumentRejectionRequest,
     CreatorVerificationDocumentStatusResponse,
+    CreatorVerificationDocumentVerificationRequest,
 )
 from app.services.creator_verification_documents import (
     active_document_for_user,
@@ -35,6 +36,7 @@ from app.services.verification_document_storage import (
     normalize_verification_image,
     require_verification_document_upload_enabled,
 )
+from app.services.creator_verification import verify_creator_account
 
 UTC = timezone.utc
 router = APIRouter(tags=["creator-verification"])
@@ -53,8 +55,16 @@ def get_verification_document_storage() -> VerificationDocumentStorage:
 def _user_status_response(
     user: User, document: CreatorVerificationDocument | None
 ) -> CreatorVerificationDocumentStatusResponse:
+    upload_enabled = True
+    try:
+        require_verification_document_upload_enabled()
+    except VerificationStorageConfigurationError:
+        upload_enabled = False
     return CreatorVerificationDocumentStatusResponse(
         account_verification_status=user.creator_age_identity_verification_status,
+        upload_enabled=upload_enabled,
+        max_upload_bytes=settings.s3_verification_max_bytes,
+        allowed_content_types=["image/jpeg", "image/png", "image/webp"],
         document_pending_review=document is not None and document.status == "pending",
         document_status=document.status if document is not None else None,
         review_outcome=document.review_outcome if document is not None else None,
@@ -273,6 +283,41 @@ def review_creator_verification_document_content(
         media_type=private_stream.content_type,
         headers=headers,
     )
+
+
+@router.post(
+    "/admin/creator-verification/documents/{document_id}/verify",
+    response_model=AdminCreatorVerificationDocumentResponse,
+)
+def verify_creator_verification_document(
+    document_id: int,
+    payload: CreatorVerificationDocumentVerificationRequest,
+    db: Session = Depends(get_db),
+    admin_user_id: int = Depends(get_current_admin_id),
+    storage: VerificationDocumentStorage = Depends(get_verification_document_storage),
+) -> AdminCreatorVerificationDocumentResponse:
+    document = db.execute(
+        select(CreatorVerificationDocument).where(CreatorVerificationDocument.id == document_id)
+    ).scalar_one_or_none()
+    if document is None or document.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pending verification submission not found.",
+        )
+    verify_creator_account(
+        db,
+        creator_user_id=document.user_id,
+        actor_user_id=admin_user_id,
+        note=payload.note.strip() if payload.note and payload.note.strip() else None,
+        document_storage=storage,
+    )
+    refreshed = db.get(CreatorVerificationDocument, document.id)
+    if refreshed is None:  # pragma: no cover - defensive; records are retained as safe metadata
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Verification submission not found.")
+    account_status = db.execute(
+        select(User.creator_age_identity_verification_status).where(User.id == refreshed.user_id)
+    ).scalar_one()
+    return _admin_response(refreshed, account_status)
 
 
 @router.post(

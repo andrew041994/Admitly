@@ -5,6 +5,9 @@ from pydantic import BaseModel, Field
 
 class CreatorVerificationDocumentStatusResponse(BaseModel):
     account_verification_status: str
+    upload_enabled: bool
+    max_upload_bytes: int
+    allowed_content_types: list[str]
     document_pending_review: bool
     document_status: str | None
     review_outcome: str | None
@@ -31,6 +34,10 @@ class AdminCreatorVerificationDocumentResponse(BaseModel):
 
 class CreatorVerificationDocumentRejectionRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class CreatorVerificationDocumentVerificationRequest(BaseModel):
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class CreatorVerificationDocumentCleanupResponse(BaseModel):

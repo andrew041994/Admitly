@@ -1,8 +1,14 @@
-import { type FormEvent, useState } from 'react';
+import { type ChangeEvent, type FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../auth/AuthContext';
-import { createEvent } from '../lib/userApi';
+import { ApiError } from '../lib/apiClient';
+import {
+  type CreatorVerificationDocumentStatus,
+  createEvent,
+  getCreatorVerificationDocumentStatus,
+  uploadCreatorVerificationDocument,
+} from '../lib/userApi';
 
 type TierFormState = { name: string; price: string; quantity: string };
 
@@ -10,6 +16,10 @@ const initialTier = (): TierFormState => ({ name: 'General Admission', price: '0
 const additionalTier = (): TierFormState => ({ name: '', price: '0', quantity: '' });
 
 function iso(value: string) { return new Date(value).toISOString(); }
+
+function formatBytes(value: number) {
+  return value >= 1024 * 1024 ? `${Math.floor(value / (1024 * 1024))} MB` : `${Math.floor(value / 1024)} KB`;
+}
 
 function validateTiers(tiers: TierFormState[]): string | null {
   if (!tiers.length) return 'At least one ticket tier is required.';
@@ -26,12 +36,64 @@ function validateTiers(tiers: TierFormState[]): string | null {
 
 export function CreateEventPage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const creatorVerified = user?.creator_age_identity_verification_status === 'verified';
+  const { user, refreshUser } = useAuth();
   const [form, setForm] = useState({ title: '', description: '', start: '', end: '', venue: '', address: '' });
   const [tiers, setTiers] = useState<TierFormState[]>([initialTier()]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [verification, setVerification] = useState<CreatorVerificationDocumentStatus | null>(null);
+  const [verificationLoading, setVerificationLoading] = useState(true);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<File | null>(null);
+  const [uploadingId, setUploadingId] = useState(false);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void getCreatorVerificationDocumentStatus()
+      .then((status) => { if (active) setVerification(status); })
+      .catch(() => { if (active) setVerificationError('Verification status is temporarily unavailable. You can still create a draft event.'); })
+      .finally(() => { if (active) setVerificationLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  function selectVerificationFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    setVerificationError(null);
+    setUploadSuccess(false);
+    if (!file) { setSelectedId(null); return; }
+    const allowed = verification?.allowed_content_types ?? [];
+    if (!allowed.includes(file.type)) {
+      setSelectedId(null);
+      event.target.value = '';
+      setVerificationError('Choose a JPEG, PNG, or WEBP image.');
+      return;
+    }
+    if (verification && file.size > verification.max_upload_bytes) {
+      setSelectedId(null);
+      event.target.value = '';
+      setVerificationError(`The image must be ${formatBytes(verification.max_upload_bytes)} or smaller.`);
+      return;
+    }
+    setSelectedId(file);
+  }
+
+  async function uploadVerificationId() {
+    if (!selectedId || uploadingId) return;
+    setUploadingId(true);
+    setVerificationError(null);
+    try {
+      const status = await uploadCreatorVerificationDocument(selectedId);
+      setVerification(status);
+      setSelectedId(null);
+      setUploadSuccess(true);
+      await refreshUser();
+    } catch (reason) {
+      setVerificationError(reason instanceof ApiError ? reason.detail : 'The ID could not be uploaded safely. Please try again.');
+    } finally {
+      setUploadingId(false);
+    }
+  }
 
   function updateTier(index: number, values: Partial<TierFormState>) {
     setTiers((current) => current.map((tier, tierIndex) => tierIndex === index ? { ...tier, ...values } : tier));
@@ -75,11 +137,33 @@ export function CreateEventPage() {
 
   return <section className="user-page narrow-page">
     <p className="eyebrow">Creator workspace</p><h1>Create Event</h1>
-    <div className="verification-notice">
-      <strong>{creatorVerified ? 'Creator account verified' : 'Verification required before approval'}</strong>
-      <p>{creatorVerified
-        ? 'Your age has already been verified. You do not need to submit ID again unless Admitly asks you to reverify. This event still requires normal review and approval.'
-        : 'Event creators must be 18+. Government ID is reviewed separately by email and is not uploaded through this website or stored in the application.'}</p>
+    <div className="verification-notice" aria-live="polite">
+      {(verification?.account_verification_status ?? user?.creator_age_identity_verification_status) === 'verified' ? <>
+        <strong>Age verified</strong>
+        <p>Your account is verified. You do not need to submit ID again for future events unless Admitly requests reverification. Each event still requires normal review and approval.</p>
+      </> : <>
+        <strong>{(verification?.account_verification_status ?? user?.creator_age_identity_verification_status) === 'revoked' ? 'Reverification required' : 'Verify your age'}</strong>
+        <p>Event creators must be at least 18. Upload a valid government-issued ID for age and identity verification. Your document is stored privately and deleted after review. Once your account is verified, you generally will not need to submit ID again for future events.</p>
+        {verification?.review_outcome === 'rejected' ? <p className="form-error">Verification could not be completed. Please submit a new ID.</p> : null}
+        {verificationLoading ? <p className="muted-text">Checking verification availability…</p> : null}
+        {verification?.document_pending_review ? <p className="verification-status"><strong>ID submitted — awaiting review</strong>{verification.uploaded_at ? ` · ${new Date(verification.uploaded_at).toLocaleString()}` : ''}</p> : null}
+        {verification?.document_status === 'cleanup_required' || verification?.document_status === 'uploading' ? <p className="verification-status">A previous submission is being safely processed. Upload will become available after cleanup completes.</p> : null}
+        {!verificationLoading && verification && !verification.document_pending_review && !['cleanup_required', 'uploading'].includes(verification.document_status ?? '') ? (
+          verification.upload_enabled ? <div className="verification-upload-controls">
+            <label className="verification-file-label">
+              Upload ID
+              <input type="file" accept="image/jpeg,image/png,image/webp" onChange={selectVerificationFile} disabled={uploadingId} />
+            </label>
+            <p className="muted-text">JPEG, PNG, or WEBP · maximum {formatBytes(verification.max_upload_bytes)}</p>
+            {selectedId ? <p>Selected: <span className="selected-file-name">{selectedId.name}</span></p> : null}
+            <button type="button" className="button" disabled={!selectedId || uploadingId} onClick={() => void uploadVerificationId()}>
+              {uploadingId ? 'Uploading securely…' : 'Submit ID for review'}
+            </button>
+          </div> : <p className="verification-status">Online ID submission is temporarily unavailable. You can still create a draft event; contact Admitly support for verification help.</p>
+        ) : null}
+        {uploadSuccess ? <p className="success-text"><strong>ID submitted for review</strong></p> : null}
+        {verificationError ? <p className="form-error" role="alert">{verificationError}</p> : null}
+      </>}
     </div>
     <form className="panel web-form two-column-form" onSubmit={submit}>
       {error ? <p className="form-error form-wide" role="alert">{error}</p> : null}

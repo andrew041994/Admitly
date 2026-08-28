@@ -298,6 +298,14 @@ def test_upload_feature_is_disabled_by_default_and_rate_limited(
     monkeypatch.setattr(settings, "verification_document_upload_enabled", False)
     monkeypatch.setattr(settings, "s3_verification_bucket", None)
     monkeypatch.setattr(settings, "s3_verification_region", None)
+    status_response = client.get(
+        "/account/creator-verification/document",
+        headers=auth_headers(creator),
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["upload_enabled"] is False
+    assert status_response.json()["max_upload_bytes"] == settings.s3_verification_max_bytes
+    assert status_response.json()["allowed_content_types"] == ["image/jpeg", "image/png", "image/webp"]
     disabled = client.post(
         "/account/creator-verification/document",
         headers=auth_headers(creator),
@@ -409,6 +417,32 @@ def test_verify_and_reject_delete_immediately_and_retain_safe_metadata(
     assert result.review_outcome == "rejected"
     assert rejected_creator.creator_age_identity_verification_status == "revoked"
     assert result.storage_object_key not in storage.objects
+
+
+def test_admin_can_verify_pending_document_through_document_workflow(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:  # noqa: ANN001
+    storage = FakePrivateStorage()
+    _configure_private_storage(monkeypatch, storage)
+    admin = _user(db_session, "document-verify-admin", admin=True)
+    creator = _user(db_session, "document-verify-creator")
+    document = _tracked_document(db_session, user=creator, storage=storage)
+    path = f"/admin/creator-verification/documents/{document.id}/verify"
+
+    assert client.post(path, headers=auth_headers(creator), json={"note": None}).status_code == 403
+    response = client.post(
+        path,
+        headers=auth_headers(admin),
+        json={"note": "Synthetic document review completed."},
+    )
+    assert response.status_code == 200
+    assert response.json()["account_verification_status"] == "verified"
+    assert response.json()["status"] == "deleted"
+    assert response.json()["review_outcome"] == "verified"
+    assert not any(key in response.json() for key in ("storage_object_key", "bucket", "url", "signed_url"))
+    db_session.refresh(creator)
+    assert creator.creator_age_identity_verification_status == "verified"
+    assert storage.objects == {}
 
 
 def test_delete_failure_records_cleanup_required_and_bounded_retry_is_idempotent(

@@ -15,7 +15,7 @@ const attendeeSteps = [
 
 const creatorSteps = [
   'Create your event from your Admitly account.',
-  'Complete account age and identity verification by email if you have not already been verified.',
+  'Securely submit account age and identity verification if you have not already been verified.',
   'Admitly reviews the event before it can be approved and published.',
   'Manage ticket availability and your event from Admitly.',
   'Run your event and use Admitly’s check-in tools.',
@@ -128,7 +128,7 @@ export function LandingPage() {
               <h2 id="creator-heading">Your event, thoughtfully supported.</h2>
               <p>Create an event from your Admitly account, complete a straightforward review, and manage ticketing through the event.</p>
               <Link className="button" to="/create-event">Create an Event</Link>
-              <p className="fine-print">Creators must be 18+. Government ID is reviewed separately by email before approval and is not uploaded to or stored in the Admitly application. Verified creator accounts generally do not need to resubmit ID for each event.</p>
+              <p className="fine-print">Creators must be 18+. A government-issued ID may be uploaded securely for temporary, private review and is deleted through Admitly’s verification cleanup process after review. Verified creator accounts generally do not need to resubmit ID for each event.</p>
             </div>
             <ol className="creator-steps">
               {creatorSteps.map((step, index) => <li key={step}><span>{index + 1}</span><p>{step}</p></li>)}
